@@ -134,10 +134,10 @@ struct Trainer {
 protected:
   Trainer() {}
   virtual unsigned alloc_impl() {
-      return model->parameters_list().size() - aux_allocated;
+      return static_cast<unsigned>(model->parameters_list().size()) - aux_allocated;
   }
   virtual unsigned alloc_lookup_impl() {
-      return model->lookup_parameters_list().size() - aux_allocated_lookup;
+      return static_cast<unsigned>(model->lookup_parameters_list().size()) - aux_allocated_lookup;
   }
   /**
    * \brief The actual rule to update the parameters
@@ -453,16 +453,16 @@ private:
 
 /**
  * \ingroup optimizers
- * 
+ *
  * \brief Exponentiated gradient optimizer with momentum and cyclical learning rate
  * \details FIXME
- *  
+ *
  * Reference : FIXME
- *   
+ *
 */
 struct EGTrainer : public Trainer {
-  explicit EGTrainer(ParameterCollection& mod, real learning_rate = 0.1, real mom = 0.9, real nlr = 0.0)
-    : Trainer(mod, learning_rate), momentum(mom), isCyclical(false), noise_lr(nlr) {
+  explicit EGTrainer(ParameterCollection& mod, real learning_rate = 0.1, real mom = 0.9, real ne = 0.0)
+    : Trainer(mod, learning_rate), momentum(mom), isCyclical(false) {
     zeg.d = meg.d = {1};
     zeg.device = meg.device = default_device;
     default_device->allocate_tensor(DeviceMempool::PS, zeg);
@@ -479,10 +479,6 @@ struct EGTrainer : public Trainer {
     it = 0;
   }
 
-  void update_noise_lr(real nlr){
-    noise_lr = nlr;
-  } 
-
   virtual void update() override {
     Trainer::update();
     if (isCyclical) cyclic_update_eta();
@@ -491,7 +487,6 @@ struct EGTrainer : public Trainer {
 
   void restart() override;
   using Trainer::restart;
-
 protected:
   DYNET_TRAINER_DEFINE_DEV_IMPL()
   virtual unsigned alloc_impl() override;
@@ -501,8 +496,6 @@ protected:
   real momentum;// with momentum
   std::vector<ShadowParameters> hp; // (previous) history of parameters
   std::vector<ShadowLookupParameters> hlp;
-  std::vector<ShadowParameters> np; // noises to be injected to parameters
-  std::vector<ShadowLookupParameters> nlp;// noises to be injected to lookup parameters
 //-----------------------------------------------------------------------------------------
 
 //-----------------------------------------------------------------------------------------
@@ -526,174 +519,8 @@ protected:
   Tensor zeg, meg;
 //-----------------------------------------------------------------------------------------
 
-//-----------------------------------------------------------------------------------------
-  real noise_lr;
-//-----------------------------------------------------------------------------------------
-
 private:
   EGTrainer() {}
-};
-
-/**
- * \ingroup optimizers
- * 
- * \brief Exponentiated gradient optimizer with adaptive learning rates using Adam
- * \details FIXME
- *  
- * Reference : FIXME
- *   
-*/
-struct AdamEGTrainer : public Trainer {
-  explicit AdamEGTrainer(ParameterCollection& m, float learning_rate = 0.001, float _beta_1 = 0.9, float _beta_2 = 0.999, float eps = 1e-8) : 
-    Trainer(m, learning_rate), beta_1(_beta_1), beta_2(_beta_2), epsilon(eps) {
-    zeg.d = meg.d = {1};
-    zeg.device = meg.device = default_device;
-    default_device->allocate_tensor(DeviceMempool::PS, zeg);
-    default_device->allocate_tensor(DeviceMempool::PS, meg);
-  }
- 
-  void restart() override;
-  using Trainer::restart;
-
-protected:
-  DYNET_TRAINER_DEFINE_DEV_IMPL()
-  virtual unsigned alloc_impl() override;
-  virtual unsigned alloc_lookup_impl() override;
-
-  float beta_1;
-  float beta_2;
-  float epsilon;
-
-//-----------------------------------------------------------------------------------------
-// temporary tensors for EG calculation
-  Tensor zeg, meg;
-//-----------------------------------------------------------------------------------------
-
-  // the following represents the previous params, gradient magnitudes
-  std::vector<ShadowParameters> m; // History of gradients
-  std::vector<ShadowLookupParameters> lm;
-  std::vector<ShadowParameters> v; // History of deltas
-  std::vector<ShadowLookupParameters> lv;
-
- private:
-  AdamEGTrainer() {}
-};
-
-// Written by Cong Duy Vu Hoang
-/**
- * \ingroup optimizers
- * 
- * \brief Exponentiated gradient optimizer with adaptive learning rates using RMSProp
- * \details FIXME
- *  
- * Reference : FIXME
- *   
-*/
-struct RMSPropEGTrainer : public Trainer {
-  explicit RMSPropEGTrainer(ParameterCollection& m, real learning_rate = 0.1, real eps = 1e-20, real rho = 0.95) :
-    Trainer(m, learning_rate), epsilon(eps), rho(rho) {
-    zeg.d = meg.d = {1};
-    zeg.device = meg.device = default_device;
-    default_device->allocate_tensor(DeviceMempool::PS, zeg);
-    default_device->allocate_tensor(DeviceMempool::PS, meg);
-  }
- 
-  void restart() override;
-  using Trainer::restart;
-
-protected:
-  DYNET_TRAINER_DEFINE_DEV_IMPL()
-  virtual unsigned alloc_impl() override;
-  virtual unsigned alloc_lookup_impl() override;
-
-  real epsilon;
-  real rho;
-
-//-----------------------------------------------------------------------------------------
-// temporary tensors for EG calculation
-  Tensor zeg, meg;
-//-----------------------------------------------------------------------------------------
-
-  // the following represents the previous params, gradient magnitudes
-  std::vector<ShadowParameters> hmsg; // History of gradients
-  std::vector<ShadowLookupParameters> hlmsg;
-
- private:
-  RMSPropEGTrainer() {}
-};
-
-/**
- * \ingroup optimizers
- *
- * \brief Stochastic Gradient Langevin Dynamics (SGLD)
- * \details This trainer performs stochastic gradient langevin dynamics (https://arxiv.org/abs/1611.08034)
- * In the standard setting, the learning rate at epoch \f$t\f$ is \f$\eta_t=\frac{\eta_0}{1+\eta_{\mathrm{decay}}t}\f$
- *
- * Reference : [reference needed](ref.need.ed)
- *
- */
-struct SGLDTrainer : public Trainer {
-  /**
-   * \brief Constructor
-   *
-   * \param m Model to be trained
-   * \param e0 Initial learning rate
-   * \param edecay Learning rate decay parameter.
-   */
-  explicit SGLDTrainer(ParameterCollection& m, real learning_rate = 0.1) : Trainer(m, learning_rate) {}
-
-protected:
-  std::vector<ShadowParameters> np; // noises to be injected to parameters
-  std::vector<ShadowLookupParameters> nlp;// noises to be injected to lookup parameters
-
-  void restart() override;
-  using Trainer::restart;
-
-protected:
-  DYNET_TRAINER_DEFINE_DEV_IMPL()
-  virtual unsigned alloc_impl() override;
-  virtual unsigned alloc_lookup_impl() override;
-
-private:
-  SGLDTrainer() {}
-};
-
-/**
- * \ingroup optimizers
- *
- * \brief Stochastic Preconditioned Gradient Langevin Dynamics (pSGLD)
- * \details This trainer performs preconditioned stochastic gradient langevin dynamics (https://arxiv.org/abs/1611.08034)
- *
- * Reference : [reference needed](ref.need.ed)
- *
- */
-struct pSGLDTrainer : public Trainer {
-  /**
-   * \brief Constructor
-   *
-   * \param m Model to be trained
-   * \param e0 Initial learning rate
-   * \param eps Bias parameter \f$\epsilon\f$ in the adagrad formula
-   * \param rho Update parameter for the moving average (`rho = 0` is equivalent to using Adagrad)
-   * \param edecay Learning rate decay parameter
-   */
-  explicit pSGLDTrainer(ParameterCollection& m, real learning_rate = 0.1, real eps = 1e-20, real rho = 0.95) :
-    Trainer(m, learning_rate), epsilon(eps), rho(rho) {}
-
-  void restart() override;
-  using Trainer::restart;
-
-protected:
-  DYNET_TRAINER_DEFINE_DEV_IMPL()
-  virtual unsigned alloc_impl() override;
-  virtual unsigned alloc_lookup_impl() override;
-
-  real epsilon;
-  real rho;
-  std::vector<ShadowParameters> hmsg; // History of gradients
-  std::vector<ShadowLookupParameters> hlmsg;
-private:
-  pSGLDTrainer() {}
 };
 
 } // namespace dynet

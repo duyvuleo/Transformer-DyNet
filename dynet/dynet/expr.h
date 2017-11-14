@@ -706,6 +706,113 @@ Expression std_elems(const Expression& x);
 
 /**
  * \ingroup arithmeticoperations
+ * \brief Sum over minibatches
+ * \details Sum an expression that consists of multiple minibatches into one of
+ *          equal dimension but with only a single minibatch. This is useful
+ *          for summing loss functions at the end of minibatch training.
+ *
+ * \param x The input mini-batched expression
+ *
+ * \return An expression with a single batch
+ */
+Expression sum_batches(const Expression& x);
+
+/**
+ * \ingroup arithmeticoperations
+ * \brief Compute moment over minibatches
+ * \details Compute the moment of order \f$r\f$, \f$\frac 1 n\sum_{i=1}^nx_i^r\f$ along the batch dimension
+ *
+ * \param x The input mini-batched expression
+ * \param r Order of the moment
+ *
+ * \return An expression with a single batch
+ */
+Expression moment_batches(const Expression& x, unsigned r);
+
+/**
+ * \ingroup arithmeticoperations
+ * \brief Compute mean over minibatches
+ * \details Computes \f$\frac 1 n\sum_{i=1}^nx_i\f$ along the batch dimension
+ *
+ * \param x The input mini-batched expression
+ *
+ * \return An expression with a single batch
+ */
+Expression mean_batches(const Expression& x);
+
+/**
+ * \ingroup arithmeticoperations
+ * \brief Compute standard deviation over minibatches
+ * \details Computes \f$\frac 1 n\sum_{i=1}^n(x_i -\mu)^2\f$ where \f$\mu=\frac 1 n\sum_{i=1}^nx_i\f$ along the batch dimension
+ *
+ * \param x The input mini-batched expression
+ *
+ * \return A scalar expression (with a potential batch dimension)
+ */
+Expression std_batches(const Expression& x);
+
+/**
+ * \ingroup arithmeticoperations
+ * \brief Compute sum along a specific dimension or dimensions
+ * \details Compute the sum along a specific dimension or dimensions
+ *
+ * \param x The input mini-batched expression
+ * \param d Dimensions along which to reduce
+ * \param b Whether to include batch dimension (default: false)
+ *
+ * \return An expression with |d| less dimensions and possibly dropped batch dimension
+ */
+Expression sum_dim(const Expression& x, const std::vector<unsigned>& dims, bool b=false);
+
+// These are deprecated but kept for backward compatibility
+Expression sum_rows(const Expression& x);
+Expression sum_cols(const Expression& x);
+
+/**
+ * \ingroup arithmeticoperations
+ * \brief Compute moment along a specific dimension
+ * \details Compute the moment of order \f$r\f$, \f$\frac 1 n\sum_{i=1}^nx_i^r\f$ along a specific dimension
+ *
+ * \param x The input mini-batched expression
+ * \param d Dimensions along which to reduce
+ * \param r Order of the moment
+ * \param b Whether to include batch dimension (default: false)
+ * \param n If > 0, overwrite the n in the equation by this value, useful for masking (default: 0)
+ *
+ * \return An expression with |d| less dimensions and possibly dropped batch dimension
+ */
+Expression moment_dim(const Expression& x, const std::vector<unsigned>& dims, unsigned r, bool b=false, unsigned n=0);
+
+/**
+ * \ingroup arithmeticoperations
+ * \brief Compute mean along  a specific dimension
+ * \details Computes \f$\frac 1 n\sum_{i=1}^nx_i\f$ along a specific dimension
+ *
+ * \param x The input mini-batched expression
+ * \param d Dimensions along which to reduce
+ * \param b Whether to include batch dimension (default: false)
+ * \param n If > 0, overwrite the n in the equation by this value, useful for masking (default: 0)
+ *
+ * \return An expression with |d| less dimensions and possibly dropped batch dimension
+ */
+Expression mean_dim(const Expression& x, const std::vector<unsigned>& dims, bool b=false, unsigned n=0);
+
+/**
+ * \ingroup arithmeticoperations
+ * \brief Compute standard deviation along an arbitrary dimension
+ * \details Computes \f$\frac 1 n\sum_{i=1}^n(x_i -\mu)^2\f$ where \f$\mu=\frac 1 n\sum_{i=1}^nx_i\f$ along an arbitrary dimension
+ *
+ * \param x The input mini-batched expression
+ * \param d Dimensions along which to reduce
+ * \param b Whether to include batch dimension (default: false)
+ * \param n If > 0, overwrite the n in the equation by this value, useful for masking (default: 0)
+ *
+ * \return An expression with |d| less dimensions and possibly dropped batch dimension
+ */
+Expression std_dim(const Expression& x, const std::vector<unsigned>& dims, bool b=false, unsigned n=0);
+
+/**
+ * \ingroup arithmeticoperations
  * \brief Average
  * \details This performs an elementwise average over all the expressions in xs
  *
@@ -890,6 +997,21 @@ Expression selu(const Expression& x);
 
 /**
  * \ingroup arithmeticoperations
+ * \brief SILU / SiL / Swish
+ * \details Calculate elementwise y_i = x_i / (1 + e^{-beta * x_i})
+ *
+ * Reference: [Hendrycks and Gimpel, 2016](https://openreview.net/pdf?id=Bk0MRI5lg),
+ * [Elfwing et al, 2017](https://arxiv.org/pdf/1702.03118.pdf), and
+ * [Ramachandran et al., 2017](https://arxiv.org/pdf/1710.05941)
+ *
+ * \param x The input expression
+ *
+ * \return An expression where the ith element is equal to y_i = x_i / (1 + e^{-beta * x_i})
+ */
+Expression silu(const Expression& x, float beta=1.f);
+
+/**
+ * \ingroup arithmeticoperations
  * \brief Soft Sign
  * \details Calculate elementwise the softsign function y_i = x_i/(1+|x_i|)
  *
@@ -1016,10 +1138,11 @@ Expression colwise_add(const Expression& x, const Expression& bias);
  *          e^{x[i]}/{sum_j e^{x[j]}}.
  *
  * \param x A vector or matrix
+ * \param d dimension to normalize over (default: 0)
  *
  * \return A vector or matrix after calculating the softmax
  */
-Expression softmax(const Expression& x);
+Expression softmax(const Expression& x, unsigned d=0);
 
 /**
  * \ingroup lossoperations
@@ -1047,6 +1170,19 @@ Expression log_softmax(const Expression& x);
  * \return A vector with the log softmax over the specified elements
  */
 Expression log_softmax(const Expression& x, const std::vector<unsigned>& restriction);
+
+/**
+ * \ingroup lossoperations
+ * \brief Log, sum, exp by dimension
+ * \details The "logsumexp" function calculated over a particular dimension
+ *   \f$ln(\sum_i e^{xs_i})\f$, used in adding probabilities in the log domain.
+ *
+ * \param x Expression with respect to which to calculate the logsumexp.
+ * \param d The dimension along which to do the logsumexp.
+ *
+ * \return The result.
+ */
+Expression logsumexp_dim(const Expression& x, unsigned d);
 
 /**
  * \ingroup lossoperations
@@ -1540,96 +1676,6 @@ Expression select_cols(const Expression& x, const std::vector<unsigned>* pcols);
 
 /**
  * \ingroup flowoperations
- * \brief Sum over minibatches
- * \details Sum an expression that consists of multiple minibatches into one of
- *          equal dimension but with only a single minibatch. This is useful
- *          for summing loss functions at the end of minibatch training.
- *
- * \param x The input mini-batched expression
- *
- * \return An expression with a single batch
- */
-Expression sum_batches(const Expression& x);
-
-/**
- * \ingroup flowoperations
- * \brief Compute moment over minibatches
- * \details Compute the moment of order \f$r\f$, \f$\frac 1 n\sum_{i=1}^nx_i^r\f$ along the batch dimension
- *
- * \param x The input mini-batched expression
- * \param r Order of the moment
- *
- * \return An expression with a single batch
- */
-Expression moment_batches(const Expression& x, unsigned r);
-
-/**
- * \ingroup flowoperations
- * \brief Compute mean over minibatches
- * \details Computes \f$\frac 1 n\sum_{i=1}^nx_i\f$ along the batch dimension
- *
- * \param x The input mini-batched expression
- *
- * \return An expression with a single batch
- */
-Expression mean_batches(const Expression& x);
-
-/**
- * \ingroup flowoperations
- * \brief Compute standard deviation over minibatches
- * \details Computes \f$\frac 1 n\sum_{i=1}^n(x_i -\mu)^2\f$ where \f$\mu=\frac 1 n\sum_{i=1}^nx_i\f$ along the batch dimension
- *
- * \param x The input mini-batched expression
- *
- * \return A scalar expression (with a potential batch dimension)
- */
-Expression std_batches(const Expression& x);
-
-/**
- * \ingroup flowoperations
- * \brief Compute standard deviation along an arbitrary dimension
- * \details Computes \f$\frac 1 n\sum_{i=1}^n(x_i -\mu)^2\f$ where \f$\mu=\frac 1 n\sum_{i=1}^nx_i\f$ along an arbitrary dimension
- *
- * \param x The input mini-batched expression
- * \param d Dimensions along which to reduce
- * \param b Whether to include batch dimension (default: false)
- * \param n If > 0, overwrite the n in the equation by this value, useful for masking (default: 0)
- *
- * \return An expression with |d| less dimensions and possibly dropped batch dimension
- */
-Expression std_dim(const Expression& x, const std::vector<unsigned>& dims, bool b=false, unsigned n=0);
-
-/**
- * \ingroup flowoperations
- * \brief Compute moment along a specific dimension
- * \details Compute the moment of order \f$r\f$, \f$\frac 1 n\sum_{i=1}^nx_i^r\f$ along a specific dimension
- *
- * \param x The input mini-batched expression
- * \param d Dimensions along which to reduce
- * \param r Order of the moment
- * \param b Whether to include batch dimension (default: false)
- * \param n If > 0, overwrite the n in the equation by this value, useful for masking (default: 0)
- *
- * \return An expression with |d| less dimensions and possibly dropped batch dimension
- */
-Expression moment_dim(const Expression& x, const std::vector<unsigned>& dims, unsigned r, bool b=false, unsigned n=0);
-/**
- * \ingroup flowoperations
- * \brief Compute mean along  a specific dimension
- * \details Computes \f$\frac 1 n\sum_{i=1}^nx_i\f$ along a specific dimension
- *
- * \param x The input mini-batched expression
- * \param d Dimensions along which to reduce
- * \param b Whether to include batch dimension (default: false)
- * \param n If > 0, overwrite the n in the equation by this value, useful for masking (default: 0)
- *
- * \return An expression with |d| less dimensions and possibly dropped batch dimension
- */
-Expression mean_dim(const Expression& x, const std::vector<unsigned>& dims, bool b=false, unsigned n=0);
-
-
-/**
- * \ingroup flowoperations
  * \brief Pick element
  * \details Pick a single element/row/column/sub-tensor from an expression.
  *          This will result in the dimension of the tensor being reduced
@@ -1963,14 +2009,9 @@ Expression block_dropout(const Expression& x, real p);
 // Convolution operations                     //
 ////////////////////////////////////////////////
 
-//Expression conv1d_narrow(const Expression& x, const Expression& f);
-//Expression conv1d_wide(const Expression& x, const Expression& f);
 Expression filter1d_narrow(const Expression& x, const Expression& f);
 Expression kmax_pooling(const Expression& x, unsigned k, unsigned d = 1);
 Expression fold_rows(const Expression& x, unsigned nrows = 2);
-Expression sum_dim(const Expression& x, unsigned d);
-Expression sum_cols(const Expression& x);
-Expression sum_rows(const Expression& x);
 Expression average_cols(const Expression& x);
 Expression kmh_ngram(const Expression& x, unsigned n);
 

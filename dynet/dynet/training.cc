@@ -407,15 +407,10 @@ void AdamTrainer::restart() {
 
 // --- EGTrainer
 template <class MyDevice>
-void EGTrainer::update_rule_dev(const MyDevice & dev, real gscale, const std::vector<Tensor*> & ts) {  
-  ts[2]->tvec().device(*dev.edevice) = ts[2]->tvec() * momentum - ts[1]->tvec() * (learning_rate * gscale);// add momentum
-
-  if (noise_lr != 0.f){
-    TensorTools::randomize_normal(*ts[5], 0, noise_lr);// initialize white Gaussian noise using stddev given noise_lr
-    ts[0]->tvec().device(*dev.edevice) = ts[0]->tvec().log() + ts[2]->tvec() / model->get_weight_decay().current_weight_decay() + ts[5]->tvec();// with noise-injected momentum
-  }
-  else  ts[0]->tvec().device(*dev.edevice) = ts[0]->tvec().log() + ts[2]->tvec() / model->get_weight_decay().current_weight_decay();// with momentum only
-
+void EGTrainer::update_rule_dev(const MyDevice & dev, real gscale, const std::vector<Tensor*> & ts) {
+  // Add momentum
+  ts[2]->tvec().device(*dev.edevice) = ts[2]->tvec() * momentum - ts[1]->tvec() * (learning_rate * gscale);
+  ts[0]->tvec().device(*dev.edevice) = ts[0]->tvec().log() + ts[2]->tvec() / model->get_weight_decay().current_weight_decay();// with momentum only
   TensorTools::logsumexp_dev(dev, *ts[0], *ts[3], *ts[4]);// z refers to logZ
   ts[0]->tvec().device(*dev.edevice) = (ts[0]->tvec() - as_scalar(*ts[4])).exp();// FIXME: other way(s) of not using as_scalar(z)?
 }
@@ -424,30 +419,22 @@ DYNET_TRAINER_INST_DEV_IMPL(EGTrainer)
 #ifndef __CUDACC__
 void EGTrainer::update_params(real gscale, size_t idx) {
   auto & p = model->parameters_list()[idx];
-  update_rule(gscale, {&p->values, &p->g, &hp[idx].h, &meg, &zeg, &np[idx].h});
+  update_rule(gscale, {&p->values, &p->g, &hp[idx].h, &meg, &zeg});
 }
 void EGTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
   auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &hlp[idx].h[lidx], &meg, &zeg, &nlp[idx].h[lidx]});
+  update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &hlp[idx].h[lidx], &meg, &zeg});
 }
 void EGTrainer::update_lookup_params(real gscale, size_t idx) {
   auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->all_grads, &p->all_grads, &hlp[idx].all_h, &meg, &zeg, &nlp[idx].all_h});
+  update_rule(gscale, {&p->all_grads, &p->all_grads, &hlp[idx].all_h, &meg, &zeg});
 }
 unsigned EGTrainer::alloc_impl() {
   allocate_shadow_parameters(*model, aux_allocated, hp);
-  if (noise_lr != 0.f){
-    allocate_shadow_parameters(*model, aux_allocated, np); 
-    return hp.size();
-  }
   return hp.size();
 }
 unsigned EGTrainer::alloc_lookup_impl() {
-  allocate_shadow_lookup_parameters(*model, aux_allocated_lookup, hlp); 
-  if (noise_lr != 0.f){
-    allocate_shadow_lookup_parameters(*model, aux_allocated_lookup, nlp);  
-    return nlp.size();
-  }
+  allocate_shadow_lookup_parameters(*model, aux_allocated_lookup, hlp);
   return hlp.size();
 }
 
@@ -455,220 +442,6 @@ void EGTrainer::restart() {
   for (auto sp : hp)
     TensorTools::zero(sp.h);
   for (auto slp : hlp)
-    TensorTools::zero(slp.all_h);
-
-  if (noise_lr != 0.f){
-    for (auto sp : np)
-      TensorTools::zero(sp.h);
-    for (auto slp : nlp)
-      TensorTools::zero(slp.all_h);
-  }
-}
-
-#endif
-
-// --- AdamEGTrainer
-
-// Perform update of ts[0]=parameters, ts[1]=gradients, ts[2]=accumulated_gradients
-template <class MyDevice>
-void AdamEGTrainer::update_rule_dev(const MyDevice & dev, real gscale, const std::vector<Tensor*> & ts) {
-  // --------------------------
-  // Adam step
-  ts[1]->tvec().device(*dev.edevice) = ts[1]->tvec() * gscale;
-  ts[2]->tvec().device(*dev.edevice) = ts[2]->tvec() * beta_1 + ts[1]->tvec() * (1.f - beta_1);
-  ts[3]->tvec().device(*dev.edevice) = ts[3]->tvec() * beta_2 + ts[1]->tvec().square() * (1.f - beta_2);
-  float lr_t = learning_rate * sqrt(1-pow(beta_2, updates+1))/(1-pow(beta_1, updates+1))/ model->get_weight_decay().current_weight_decay();
-  //ts[0]->tvec().device(*dev.edevice) -= ts[2]->tvec() / (ts[3]->tvec().sqrt() + epsilon) * lr_t;
-  // --------------------------
-  
-  //------------------------------------------------------------------
-  // METHOD 2: advanced implementation (supposedly faster?)
-  ts[0]->tvec().device(*dev.edevice) = ts[0]->tvec().log() - ts[2]->tvec() / (ts[3]->tvec().sqrt() + epsilon) * lr_t;// Adam update
-
-  TensorTools::logsumexp_dev(dev, *ts[0], *ts[4], *ts[5]);// z refers to logZ
-  //cerr << "max_element=" << as_scalar(m) << endl;
-  //cerr << "logZ=" << as_scalar(z) << endl;
-    
-  ts[0]->tvec().device(*dev.edevice) = (ts[0]->tvec() - as_scalar(*ts[5])).exp();// FIXME: other way(s) of not using as_scalar(z)?
-  //------------------------------------------------------------------
-}
-DYNET_TRAINER_INST_DEV_IMPL(AdamEGTrainer)
-
-#ifndef __CUDACC__
-void AdamEGTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
-  update_rule(gscale, {&p->values, &p->g, &m[idx].h, &v[idx].h, &meg, &zeg});
-}
-void AdamEGTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &lm[idx].h[lidx], &lv[idx].h[lidx], &meg, &zeg});
-}
-void AdamEGTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->all_grads, &p->all_grads, &lm[idx].all_h, &lv[idx].all_h, &meg, &zeg});
-}
-unsigned AdamEGTrainer::alloc_impl() {
-  allocate_shadow_parameters(*model, aux_allocated, m);
-  allocate_shadow_parameters(*model, aux_allocated, v);
-  return v.size();
-}
-unsigned AdamEGTrainer::alloc_lookup_impl() {
-  allocate_shadow_lookup_parameters(*model, aux_allocated_lookup, lm); 
-  allocate_shadow_lookup_parameters(*model, aux_allocated_lookup, lv);  
-  return lv.size();
-}
-
-void AdamEGTrainer::restart() {
-  for (auto sp : m)
-    TensorTools::zero(sp.h);
-  for (auto sp : v)
-    TensorTools::zero(sp.h);
-  for (auto slp : lm)
-    TensorTools::zero(slp.all_h);
-  for (auto slp : lv)
-    TensorTools::zero(slp.all_h);
-}
-
-#endif
-
-// --- RMSPropEGTrainer
-
-// Perform update of ts[0]=parameters, ts[1]=gradients, ts[2]=accumulated_gradients
-template <class MyDevice>
-void RMSPropEGTrainer::update_rule_dev(const MyDevice & dev, real gscale, const std::vector<Tensor*> & ts) {
-  // --------------------------
-  // RMSProp step
-  ts[1]->tvec().device(*dev.edevice) = ts[1]->tvec() * gscale; // gradient scaling
-  ts[2]->tvec().device(*dev.edevice) = ts[2]->tvec() * rho + ts[1]->tvec().square() * (1.f - rho); // Update square gradient exponential average
-  ts[1]->tvec().device(*dev.edevice) = - ts[1]->tvec() / (ts[2]->tvec() + epsilon).sqrt(); // Divide by the RMS
-  //ts[0]->tvec().device(*dev.edevice) += learning_rate * ts[1]->tvec() / model->get_weight_decay().current_weight_decay(); // Apply weight decay (should we do this?)
-  // --------------------------
-  
-  //------------------------------------------------------------------
-  // METHOD 2: advanced implementation (supposedly faster?)
-  ts[0]->tvec().device(*dev.edevice) = ts[0]->tvec().log() + learning_rate * ts[1]->tvec() / model->get_weight_decay().current_weight_decay(); // RMSProp update
-
-  TensorTools::logsumexp_dev(dev, *ts[0], *ts[3], *ts[4]);// z refers to logZ
-  //cerr << "max_element=" << as_scalar(m) << endl;
-  //cerr << "logZ=" << as_scalar(z) << endl;
-    
-  ts[0]->tvec().device(*dev.edevice) = (ts[0]->tvec() - as_scalar(*ts[4])).exp();// FIXME: other way(s) of not using as_scalar(z)?
-  //------------------------------------------------------------------
-}
-DYNET_TRAINER_INST_DEV_IMPL(RMSPropEGTrainer)
-
-#ifndef __CUDACC__
-void RMSPropEGTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
-  update_rule(gscale, {&p->values, &p->g, &hmsg[idx].h, &meg, &zeg});
-}
-void RMSPropEGTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &hlmsg[idx].h[lidx], &meg, &zeg});
-}
-void RMSPropEGTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->all_values, &p->all_grads, &hlmsg[idx].all_h, &meg, &zeg});
-}
-unsigned RMSPropEGTrainer::alloc_impl() {
-  allocate_shadow_parameters(*model, aux_allocated, hmsg);
-  return hmsg.size();
-}
-unsigned RMSPropEGTrainer::alloc_lookup_impl() {
-  allocate_shadow_lookup_parameters(*model, aux_allocated_lookup, hlmsg); 
-  return hlmsg.size();
-}
-
-void RMSPropEGTrainer::restart() {
-  for (auto sp : hmsg)
-    TensorTools::zero(sp.h);
-  for (auto slp : hlmsg)
-    TensorTools::zero(slp.all_h);
-}
-
-#endif
-
-// --- SGLDTrainer
-
-// Perform update of ts[0]=parameters, ts[1]=gradients
-template <class MyDevice>
-void SGLDTrainer::update_rule_dev(const MyDevice & dev, real gscale, const std::vector<Tensor*> & ts) {
-  //------------------------------------------------------------------
-  // Initialize white Gaussian noise using stddev as given noise_eta
-  TensorTools::randomize_normal(*ts[2], 0, learning_rate);
-
-  ts[0]->tvec().device(*dev.edevice) += ts[1]->tvec() * (0.5f * learning_rate * gscale / model->get_weight_decay().current_weight_decay()) + ts[2]->tvec();// FIXME: requires weight_decay and gscale?
-}
-DYNET_TRAINER_INST_DEV_IMPL(SGLDTrainer)
-
-#ifndef __CUDACC__
-void SGLDTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
-  update_rule(gscale, {&p->values, &p->g, &np[idx].h});
-}
-void SGLDTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &nlp[idx].h[lidx]});
-}
-void SGLDTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->all_values, &p->all_grads, &nlp[idx].all_h});
-}
-unsigned SGLDTrainer::alloc_impl() {
-  allocate_shadow_parameters(*model, aux_allocated, np);
-  return np.size();
-}
-unsigned SGLDTrainer::alloc_lookup_impl() {
-  allocate_shadow_lookup_parameters(*model, aux_allocated_lookup, nlp); 
-  return nlp.size();
-}
-
-void SGLDTrainer::restart() {
-  for (auto sp : np)
-    TensorTools::zero(sp.h);
-  for (auto slp : nlp)
-    TensorTools::zero(slp.all_h);
-}
-
-#endif
-
-// --- pSGLDTrainer
-// Perform update of ts[0]=parameters, ts[1]=gradients
-template <class MyDevice>
-void pSGLDTrainer::update_rule_dev(const MyDevice & dev, real gscale, const std::vector<Tensor*> & ts) {
-  ts[1]->tvec().device(*dev.edevice) = ts[1]->tvec() * gscale; // gradient scaling
-  ts[2]->tvec().device(*dev.edevice) = ts[2]->tvec() * rho + ts[1]->tvec().square() * (1.f - rho); // Update square gradient exponential average
-  ts[1]->tvec().device(*dev.edevice) = - ts[1]->tvec() / (ts[2]->tvec() + epsilon).sqrt(); // Divide by the RMS
-  ts[0]->tvec().device(*dev.edevice) += learning_rate * ts[1]->tvec() / model->get_weight_decay().current_weight_decay(); // Apply weight decay (should we do this?)
-}
-DYNET_TRAINER_INST_DEV_IMPL(pSGLDTrainer)
-
-#ifndef __CUDACC__
-void pSGLDTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
-  update_rule(gscale, {&p->values, &p->g, &hmsg[idx].h});
-}
-void pSGLDTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &hlmsg[idx].h[lidx]});
-}
-void pSGLDTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
-  update_rule(gscale, {&p->all_values, &p->all_grads, &hlmsg[idx].all_h});
-}
-unsigned pSGLDTrainer::alloc_impl() {
-  allocate_shadow_parameters(*model, aux_allocated, hmsg);
-  return hmsg.size();
-}
-unsigned pSGLDTrainer::alloc_lookup_impl() {
-  allocate_shadow_lookup_parameters(*model, aux_allocated_lookup, hlmsg); 
-  return hlmsg.size();
-}
-
-void pSGLDTrainer::restart() {
-  for (auto sp : hmsg)
-    TensorTools::zero(sp.h);
-  for (auto slp : hlmsg)
     TensorTools::zero(slp.all_h);
 }
 

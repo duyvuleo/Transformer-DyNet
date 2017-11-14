@@ -70,6 +70,7 @@ Expression logistic(const Expression& x) { return Expression(x.pg, x.pg->add_fun
 Expression rectify(const Expression& x) { return Expression(x.pg, x.pg->add_function<Rectify>({x.i})); }
 Expression elu(const Expression& x, float alpha) { return Expression(x.pg, x.pg->add_function<ExponentialLinearUnit>({x.i}, 1.0, alpha)); }
 Expression selu(const Expression& x) { return Expression(x.pg, x.pg->add_function<ExponentialLinearUnit>({x.i}, 1.0507009873554804934193349852946, 1.6732632423543772848170429916717)); }
+Expression silu(const Expression& x, float beta) { return Expression(x.pg, x.pg->add_function<SigmoidLinearUnit>({x.i}, beta)); }
 Expression hinge(const Expression& x, unsigned index, float m) { return Expression(x.pg, x.pg->add_function<Hinge>({x.i}, index, m)); }
 Expression hinge(const Expression& x, const unsigned* pindex, float m) { return Expression(x.pg, x.pg->add_function<Hinge>({x.i}, pindex, m)); }
 Expression hinge(const Expression& x, const std::vector<unsigned> & indices, float m) { return Expression(x.pg, x.pg->add_function<Hinge>({x.i}, indices, m)); }
@@ -80,10 +81,11 @@ Expression hinge_dim(const Expression& x, const std::vector<std::vector<unsigned
 Expression hinge_dim(const Expression& x, const std::vector<std::vector<unsigned> > * pindices, unsigned d, float m) { return Expression(x.pg, x.pg->add_function<HingeDim>({x.i}, pindices, d, m)); }
 Expression log_softmax(const Expression& x) { return Expression(x.pg, x.pg->add_function<LogSoftmax>({x.i})); }
 Expression log_softmax(const Expression& x, const vector<unsigned>& d) { return Expression(x.pg, x.pg->add_function<RestrictedLogSoftmax>({x.i}, d)); }
+Expression logsumexp_dim(const Expression& x, unsigned d) { return Expression(x.pg, x.pg->add_function<LogSumExpDimension>({x.i}, d)); }
 Expression sparsemax(const Expression& x) { return Expression(x.pg, x.pg->add_function<Sparsemax>({x.i})); }
 Expression sparsemax_loss(const Expression& x, const vector<unsigned>& target_support) { return Expression(x.pg, x.pg->add_function<SparsemaxLoss>({x.i}, target_support)); }
 Expression sparsemax_loss(const Expression& x, const vector<unsigned>* ptarget_support) { return Expression(x.pg, x.pg->add_function<SparsemaxLoss>({x.i}, ptarget_support)); }
-Expression softmax(const Expression& x) { return Expression(x.pg, x.pg->add_function<Softmax>({x.i})); }
+Expression softmax(const Expression& x, unsigned d) { return Expression(x.pg, x.pg->add_function<Softmax>({x.i}, d)); }
 Expression softsign(const Expression& x) { return Expression(x.pg, x.pg->add_function<SoftSign>({x.i})); }
 Expression pow(const Expression& x, const Expression& y) { return Expression(x.pg, x.pg->add_function<Pow>({x.i, y.i})); }
 Expression min(const Expression& x, const Expression& y) { return Expression(x.pg, x.pg->add_function<Min>({x.i, y.i})); }
@@ -154,15 +156,15 @@ Expression pickneglogsoftmax(const Expression& x, const unsigned* pv) { return E
 Expression pickneglogsoftmax(const Expression& x, const vector<unsigned> * pv) { return Expression(x.pg, x.pg->add_function<PickNegLogSoftmax>({x.i}, pv)); }
 
 Expression average_cols(const Expression& x) { return Expression(x.pg, x.pg->add_function<AverageColumns>({x.i})); }
-Expression sum_dim(const Expression& x, unsigned d) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, d)); }
-Expression sum_rows(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, 0)); }
-Expression sum_cols(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, 1)); }
+Expression sum_dim(const Expression& x, const vector<unsigned>& dims, bool b) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, dims, b)); }
+Expression sum_rows(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, vector<unsigned>({0}), false)); }
+Expression sum_cols(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, vector<unsigned>({1}), false)); }
 Expression sum_elems(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumElements>({x.i})); }
 
-Expression sum_batches(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumBatches>({x.i})); }
+Expression sum_batches(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, vector<unsigned>(), true)); }
 
-Expression mean_dim(const Expression& x, const vector<unsigned>& dims, bool b, unsigned n) { return Expression(x.pg, x.pg->add_function<MomentDimension>({x.i}, dims, 1, b, n)); }
 Expression moment_dim(const Expression& x, const vector<unsigned>& dims, unsigned r, bool b, unsigned n) { return Expression(x.pg, x.pg->add_function<MomentDimension>({x.i}, dims, r, b, n)); }
+Expression mean_dim(const Expression& x, const vector<unsigned>& dims, bool b, unsigned n) { return Expression(x.pg, x.pg->add_function<MomentDimension>({x.i}, dims, 1, b, n)); }
 Expression std_dim(const Expression& x, const vector<unsigned>& dims, bool b, unsigned n) { return Expression(x.pg, x.pg->add_function<StdDimension>({x.i}, dims, b, n)); }
 
 Expression moment_elems(const Expression& x, unsigned r) { 

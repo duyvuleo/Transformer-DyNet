@@ -19,25 +19,6 @@ struct Timer {
   std::chrono::high_resolution_clock::time_point start;
 };
 
-struct MyTimer {
-  MyTimer(const std::string& msg) : msg(msg), start(std::chrono::high_resolution_clock::now()) {}
-  ~MyTimer() {
-  }
-  void show(){
-    auto stop = std::chrono::high_resolution_clock::now();
-    std::cerr << '[' << msg << ' ' << std::chrono::duration<double, std::milli>(stop-start).count() << " ms]\n";
-  }
-  void reset(){
-    start = std::chrono::high_resolution_clock::now();
-  }	
-  double elapsed() {
-    auto stop = std::chrono::high_resolution_clock::now();
-    return std::chrono::duration<double, std::milli>(stop-start).count();// in ms
-  }
-  std::string msg;
-  std::chrono::high_resolution_clock::time_point start;
-};
-
 struct Timing {
   Timing() : _start(std::chrono::high_resolution_clock::now()) {}
   ~Timing() { }
@@ -66,4 +47,3 @@ public:
 } // namespace dynet
 
 #endif
-
