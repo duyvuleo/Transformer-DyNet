@@ -384,7 +384,7 @@ struct Encoder{
 
 	unsigned _batch_slen = 0;
 
-	dynet::Expression compute_embeddings(dynet::ComputationGraph &cg, const WordIdSentences& sents/*batch of sentences*/){
+	dynet::Expression compute_embeddings(dynet::ComputationGraph &cg, const WordIdSentences& sents/*batch of sentences*/, ModelStats &stats){
 		// get max length in a batch
 		size_t max_len = sents[0].size();
 		for(size_t i = 1; i < sents.size(); i++) max_len = std::max(max_len, sents[i].size());
@@ -396,6 +396,10 @@ struct Encoder{
 		for (unsigned l = 0; l < max_len; l++){
 			for (unsigned bs = 0; bs < sents.size(); ++bs){
 				words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_sm._kSRC_EOS;
+				if (l < sents[bs].size()){ 
+					stats._words_src++; 
+					if (sents[bs][l] == _sm._kSRC_UNK) stats._words_src_unk++;
+				}
 			}
 
 			source_embeddings.push_back(lookup(cg, _p_embed_s, words));
@@ -427,9 +431,9 @@ struct Encoder{
 		return i_src;
 	}
 
-	dynet::Expression build_graph(dynet::ComputationGraph &cg, const WordIdSentences& ssents/*batch of sentences*/){
+	dynet::Expression build_graph(dynet::ComputationGraph &cg, const WordIdSentences& ssents/*batch of sentences*/, ModelStats &stats){
 		// compute source (+ postion) embeddings
-		dynet::Expression i_src = compute_embeddings(cg, ssents);
+		dynet::Expression i_src = compute_embeddings(cg, ssents, stats);
 		
 		dynet::Expression i_l_out = i_src;
 		for (auto enc : _v_enc_layers){
@@ -643,7 +647,7 @@ public:
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents/*batched*/
 		, const WordIdSentences& tsents/*batched*/
-		, const ModelStats &stats = ModelStats());
+		, ModelStats &stats);
 
 	dynet::ParameterCollection& get_model_parameters();
 	void initialise_params_from_file(const string &params_file);
@@ -686,10 +690,10 @@ TransformerModel::TransformerModel(const TransformerConfig& tfc, dynet::Dict& sd
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	, const WordIdSentences& ssents
 	, const WordIdSentences& tsents
-	, const ModelStats &stats)
+	, ModelStats &stats)
 {
 	// encode source
-	dynet::Expression i_src = _encoder.get()->build_graph(cg, ssents);// (batch_size x) num_units x Lx
+	dynet::Expression i_src = _encoder.get()->build_graph(cg, ssents, stats);// (batch_size x) num_units x Lx
 
 	// decode target
 	dynet::Expression i_tgt = _decoder.get()->build_graph(cg, tsents, i_src);// (batch_size x) num_units x (Ly - 1)
@@ -702,8 +706,13 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	unsigned tlen = _decoder.get()->_batch_tlen;
 	std::vector<unsigned> next_words(tsents.size());
 	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
-		for(size_t bs = 0; bs < tsents.size(); bs++)
+		for(size_t bs = 0; bs < tsents.size(); bs++){
 			next_words[bs] = (tsents[bs].size() > (t+1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
+			if (tsents[bs].size() > t) {
+				stats._words_tgt++;
+				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) stats._words_tgt_unk++;
+			}
+		}
 	
 		// output linear projections (logit)
 		dynet::Expression i_err;
