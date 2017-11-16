@@ -2,7 +2,7 @@
 #include <limits> // numeric_limits
 
 template<typename T>
-bool is_infinite( const T &value )
+inline bool is_infinite( const T &value )
 {
     // Since we're a template, it's wise to use std::numeric_limits<T>
     //
@@ -16,14 +16,14 @@ bool is_infinite( const T &value )
 }
  
 template<typename T>
-bool is_nan( const T &value )
+inline bool is_nan( const T &value )
 {
     // True if NAN
     return value != value;
 }
  
 template<typename T>
-bool is_valid( const T &value )
+inline bool is_valid( const T &value )
 {
     return !is_infinite(value) && !is_nan(value);
 }

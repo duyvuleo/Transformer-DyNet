@@ -56,12 +56,14 @@ Expression softplus(const Expression &expr)
 }
 
 // @Vu -- this only works with x as a matrix
-Expression layer_norm_dim(const Expression& x, const Expression& g, const Expression& b, unsigned d){
-    std::vector<Expression> vCols(x.dim().d[d]);
-    for (unsigned i = 0; i < x.dim().d[d]; i++){ 
-        Expression c_x = select_cols(x, {i});
-        vCols[i] = layer_norm(c_x, g, b);
-    }
-    return concatenate_cols(vCols);
+Expression layer_norm_matrix(const Expression& x, const Expression& g, const Expression& b){
+	const dynet::Dim& dim = x.dim();
+	std::vector<dynet::Expression> vCols(dim[1]);
+	for (unsigned i = 0; i < dim[1]; i++){ 
+		Expression c_x = select_cols(x, {i});
+		vCols[i] = layer_norm(c_x, g, b);
+	}
+
+	return concatenate_cols(vCols);
 }
 

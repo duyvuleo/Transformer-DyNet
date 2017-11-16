@@ -27,13 +27,8 @@
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/range/irange.hpp>
 
-// Others
-#include "def.h"
-#include "str-utils.h"
-#include "dict-utils.h"
-#include "expr-xtra.h"
-#include "math-utils.h"
-#include "mask.h"
+// Utilities
+#include "utils.h"
 
 using namespace std;
 using namespace dynet;
@@ -138,6 +133,18 @@ struct TransformerConfig{
 };
 //---
 
+// --- 
+struct ModelStats {
+	double _loss = 0.0f;
+	unsigned _words_src = 0;
+	unsigned _words_tgt = 0;
+	unsigned _words_src_unk = 0;
+	unsigned _words_tgt_unk = 0;
+
+	ModelStats(){}
+};
+// --- 
+
 //---
 struct ConvLayer{
 	explicit ConvLayer(DyNetModel* mod, unsigned units_size, unsigned filter_size)
@@ -176,7 +183,7 @@ struct FeedForwardLayer{
 		// FFN(x) = relu(x * W1 + b1) * W2 + b2
 		dynet::Expression i_inner = dynet::reshape(i_inp, {1, i_inp.dim().d[1], i_inp.dim().d[0]});
 		i_inner = _innerConv.apply(cg, i_inner);// x * W1 + b1
-		i_inner = dynet::rectify(i_inner);// relu
+		i_inner = dynet::rectify/*swish*/(i_inner);// relu or swish?
 		dynet::Expression i_outer = _outerConv.apply(cg, i_inner);// relu(x * W1 + b1) * W2 + b2
 		i_outer = dynet::reshape(i_outer, {i_inp.dim().d[0], i_inp.dim().d[1]});
 
@@ -324,7 +331,7 @@ struct EncoderLayer{
 		i_encl = i_encl + i_mh_att;
 
 		// layer normalisation 1
-		i_encl = layer_norm_dim(i_encl, i_ln1_g, i_ln1_b, 1);
+		i_encl = layer_norm_matrix(i_encl, i_ln1_g, i_ln1_b);
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_encl);
@@ -333,7 +340,7 @@ struct EncoderLayer{
 		i_encl = i_encl + i_ff;
 
 		// layer normalisation 2
-		i_encl = layer_norm_dim(i_encl, i_ln2_g, i_ln2_b, 1);
+		i_encl = layer_norm_matrix(i_encl, i_ln2_g, i_ln2_b);
 
 		return i_encl;
 	}
@@ -394,7 +401,7 @@ struct Encoder{
 			source_embeddings.push_back(lookup(cg, _p_embed_s, words));
 		}
 
-		dynet::Expression i_src = concatenate_cols(source_embeddings);// batch_size x num_units x _batch_slen
+		dynet::Expression i_src = concatenate_cols(source_embeddings);// (batch_size x) num_units x _batch_slen
 		i_src = i_src * _scale_emb;// scaled embeddings
 
 		// + postional encoding
@@ -407,7 +414,7 @@ struct Encoder{
 
 				pos_embeddings.push_back(lookup(cg, _p_embed_pos, positions));
 			}
-			dynet::Expression i_pos = concatenate_cols(pos_embeddings);// batch_size x num_units x _batch_slen
+			dynet::Expression i_pos = concatenate_cols(pos_embeddings);// (batch_size x) num_units x _batch_slen
 
 			i_src = i_src + i_pos;
 		}
@@ -426,6 +433,7 @@ struct Encoder{
 		
 		dynet::Expression i_l_out = i_src;
 		for (auto enc : _v_enc_layers){
+			// stacking approach
 			i_l_out = enc.build_graph(cg, i_l_out);// each position in the encoder can attend to all positions in the previous layer of the encoder.
 			// FIXME: should we have residual connection here?
 			// e.g., 
@@ -490,7 +498,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_mh_self_att;
 
 		// layer normalisation 1
-		i_decl = layer_norm_dim(i_decl, i_ln1_g, i_ln1_b, 1);
+		i_decl = layer_norm_matrix(i_decl, i_ln1_g, i_ln1_b);
 
 		// multi-head source attention sub-layer
 		dynet::Expression i_mh_src_att = _src_attention_sublayer.build_graph(cg, i_decl, i_enc_inp);
@@ -499,7 +507,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_mh_src_att;
 
 		// layer normalisation 2
-		i_decl = layer_norm_dim(i_decl, i_ln2_g, i_ln2_b, 1);// position-wise
+		i_decl = layer_norm_matrix(i_decl, i_ln2_g, i_ln2_b);// position-wise
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_decl);
@@ -508,7 +516,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_ff;
 
 		// layer normalisation 3
-		i_decl = layer_norm_dim(i_decl, i_ln3_g, i_ln3_b, 1);// position-wise
+		i_decl = layer_norm_matrix(i_decl, i_ln3_g, i_ln3_b);// position-wise
 
 		return i_decl;
 	}
@@ -567,7 +575,7 @@ struct Decoder{
 		// source encoding
 		std::vector<dynet::Expression> target_embeddings;   
 		std::vector<unsigned> words(sents.size());
-		for (unsigned l = 1; l < max_len; l++){// shifted right
+		for (unsigned l = 0; l < max_len; l++){
 			for (unsigned bs = 0; bs < sents.size(); ++bs){
 				words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_sm._kTGT_EOS;
 			}
@@ -575,20 +583,20 @@ struct Decoder{
 			target_embeddings.push_back(lookup(cg, _p_embed_t, words));
 		}
 
-		dynet::Expression i_tgt = concatenate_cols(target_embeddings);// batch_size x num_units x (_batch_tlen-1)
+		dynet::Expression i_tgt = concatenate_cols(target_embeddings);// (batch_size x) num_units x (_batch_tlen-1)
 		i_tgt = i_tgt * _scale_emb;// scaled embeddings
 
 		// + postional encoding
 		if (_position_encoding == 1){// learned positional embedding 
 			std::vector<dynet::Expression> pos_embeddings;  
 			std::vector<unsigned> positions(sents.size());
-			for (unsigned l = 1; l < max_len; l++){// shifted right
+			for (unsigned l = 0; l < max_len; l++){
 				for (unsigned bs = 0; bs < sents.size(); ++bs) 
 					positions[bs] = l;
 
 				pos_embeddings.push_back(lookup(cg, _p_embed_pos, positions));
 			}
-			dynet::Expression i_pos = concatenate_cols(pos_embeddings);// batch_size x num_units x (_batch_tlen-1)
+			dynet::Expression i_pos = concatenate_cols(pos_embeddings);// (batch_size x) num_units x (_batch_tlen-1)
 
 			i_tgt = i_tgt + i_pos;
 		}
@@ -610,6 +618,7 @@ struct Decoder{
 		
 		dynet::Expression i_l_out = i_tgt;
 		for (auto dec : _v_dec_layers){
+			// stacking approach
 			i_l_out = dec.build_graph(cg, i_src, i_l_out);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
 			// FIXME: should we have residual connection here?
 			// e.g., 
@@ -617,7 +626,7 @@ struct Decoder{
 			// i_l_out = i_l_out + i_l;
 		}
 
-		return i_l_out;// batch_size x num_units x (Ly-1)
+		return i_l_out;// (batch_size x) num_units x (Ly-1)
 	}
 };
 typedef std::shared_ptr<Decoder> DecoderPointer;
@@ -627,13 +636,20 @@ typedef std::shared_ptr<Decoder> DecoderPointer;
 struct TransformerModel {
 
 public:
-	explicit TransformerModel(const TransformerConfig& tfc);
+	explicit TransformerModel(const TransformerConfig& tfc, dynet::Dict& sd, dynet::Dict& td);
 
-	~TransformerModel();
+	~TransformerModel(){}
 
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents/*batched*/
-		, const WordIdSentences& tsents/*batched*/);
+		, const WordIdSentences& tsents/*batched*/
+		, const ModelStats &stats = ModelStats());
+
+	dynet::ParameterCollection& get_model_parameters();
+	void initialise_params_from_file(const string &params_file);
+	void save_params_to_file(const string &params_file);
+
+	void set_dropout(bool is_activated = true);
 
 protected:
 
@@ -643,12 +659,14 @@ protected:
 
 	DecoderPointer _decoder;// decoder
 
+	std::pair<dynet::Dict, dynet::Dict> _dicts;// pair of source and target vocabularies
+
 	dynet::Parameter _p_Wo_bias;// bias of final linear projection layer
 
 	TransformerConfig _tfc;// local configuration storage
 };
 
-TransformerModel::TransformerModel(const TransformerConfig& tfc)
+TransformerModel::TransformerModel(const TransformerConfig& tfc, dynet::Dict& sd, dynet::Dict& td)
 : _tfc(tfc)
 {
 	_all_params.reset(new DyNetModel());// create new model parameter object
@@ -659,17 +677,22 @@ TransformerModel::TransformerModel(const TransformerConfig& tfc)
 
 	// final output projection layer
 	_p_Wo_bias = _all_params.get()->add_parameters({tfc._tgt_vocab_size});// optional
+
+	// dictionaries
+	_dicts.first = sd;
+	_dicts.second = td;
 }
 
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	, const WordIdSentences& ssents
-	, const WordIdSentences& tsents)
+	, const WordIdSentences& tsents
+	, const ModelStats &stats)
 {
 	// encode source
-	dynet::Expression i_src = _encoder.get()->build_graph(cg, ssents);// batch_size x num_units x Lx
+	dynet::Expression i_src = _encoder.get()->build_graph(cg, ssents);// (batch_size x) num_units x Lx
 
 	// decode target
-	dynet::Expression i_tgt = _decoder.get()->build_graph(cg, tsents, i_src);// batch_size x num_units x (Ly - 1)
+	dynet::Expression i_tgt = _decoder.get()->build_graph(cg, tsents, i_src);// (batch_size x) num_units x (Ly - 1)
 
 	// get losses	
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
@@ -680,12 +703,12 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	std::vector<unsigned> next_words(tsents.size());
 	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
 		for(size_t bs = 0; bs < tsents.size(); bs++)
-			next_words[bs] = (tsents[bs].size() > (t+1)) ? (unsigned)tsents[bs][t+1] : _tfc._sm._kTGT_EOS;
+			next_words[bs] = (tsents[bs].size() > (t+1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
 	
 		// output linear projections (logit)
 		dynet::Expression i_err;
 		if (!_tfc._use_label_smoothing){
-			dynet::Expression i_tgt_t = dynet::select_cols(i_tgt, {t});
+			dynet::Expression i_tgt_t = dynet::select_cols(i_tgt, {t + 1});// shifted right
 			dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 		
 			// log_softmax and loss
@@ -702,6 +725,25 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 
 	return i_tloss;
 }
+
+dynet::ParameterCollection& TransformerModel::get_model_parameters(){
+	return *_all_params.get();
+}
+
+void TransformerModel::initialise_params_from_file(const string &params_file)
+{
+	dynet::load_dynet_model(params_file, _all_params.get());// FIXME: use binary streaming instead for saving disk spaces?
+}
+
+void TransformerModel::save_params_to_file(const string &params_file)
+{
+	dynet::save_dynet_model(params_file, _all_params.get());
+}
+
+void TransformerModel::set_dropout(bool is_activated){
+	// FIXME:
+}
+
 //---
 
 }; // namespace transformer
