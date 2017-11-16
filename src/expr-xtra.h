@@ -33,12 +33,6 @@ Expression dither(ComputationGraph &cg, const Expression &expr, float pad_value,
 	return concatenate_cols(std::vector<Expression>({left_shift, expr, right_shift}));
 }
 
-// these expressions can surely be implemented much more efficiently than this!
-Expression abs(const Expression &expr) 
-{
-	return rectify(expr) + rectify(-expr); 
-}
-
 // binary boolean functions
 Expression eq(const Expression &expr, float value, float epsilon=0.1) 
 {

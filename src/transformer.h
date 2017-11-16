@@ -33,6 +33,7 @@
 #include "dict-utils.h"
 #include "expr-xtra.h"
 #include "math-utils.h"
+#include "mask.h"
 
 using namespace std;
 using namespace dynet;
@@ -82,6 +83,7 @@ struct TransformerConfig{
 	float _dropout_rate = 0.1f;
 
 	bool _use_label_smoothing = false;
+	float _label_smoothing_weight = 0.9f;
 
 	unsigned _position_encoding = 1; // 1: learned positional embedding ; 2: sinusoidal positional encoding ; 0: none
 	unsigned _max_length = 500;// for learned positional embedding
@@ -99,6 +101,7 @@ struct TransformerConfig{
 		, unsigned nlayers
 		, float dropout_rate
 		, bool use_label_smoothing
+		, float label_smoothing_weight
 		, unsigned position_encoding
 		, unsigned max_length
 		, SentinelMarkers sm
@@ -111,6 +114,7 @@ struct TransformerConfig{
 		_nlayers = nlayers;
 		_dropout_rate = dropout_rate;
 		_use_label_smoothing = use_label_smoothing;
+		_label_smoothing_weight = label_smoothing_weight;
 		_position_encoding = position_encoding;
 		_max_length = max_length;
 		_sm = sm;
@@ -125,6 +129,7 @@ struct TransformerConfig{
 		_nlayers = tfc._nlayers;
 		_dropout_rate = tfc._dropout_rate;
 		_use_label_smoothing = tfc._use_label_smoothing;
+		_label_smoothing_weight = tfc._label_smoothing_weight;
 		_position_encoding = tfc._position_encoding;
 		_max_length = tfc._max_length;
 		_sm = tfc._sm;
@@ -160,7 +165,7 @@ struct ConvLayer{
 
 struct FeedForwardLayer{
 	explicit FeedForwardLayer(DyNetModel* mod, const TransformerConfig& tfc)
-		: _innerConv(mod, tfc._num_units, tfc._num_units * 4)
+		: _innerConv(mod, tfc._num_units, tfc._num_units * 4/*4 according to the paper*/)
 		, _outerConv(mod, tfc._num_units * 4, tfc._num_units)
 	{		
 	}	
@@ -185,15 +190,15 @@ struct FeedForwardLayer{
 
 //---
 struct MultiHeadAttentionLayer{
-	explicit MultiHeadAttentionLayer(DyNetModel* mod, const TransformerConfig& tfc, bool is_self_attention = true)
+	explicit MultiHeadAttentionLayer(DyNetModel* mod, const TransformerConfig& tfc, bool is_future_blinding = false)
 	{
 		_p_WQ.resize(tfc._nheads);
 		_p_WK.resize(tfc._nheads);
 		_p_WV.resize(tfc._nheads);
 		for (unsigned h = 0; h < tfc._nheads; h++){
-			_p_WQ[h] = mod->add_parameters({tfc._num_units, tfc._num_units / tfc._nheads});// dk = tfc._num_units / tfc._nheads
-			_p_WK[h] = mod->add_parameters({tfc._num_units, tfc._num_units / tfc._nheads});// dk
-			_p_WV[h] = mod->add_parameters({tfc._num_units, tfc._num_units / tfc._nheads});// dv = tfc._num_units / tfc._nheads
+			_p_WQ[h] = mod->add_parameters({tfc._num_units / tfc._nheads, tfc._num_units});// dk = tfc._num_units / tfc._nheads
+			_p_WK[h] = mod->add_parameters({tfc._num_units / tfc._nheads, tfc._num_units});// dk
+			_p_WV[h] = mod->add_parameters({tfc._num_units / tfc._nheads, tfc._num_units});// dv = tfc._num_units / tfc._nheads
 		}
 
 		_p_WO = mod->add_parameters({tfc._num_units, tfc._num_units});
@@ -203,6 +208,10 @@ struct MultiHeadAttentionLayer{
 		_attention_type = tfc._attention_type;
 
 		_nheads = tfc._nheads;
+
+		_is_future_blinding = is_future_blinding;
+
+		_dropout_p = tfc._dropout_rate;
 	}
 
 	~MultiHeadAttentionLayer(){}
@@ -221,34 +230,55 @@ struct MultiHeadAttentionLayer{
 	// attention scale factor
 	float _att_scale = 0.f;
 
+	bool _is_future_blinding = false;
+
+	float _dropout_p = 0.f;
+
 	dynet::Expression build_graph(dynet::ComputationGraph& cg
 		, const dynet::Expression& i_x/*queries*/
-		, const dynet::Expression& i_y/*keys and values. i_y is equal to i_x if using self_attention*/ 
-		, const dynet::Expression& i_mask)
+		, const dynet::Expression& i_y/*keys and values. i_y is equal to i_x if using self_attention*/)
 	{
-		// Note: this should be done in parallel for efficiency!	
-		std::vector<dynet::Expression> v_alphas(_nheads);
+		// create mask for self-attention in decoder
+		dynet::Dim dim = i_x.dim();
+		dynet::Expression i_mask = dynet::zeros(cg, dim);// zero masking if not for future blinding
+		if (_is_future_blinding) i_mask = create_triangle_mask(cg, dim[1]/*Lx*/, false);
+		
+		// Note: this should be done in parallel for efficiency!
+		// e.g., utilising pseudo-batching?	
+		std::vector<dynet::Expression> v_atts(_nheads);
 		for (unsigned h = 0; h < _nheads; h++){
-			dynet::Expression i_Q/*queries*/ = dynet::transpose(i_x)/*Lx x num_units*/ * dynet::parameter(cg, _p_WQ[h])/*num_units x dk*/;// Lx x dk
-			dynet::Expression i_K/*keys*/ = dynet::transpose(i_y)/*Ly x num_units*/ * dynet::parameter(cg, _p_WK[h])/*num_units x dk*/;// Ly x dk
-			dynet::Expression i_V/*values*/ = dynet::transpose(i_y)/*Ly x num_units*/ * dynet::parameter(cg, _p_WV[h])/*num_units x dv*/;// Ly x dv
+			dynet::Expression i_Q/*queries*/ = dynet::parameter(cg, _p_WQ[h])/*dk x num_units*/ * i_x/*num_units x Lx*/;// dk x Lx
+			dynet::Expression i_K/*keys*/ = dynet::parameter(cg, _p_WK[h])/*dk x num_units*/ * i_y/*num_units x Ly*/;// dk x Ly
+			dynet::Expression i_V/*values*/ = dynet::parameter(cg, _p_WK[h])/*dv x num_units*/ * i_y/*num_units x Ly*/;// dv x Ly
 
-			dynet::Expression i_alpha_h;
+			dynet::Expression i_att_h;
 			if (_attention_type == ATTENTION_TYPE::DOT_PRODUCT){// Luong attention type
-				i_alpha_h = dynet::softmax(i_Q/*Lx x dk*/ * dynet::transpose(i_K)/*dk x Ly*/ / _att_scale) * i_V/*Ly x dv*/;// Lx x dv
+				dynet::Expression i_alpha_pre = (dynet::transpose(i_K)/*Ly * dk*/ * i_Q/*dk x Lx*/) / _att_scale;// Ly x Lx (unnormalised) 
+
+				dynet::Expression i_alpha = dynet::softmax(i_alpha_pre + i_mask);// Ly x Lx (normalised, col-major)
+				// FIXME: save the soft alignment in i_alpha if necessary!
+				
+				// attention dropout (col-major or whole matrix?)
+				//i_alpha = dynet::dropout_dim(i_alpha, 0/*col-major*/, _dropout_p);
+				i_alpha = dynet::dropout(i_alpha, _dropout_p);// for whole matrix
+
+				i_att_h = i_V/*dv x Ly*/ * i_alpha/*Ly x Lx*/;// dv x Lx
 			}
 			else if (_attention_type == ATTENTION_TYPE::ADDITIVE_MLP){// Bahdanau attention type
 				// FIXME
 			}
 			else assert("MultiHeadAttentionLayer: Unknown attention type!");
 
-			v_alphas[h] = i_alpha_h;
+			v_atts[h] = i_att_h;
 		}
 
-		dynet::Expression i_alpha_all = dynet::concatenate_cols(v_alphas);// Lx x (nheads * dv=num_units)
-		dynet::Expression i_proj_alpha_all = dynet::transpose(i_alpha_all/*Lx x num_units*/ * dynet::parameter(cg, _p_WO)/*num_units x num_units*/);// num_units x Lx
+		// joint all head attentions
+		dynet::Expression i_atts = dynet::concatenate(v_atts);// (nheads * dv=num_units) x Lx
 
-		return i_proj_alpha_all;
+		// linear projection
+		dynet::Expression i_proj_atts = dynet::parameter(cg, _p_WO)/*num_units x num_units*/ * i_atts/*num_units x Lx*/;// num_units x Lx
+
+		return i_proj_atts;
 	}
 };
 //---
@@ -259,8 +289,6 @@ struct EncoderLayer{
 		:_self_attention_sublayer(mod, tfc)
 		, _feed_forward_sublayer(mod, tfc)
 	{		
-		_dropout_p = tfc._dropout_rate;
-
 		// for layer normalisation
 		_p_ln1_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
 		_p_ln1_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
@@ -269,8 +297,6 @@ struct EncoderLayer{
 	}
 
 	~EncoderLayer(){}
-
-	float _dropout_p = 0.f;
 
 	// multi-head attention sub-layer
 	MultiHeadAttentionLayer _self_attention_sublayer;
@@ -289,23 +315,22 @@ struct EncoderLayer{
 		dynet::Expression i_ln2_g = dynet::parameter(cg, _p_ln2_g);
 		dynet::Expression i_ln2_b = dynet::parameter(cg, _p_ln2_b);
 
-		// create mask for self-attention
-		dynet::Expression i_mask;// FIXME: how-to?
-
 		dynet::Expression i_encl = i_src;
 		
 		// multi-head attention sub-layer
-		dynet::Expression i_mh_att = _self_attention_sublayer.build_graph(cg, i_encl, i_encl, i_mask);
+		dynet::Expression i_mh_att = _self_attention_sublayer.build_graph(cg, i_encl, i_encl);
 
-		// dropout
-		i_encl = i_encl + dynet::dropout_dim(i_mh_att, 1, _dropout_p);// w/ residual connection
+		// w/ residual connection
+		i_encl = i_encl + i_mh_att;
 
 		// layer normalisation 1
 		i_encl = layer_norm_dim(i_encl, i_ln1_g, i_ln1_b, 1);
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_encl);
-		i_encl = i_encl + dynet::dropout_dim(i_ff, 1, _dropout_p);// w/ residual connection
+
+		// w/ residual connection
+		i_encl = i_encl + i_ff;
 
 		// layer normalisation 2
 		i_encl = layer_norm_dim(i_encl, i_ln2_g, i_ln2_b, 1);
@@ -350,10 +375,13 @@ struct Encoder{
 
 	float _scale_emb = 0.f;
 
+	unsigned _batch_slen = 0;
+
 	dynet::Expression compute_embeddings(dynet::ComputationGraph &cg, const WordIdSentences& sents/*batch of sentences*/){
 		// get max length in a batch
 		size_t max_len = sents[0].size();
 		for(size_t i = 1; i < sents.size(); i++) max_len = std::max(max_len, sents[i].size());
+		_batch_slen = max_len;
 	
 		// source encoding
 		std::vector<dynet::Expression> source_embeddings;   
@@ -366,7 +394,7 @@ struct Encoder{
 			source_embeddings.push_back(lookup(cg, _p_embed_s, words));
 		}
 
-		dynet::Expression i_src = concatenate_cols(source_embeddings);// batch_size x d_model x max_slen
+		dynet::Expression i_src = concatenate_cols(source_embeddings);// batch_size x num_units x _batch_slen
 		i_src = i_src * _scale_emb;// scaled embeddings
 
 		// + postional encoding
@@ -379,7 +407,7 @@ struct Encoder{
 
 				pos_embeddings.push_back(lookup(cg, _p_embed_pos, positions));
 			}
-			dynet::Expression i_pos = concatenate_cols(pos_embeddings);// batch_size x d_model x max_slen
+			dynet::Expression i_pos = concatenate_cols(pos_embeddings);// batch_size x num_units x _batch_slen
 
 			i_src = i_src + i_pos;
 		}
@@ -414,13 +442,11 @@ typedef std::shared_ptr<Encoder> EncoderPointer;
 //---
 struct DecoderLayer{
 	explicit DecoderLayer(DyNetModel* mod, const TransformerConfig& tfc)
-		:_self_attention_sublayer(mod, tfc)
+		:_self_attention_sublayer(mod, tfc, true)
 		, _src_attention_sublayer(mod, tfc)
 		, _feed_forward_sublayer(mod, tfc)
 	{	
-		_dropout_p = tfc._dropout_rate;
-
-		// for layer normalisation
+		// initialisation for layer normalisation
 		_p_ln1_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
 		_p_ln1_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
 		_p_ln2_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
@@ -430,8 +456,6 @@ struct DecoderLayer{
 	}
 
 	~DecoderLayer(){}	
-
-	float _dropout_p = 0.f;
 
 	// multi-head attention sub-layers
 	MultiHeadAttentionLayer _self_attention_sublayer;// self-attention
@@ -456,36 +480,35 @@ struct DecoderLayer{
 		dynet::Expression i_ln2_b = dynet::parameter(cg, _p_ln2_b);
 		dynet::Expression i_ln3_g = dynet::parameter(cg, _p_ln3_g);
 		dynet::Expression i_ln3_b = dynet::parameter(cg, _p_ln3_b);
-
-		// create masks for self-attention
-		dynet::Expression i_mask_tt, i_mask_st;// FIXME: how-to?
-		
+	
 		dynet::Expression i_decl = i_dec_inp;
 		
 		// multi-head self attention sub-layer
-		dynet::Expression i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_decl, i_decl, i_mask_tt);
+		dynet::Expression i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_decl, i_decl);
 
-		// dropout
-		i_decl = i_decl + dynet::dropout_dim(i_mh_self_att, 1, _dropout_p);// w/ residual connection
+		// w/ residual connection
+		i_decl = i_decl + i_mh_self_att;
 
 		// layer normalisation 1
 		i_decl = layer_norm_dim(i_decl, i_ln1_g, i_ln1_b, 1);
 
 		// multi-head source attention sub-layer
-		dynet::Expression i_mh_src_att = _src_attention_sublayer.build_graph(cg, i_decl, i_enc_inp, i_mask_st);
+		dynet::Expression i_mh_src_att = _src_attention_sublayer.build_graph(cg, i_decl, i_enc_inp);
 
-		// dropout
-		i_decl = i_decl + dynet::dropout_dim(i_mh_src_att, 1, _dropout_p);// w/ residual connection
+		// w/ residual connection
+		i_decl = i_decl + i_mh_src_att;
 
 		// layer normalisation 2
-		i_decl = layer_norm_dim(i_decl, i_ln2_g, i_ln2_b, 1);
+		i_decl = layer_norm_dim(i_decl, i_ln2_g, i_ln2_b, 1);// position-wise
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_decl);
-		i_decl = i_decl + dynet::dropout_dim(i_ff, 1, _dropout_p);// w/ residual connection
+
+		// w/ residual connection
+		i_decl = i_decl + i_ff;
 
 		// layer normalisation 3
-		i_decl = layer_norm_dim(i_decl, i_ln3_g, i_ln3_b, 1);
+		i_decl = layer_norm_dim(i_decl, i_ln3_g, i_ln3_b, 1);// position-wise
 
 		return i_decl;
 	}
@@ -528,7 +551,7 @@ struct Decoder{
 	float _scale_emb = 0.f;
 
 	// --- intermediate variables
-	unsigned _max_len = 0;
+	unsigned _batch_tlen = 0;
 	// ---
 
 	dynet::Expression get_wrd_embedding_matrix(dynet::ComputationGraph &cg){
@@ -539,7 +562,7 @@ struct Decoder{
 		// get max length in a batch
 		size_t max_len = sents[0].size();
 		for(size_t i = 1; i < sents.size(); i++) max_len = std::max(max_len, sents[i].size());
-		_max_len = max_len;
+		_batch_tlen = max_len;
 	
 		// source encoding
 		std::vector<dynet::Expression> target_embeddings;   
@@ -552,7 +575,7 @@ struct Decoder{
 			target_embeddings.push_back(lookup(cg, _p_embed_t, words));
 		}
 
-		dynet::Expression i_tgt = concatenate_cols(target_embeddings);// batch_size x d_model x max_slen
+		dynet::Expression i_tgt = concatenate_cols(target_embeddings);// batch_size x num_units x (_batch_tlen-1)
 		i_tgt = i_tgt * _scale_emb;// scaled embeddings
 
 		// + postional encoding
@@ -565,7 +588,7 @@ struct Decoder{
 
 				pos_embeddings.push_back(lookup(cg, _p_embed_pos, positions));
 			}
-			dynet::Expression i_pos = concatenate_cols(pos_embeddings);// batch_size x d_model x max_slen
+			dynet::Expression i_pos = concatenate_cols(pos_embeddings);// batch_size x num_units x (_batch_tlen-1)
 
 			i_tgt = i_tgt + i_pos;
 		}
@@ -590,11 +613,11 @@ struct Decoder{
 			i_l_out = dec.build_graph(cg, i_src, i_l_out);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
 			// FIXME: should we have residual connection here?
 			// e.g., 
-			// dynet::Expression i_l = enc.build_graph(cg, i_src, i_l_out);
+			// dynet::Expression i_l = dec.build_graph(cg, i_src, i_l_out);
 			// i_l_out = i_l_out + i_l;
 		}
 
-		return i_l_out;
+		return i_l_out;// batch_size x num_units x (Ly-1)
 	}
 };
 typedef std::shared_ptr<Decoder> DecoderPointer;
@@ -653,18 +676,25 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
 
 	std::vector<dynet::Expression> v_errors;
-	unsigned max_len = _decoder.get()->_max_len;
+	unsigned tlen = _decoder.get()->_batch_tlen;
 	std::vector<unsigned> next_words(tsents.size());
-	for (unsigned t = 0; t < max_len - 1; ++t) {// shifted right
+	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
 		for(size_t bs = 0; bs < tsents.size(); bs++)
 			next_words[bs] = (tsents[bs].size() > (t+1)) ? (unsigned)tsents[bs][t+1] : _tfc._sm._kTGT_EOS;
 	
 		// output linear projections (logit)
-		dynet::Expression i_tgt_t = dynet::select_cols(i_tgt, {t});
-		dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1
+		dynet::Expression i_err;
+		if (!_tfc._use_label_smoothing){
+			dynet::Expression i_tgt_t = dynet::select_cols(i_tgt, {t});
+			dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 		
-		// log_softmax and loss
-		dynet::Expression i_err = dynet::pickneglogsoftmax(i_r_t, next_words);		
+			// log_softmax and loss
+			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);		
+		}
+		else{// w/ label smoothing
+			// FIXME
+		}
+
 		v_errors.push_back(i_err);
 	}
 
