@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("train,t", value<vector<string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
 		("devel,d", value<string>(), "file containing development sentences.")
-		("slen-limit", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
+		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
 		("src-vocab", value<string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
 		("trg-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
@@ -95,7 +95,6 @@ int main(int argc, char** argv) {
 		("label-smoothing-weight", value<float>()->default_value(0.9f), "use dropout thoroughly; 0.1 by default")
 		//-----------------------------------------
 		("position-encoding", value<unsigned>()->default_value(1), "impose position encoding (0: none; 1: learned positional encoding; 2: sinusoid encoding); 1 by default")
-		("max-seq-len", value<unsigned>()->default_value(500), "impose max sequence length; 500 by default")
 		//-----------------------------------------
 		("attention-type", value<unsigned>()->default_value(1), "impose attention type (1: Luong attention type; 2: Bahdanau attention type); 1 by default")
 		//-----------------------------------------
@@ -202,7 +201,7 @@ int main(int argc, char** argv) {
 		, *p_sgd_trainer
 		, vm["parameters"].as<string>() /*best saved model parameter file*/
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
-		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience)/*learning rate scheduler*/;
+		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/);
 
 	// clean up
 	cerr << "Cleaning up..." << endl;
@@ -225,9 +224,9 @@ bool load_data(const variables_map& vm
 	vector<string> train_paths = vm["train"].as<vector<string>>();// to handle multiple training data
 	if (train_paths.size() > 2) assert("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
 	//cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";
-	//train_cor = read_corpus(vm["train"].as<string>(), doco, true, vm["slen-limit"].as<unsigned>(), r2l_target & !swap, vm["eos_padding"].as<unsigned>());
+	//train_cor = read_corpus(vm["train"].as<string>(), doco, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap, vm["eos_padding"].as<unsigned>());
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
-	train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["slen-limit"].as<unsigned>(), r2l_target & !swap);
+	train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 	if ("" == vm["src-vocab"].as<string>() 
 		&& "" == vm["trg-vocab"].as<string>()) // if not using external vocabularies
 	{
@@ -238,7 +237,7 @@ bool load_data(const variables_map& vm
 	{
 		train_cor.clear();// use the next training corpus instead!	
 		cerr << "Reading extra training data from " << train_paths[1] << "...\n";
-		train_cor = read_corpus(train_paths[1], &sd, &td, true/*for training*/, vm["slen-limit"].as<unsigned>(), r2l_target & !swap);
+		train_cor = read_corpus(train_paths[1], &sd, &td, true/*for training*/, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 		cerr << "Performing incremental training..." << endl;
 	}
 

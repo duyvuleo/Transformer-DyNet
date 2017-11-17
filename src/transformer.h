@@ -78,7 +78,7 @@ struct TransformerConfig{
 	float _dropout_rate = 0.1f;
 
 	bool _use_label_smoothing = false;
-	float _label_smoothing_weight = 0.9f;
+	float _label_smoothing_weight = 0.1f;
 
 	unsigned _position_encoding = 1; // 1: learned positional embedding ; 2: sinusoidal positional encoding ; 0: none
 	unsigned _max_length = 500;// for learned positional embedding
@@ -86,6 +86,8 @@ struct TransformerConfig{
 	SentinelMarkers _sm;
 
 	unsigned _attention_type = ATTENTION_TYPE::DOT_PRODUCT;
+
+	bool _is_training = true;
 
 	TransformerConfig(){}
 
@@ -100,7 +102,8 @@ struct TransformerConfig{
 		, unsigned position_encoding
 		, unsigned max_length
 		, SentinelMarkers sm
-		, unsigned attention_type)
+		, unsigned attention_type
+		, bool is_training = true)
 	{
 		_src_vocab_size = src_vocab_size;
 		_tgt_vocab_size = tgt_vocab_size;
@@ -114,6 +117,7 @@ struct TransformerConfig{
 		_max_length = max_length;
 		_sm = sm;
 		_attention_type = attention_type;
+		_is_training = is_training;
 	}
 
 	TransformerConfig(const TransformerConfig& tfc){
@@ -129,6 +133,7 @@ struct TransformerConfig{
 		_max_length = tfc._max_length;
 		_sm = tfc._sm;
 		_attention_type = tfc._attention_type;
+		_is_training = tfc._is_training;
 	}
 };
 //---
@@ -197,7 +202,7 @@ struct FeedForwardLayer{
 
 //---
 struct MultiHeadAttentionLayer{
-	explicit MultiHeadAttentionLayer(DyNetModel* mod, const TransformerConfig& tfc, bool is_future_blinding = false)
+	explicit MultiHeadAttentionLayer(DyNetModel* mod, TransformerConfig& tfc, bool is_future_blinding = false)
 	{
 		_p_WQ.resize(tfc._nheads);
 		_p_WK.resize(tfc._nheads);
@@ -212,13 +217,9 @@ struct MultiHeadAttentionLayer{
 		
 		_att_scale = sqrt(tfc._num_units / tfc._nheads);
 
-		_attention_type = tfc._attention_type;
-
-		_nheads = tfc._nheads;
-
 		_is_future_blinding = is_future_blinding;
 
-		_dropout_p = tfc._dropout_rate;
+		_p_tfc = &tfc;
 	}
 
 	~MultiHeadAttentionLayer(){}
@@ -229,17 +230,13 @@ struct MultiHeadAttentionLayer{
 	std::vector<dynet::Parameter> _p_WV;
 	dynet::Parameter _p_WO;
 
-	unsigned _nheads = 0;// number of heads
-
-	// attention type
-	unsigned _attention_type= ATTENTION_TYPE::DOT_PRODUCT;
-
 	// attention scale factor
 	float _att_scale = 0.f;
 
 	bool _is_future_blinding = false;
 
-	float _dropout_p = 0.f;
+	// transformer config pointer
+	TransformerConfig* _p_tfc = nullptr;
 
 	dynet::Expression build_graph(dynet::ComputationGraph& cg
 		, const dynet::Expression& i_x/*queries*/
@@ -254,14 +251,14 @@ struct MultiHeadAttentionLayer{
 		
 		// Note: this should be done in parallel for efficiency!
 		// e.g., utilising pseudo-batching?	
-		std::vector<dynet::Expression> v_atts(_nheads);
-		for (unsigned h = 0; h < _nheads; h++){
+		std::vector<dynet::Expression> v_atts(_p_tfc->_nheads);
+		for (unsigned h = 0; h < _p_tfc->_nheads; h++){
 			dynet::Expression i_Q/*queries*/ = dynet::parameter(cg, _p_WQ[h])/*dk x num_units*/ * i_x/*num_units x Lx*/;// dk x Lx
 			dynet::Expression i_K/*keys*/ = dynet::parameter(cg, _p_WK[h])/*dk x num_units*/ * i_y/*num_units x Ly*/;// dk x Ly
 			dynet::Expression i_V/*values*/ = dynet::parameter(cg, _p_WV[h])/*dv x num_units*/ * i_y/*num_units x Ly*/;// dv x Ly
 
 			dynet::Expression i_att_h;
-			if (_attention_type == ATTENTION_TYPE::DOT_PRODUCT){// Luong attention type
+			if (_p_tfc->_attention_type == ATTENTION_TYPE::DOT_PRODUCT){// Luong attention type
 				dynet::Expression i_alpha_pre = (dynet::transpose(i_K)/*Ly * dk*/ * i_Q/*dk x Lx*/) / _att_scale;// Ly x Lx (unnormalised) 
 
 				dynet::Expression i_alpha;
@@ -272,12 +269,13 @@ struct MultiHeadAttentionLayer{
 				// FIXME: save the soft alignment in i_alpha if necessary!
 				
 				// attention dropout (col-major or whole matrix?)
-				//i_alpha = dynet::dropout_dim(i_alpha, 0/*col-major*/, _dropout_p);
-				i_alpha = dynet::dropout(i_alpha, _dropout_p);// for whole matrix
+				if (_p_tfc->_is_training)
+					//i_alpha = dynet::dropout_dim(i_alpha, 0/*col-major*/, _p_tfc->_dropout_rate);
+					i_alpha = dynet::dropout(i_alpha, _p_tfc->_dropout_rate);// for whole matrix
 
 				i_att_h = i_V/*dv x Ly*/ * i_alpha/*Ly x Lx*/;// dv x Lx
 			}
-			else if (_attention_type == ATTENTION_TYPE::ADDITIVE_MLP){// Bahdanau attention type
+			else if (_p_tfc->_attention_type == ATTENTION_TYPE::ADDITIVE_MLP){// Bahdanau attention type
 				// FIXME
 			}
 			else assert("MultiHeadAttentionLayer: Unknown attention type!");
@@ -298,7 +296,7 @@ struct MultiHeadAttentionLayer{
 
 //---
 struct EncoderLayer{
-	explicit EncoderLayer(DyNetModel* mod, const TransformerConfig& tfc)
+	explicit EncoderLayer(DyNetModel* mod, TransformerConfig& tfc)
 		:_self_attention_sublayer(mod, tfc)
 		, _feed_forward_sublayer(mod, tfc)
 	{		
@@ -353,7 +351,7 @@ struct EncoderLayer{
 };
 
 struct Encoder{
-	explicit Encoder(DyNetModel* mod, const TransformerConfig& tfc){
+	explicit Encoder(DyNetModel* mod, TransformerConfig& tfc){
 		_p_embed_s = mod->add_lookup_parameters(tfc._src_vocab_size, {tfc._num_units});
 
 		if (tfc._position_encoding == 1){
@@ -364,13 +362,9 @@ struct Encoder{
 			_v_enc_layers.push_back(EncoderLayer(mod, tfc));
 		}
 
-		_sm = tfc._sm;
-
-		_position_encoding = tfc._position_encoding;
-
-		_dropout_p = tfc._dropout_rate;
-
 		_scale_emb = sqrt(tfc._num_units);
+
+		_p_tfc = &tfc;
 	}
 
 	~Encoder(){}
@@ -382,13 +376,13 @@ struct Encoder{
 
 	std::vector<EncoderLayer> _v_enc_layers;// stack of identical encoder layers
 
-	SentinelMarkers _sm;
-
-	float _dropout_p = 0.f;
-
+	// --- intermediate variables
 	float _scale_emb = 0.f;
-
 	unsigned _batch_slen = 0;
+	// ---
+
+	// transformer config pointer
+	TransformerConfig* _p_tfc = nullptr;
 
 	dynet::Expression compute_embeddings(dynet::ComputationGraph &cg, const WordIdSentences& sents/*batch of sentences*/, ModelStats &stats){
 		// get max length in a batch
@@ -401,10 +395,10 @@ struct Encoder{
 		std::vector<unsigned> words(sents.size());
 		for (unsigned l = 0; l < max_len; l++){
 			for (unsigned bs = 0; bs < sents.size(); ++bs){
-				words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_sm._kSRC_EOS;
+				words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;
 				if (l < sents[bs].size()){ 
 					stats._words_src++; 
-					if (sents[bs][l] == _sm._kSRC_UNK) stats._words_src_unk++;
+					if (sents[bs][l] == _p_tfc->_sm._kSRC_UNK) stats._words_src_unk++;
 				}
 			}
 
@@ -415,7 +409,7 @@ struct Encoder{
 		i_src = i_src * _scale_emb;// scaled embeddings
 
 		// + postional encoding
-		if (_position_encoding == 1){// learned positional embedding 
+		if (_p_tfc->_position_encoding == 1){// learned positional embedding 
 			std::vector<dynet::Expression> pos_embeddings;  
 			std::vector<unsigned> positions(sents.size());
 			for (unsigned l = 0; l < max_len; l++){
@@ -428,11 +422,12 @@ struct Encoder{
 
 			i_src = i_src + i_pos;
 		}
-		else if (_position_encoding == 2){// sinusoidal positional encoding
+		else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
 			// FIXME: not yet implemented since sin and cos functions are not available yet in DyNet!
 		}
 
-		i_src = dynet::dropout(i_src, _dropout_p);// apply dropout
+		if (_p_tfc->_is_training)
+			i_src = dynet::dropout(i_src, _p_tfc->_dropout_rate);// apply dropout
 
 		return i_src;
 	}
@@ -460,7 +455,7 @@ typedef std::shared_ptr<Encoder> EncoderPointer;
 
 //---
 struct DecoderLayer{
-	explicit DecoderLayer(DyNetModel* mod, const TransformerConfig& tfc)
+	explicit DecoderLayer(DyNetModel* mod, TransformerConfig& tfc)
 		:_self_attention_sublayer(mod, tfc, true)
 		, _src_attention_sublayer(mod, tfc)
 		, _feed_forward_sublayer(mod, tfc)
@@ -534,7 +529,7 @@ struct DecoderLayer{
 };
 
 struct Decoder{
-	explicit Decoder(DyNetModel* mod, const TransformerConfig& tfc){
+	explicit Decoder(DyNetModel* mod, TransformerConfig& tfc){
 		_p_embed_t = mod->add_lookup_parameters(tfc._tgt_vocab_size, {tfc._num_units});
 
 		if (tfc._position_encoding == 1){
@@ -545,31 +540,23 @@ struct Decoder{
 			_v_dec_layers.push_back(DecoderLayer(mod, tfc));
 		}		
 
-		_sm = tfc._sm;
-
-		_position_encoding = tfc._position_encoding;
-
-		_dropout_p = tfc._dropout_rate;
-
 		_scale_emb = sqrt(tfc._num_units);
+
+		_p_tfc = &tfc;
 	}
 
 	~Decoder(){}
 
 	dynet::LookupParameter _p_embed_t;// source embeddings
-
 	dynet::LookupParameter _p_embed_pos;// position embeddings
-	unsigned _position_encoding = 1;
 
 	std::vector<DecoderLayer> _v_dec_layers;// stack of identical decoder layers
 
-	SentinelMarkers _sm;
-
-	float _dropout_p = 0.f;
-
-	float _scale_emb = 0.f;
+	// transformer config pointer
+	TransformerConfig* _p_tfc = nullptr;
 
 	// --- intermediate variables
+	float _scale_emb = 0.f;
 	unsigned _batch_tlen = 0;
 	// ---
 
@@ -588,7 +575,7 @@ struct Decoder{
 		std::vector<unsigned> words(sents.size());
 		for (unsigned l = 0; l < max_len; l++){
 			for (unsigned bs = 0; bs < sents.size(); ++bs){
-				words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_sm._kTGT_EOS;
+				words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
 			}
 
 			target_embeddings.push_back(lookup(cg, _p_embed_t, words));
@@ -598,7 +585,7 @@ struct Decoder{
 		i_tgt = i_tgt * _scale_emb;// scaled embeddings
 
 		// + postional encoding
-		if (_position_encoding == 1){// learned positional embedding 
+		if (_p_tfc->_position_encoding == 1){// learned positional embedding 
 			std::vector<dynet::Expression> pos_embeddings;  
 			std::vector<unsigned> positions(sents.size());
 			for (unsigned l = 0; l < max_len; l++){
@@ -611,11 +598,12 @@ struct Decoder{
 
 			i_tgt = i_tgt + i_pos;
 		}
-		else if (_position_encoding == 2){// sinusoidal positional encoding
+		else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
 			// FIXME: not yet implemented since sin and cos functions are not available yet in DyNet!
 		}
 
-		i_tgt = dynet::dropout(i_tgt, _dropout_p);// apply dropout
+		if (_p_tfc->_is_training)
+			i_tgt = dynet::dropout(i_tgt, _p_tfc->_dropout_rate);// apply dropout
 
 		return i_tgt;
 	}
@@ -720,18 +708,24 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) stats._words_tgt_unk++;
 			}
 		}
+
+		// compute the logit
+		dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {t + 1});// shifted right
+
+		// output linear projections
+		dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 	
-		// output linear projections (logit)
 		dynet::Expression i_err;
-		if (!_tfc._use_label_smoothing){
-			dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {t + 1});// shifted right
-			dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
-		
+		if (!_tfc._use_label_smoothing){		
 			// log_softmax and loss
 			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
 		}
-		else{// w/ label smoothing
-			// FIXME
+		else{// w/ label smoothing (according to https://arxiv.org/pdf/1701.06548.pdf)
+			dynet::Expression i_softmax_t = dynet::softmax(i_r_t);
+			dynet::Expression i_logsoftmax_t = dynet::log(i_softmax_t);
+			dynet::Expression i_entropy_t = -dynet::transpose(i_logsoftmax_t) * i_softmax_t;// entropy of i_softmax_t
+			
+			i_err = dynet::pick(-i_logsoftmax_t, next_words) - _tfc._label_smoothing_weight * i_entropy_t;// FIXME: efficient way?
 		}
 
 		v_errors.push_back(i_err);
@@ -757,7 +751,7 @@ void TransformerModel::save_params_to_file(const string &params_file)
 }
 
 void TransformerModel::set_dropout(bool is_activated){
-	// FIXME:
+	_tfc._is_training = is_activated;
 }
 
 //---
