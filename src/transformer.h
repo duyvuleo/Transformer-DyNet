@@ -246,9 +246,11 @@ struct MultiHeadAttentionLayer{
 		, const dynet::Expression& i_y/*keys and values. i_y is equal to i_x if using self_attention*/)
 	{
 		// create mask for self-attention in decoder
-		dynet::Dim dim = i_x.dim();
-		dynet::Expression i_mask = dynet::zeros(cg, dim);// zero masking if not for future blinding
-		if (_is_future_blinding) i_mask = create_triangle_mask(cg, dim[1]/*Lx*/, false);
+		dynet::Expression i_mask;
+		if (_is_future_blinding){ 
+			dynet::Dim dim = i_x.dim();
+			i_mask = create_triangle_mask(cg, dim[1]/*Lx*/, false);
+		}
 		
 		// Note: this should be done in parallel for efficiency!
 		// e.g., utilising pseudo-batching?	
@@ -256,13 +258,17 @@ struct MultiHeadAttentionLayer{
 		for (unsigned h = 0; h < _nheads; h++){
 			dynet::Expression i_Q/*queries*/ = dynet::parameter(cg, _p_WQ[h])/*dk x num_units*/ * i_x/*num_units x Lx*/;// dk x Lx
 			dynet::Expression i_K/*keys*/ = dynet::parameter(cg, _p_WK[h])/*dk x num_units*/ * i_y/*num_units x Ly*/;// dk x Ly
-			dynet::Expression i_V/*values*/ = dynet::parameter(cg, _p_WK[h])/*dv x num_units*/ * i_y/*num_units x Ly*/;// dv x Ly
+			dynet::Expression i_V/*values*/ = dynet::parameter(cg, _p_WV[h])/*dv x num_units*/ * i_y/*num_units x Ly*/;// dv x Ly
 
 			dynet::Expression i_att_h;
 			if (_attention_type == ATTENTION_TYPE::DOT_PRODUCT){// Luong attention type
 				dynet::Expression i_alpha_pre = (dynet::transpose(i_K)/*Ly * dk*/ * i_Q/*dk x Lx*/) / _att_scale;// Ly x Lx (unnormalised) 
 
-				dynet::Expression i_alpha = dynet::softmax(i_alpha_pre + i_mask);// Ly x Lx (normalised, col-major)
+				dynet::Expression i_alpha;
+				if (_is_future_blinding)
+					i_alpha = dynet::softmax(i_alpha_pre + i_mask);// Ly x Lx (normalised, col-major)
+				else
+					i_alpha = dynet::softmax(i_alpha_pre);// Ly x Lx (normalised, col-major)
 				// FIXME: save the soft alignment in i_alpha if necessary!
 				
 				// attention dropout (col-major or whole matrix?)
@@ -330,8 +336,8 @@ struct EncoderLayer{
 		// w/ residual connection
 		i_encl = i_encl + i_mh_att;
 
-		// layer normalisation 1
-		i_encl = layer_norm_matrix(i_encl, i_ln1_g, i_ln1_b);
+		// position-wise layer normalisation 1
+		i_encl = layer_norm_2d(i_encl, i_ln1_g, i_ln1_b);
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_encl);
@@ -339,8 +345,8 @@ struct EncoderLayer{
 		// w/ residual connection
 		i_encl = i_encl + i_ff;
 
-		// layer normalisation 2
-		i_encl = layer_norm_matrix(i_encl, i_ln2_g, i_ln2_b);
+		// position-wise layer normalisation 2
+		i_encl = layer_norm_2d(i_encl, i_ln2_g, i_ln2_b);
 
 		return i_encl;
 	}
@@ -435,6 +441,7 @@ struct Encoder{
 		// compute source (+ postion) embeddings
 		dynet::Expression i_src = compute_embeddings(cg, ssents, stats);
 		
+		// compute stacked encoder layers
 		dynet::Expression i_l_out = i_src;
 		for (auto enc : _v_enc_layers){
 			// stacking approach
@@ -502,7 +509,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_mh_self_att;
 
 		// layer normalisation 1
-		i_decl = layer_norm_matrix(i_decl, i_ln1_g, i_ln1_b);
+		i_decl = layer_norm_2d(i_decl, i_ln1_g, i_ln1_b);
 
 		// multi-head source attention sub-layer
 		dynet::Expression i_mh_src_att = _src_attention_sublayer.build_graph(cg, i_decl, i_enc_inp);
@@ -511,7 +518,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_mh_src_att;
 
 		// layer normalisation 2
-		i_decl = layer_norm_matrix(i_decl, i_ln2_g, i_ln2_b);// position-wise
+		i_decl = layer_norm_2d(i_decl, i_ln2_g, i_ln2_b);// position-wise
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_decl);
@@ -520,7 +527,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_ff;
 
 		// layer normalisation 3
-		i_decl = layer_norm_matrix(i_decl, i_ln3_g, i_ln3_b);// position-wise
+		i_decl = layer_norm_2d(i_decl, i_ln3_g, i_ln3_b);// position-wise
 
 		return i_decl;
 	}
@@ -693,10 +700,10 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	, ModelStats &stats)
 {
 	// encode source
-	dynet::Expression i_src = _encoder.get()->build_graph(cg, ssents, stats);// (batch_size x) num_units x Lx
-
+	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, stats);// (batch_size x) num_units x Lx
+	
 	// decode target
-	dynet::Expression i_tgt = _decoder.get()->build_graph(cg, tsents, i_src);// (batch_size x) num_units x (Ly - 1)
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// (batch_size x) num_units x Ly
 
 	// get losses	
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
@@ -717,11 +724,11 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		// output linear projections (logit)
 		dynet::Expression i_err;
 		if (!_tfc._use_label_smoothing){
-			dynet::Expression i_tgt_t = dynet::select_cols(i_tgt, {t + 1});// shifted right
+			dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {t + 1});// shifted right
 			dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 		
 			// log_softmax and loss
-			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);		
+			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
 		}
 		else{// w/ label smoothing
 			// FIXME

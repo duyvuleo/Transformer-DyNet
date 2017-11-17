@@ -68,15 +68,15 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("train,t", value<vector<string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
 		("devel,d", value<string>(), "file containing development sentences.")
-		("slen_limit", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
+		("slen-limit", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
 		("src-vocab", value<string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
 		("trg-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		//-----------------------------------------
 		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
 		//-----------------------------------------
-		("minibatch-size", value<unsigned>()->default_value(1), "impose the minibatch size for training (support both GPU and CPU); single batch by default")
-		("dynet-autobatch", "impose the auto-batch mode (support both GPU and CPU); no by default")
+		("minibatch-size,b", value<unsigned>()->default_value(1), "impose the minibatch size for training (support both GPU and CPU); single batch by default")
+		("dynet-autobatch", value<unsigned>()->default_value(0), "impose the auto-batch mode (support both GPU and CPU); no by default")
 		//-----------------------------------------
 		("sgd-trainer", value<unsigned>()->default_value(0), "use specific SGD trainer (0: vanilla SGD; 1: momentum SGD; 2: Adagrad; 3: AdaDelta; 4: Adam; 5: RMSProp; 6: cyclical SGD)")
 		("sparse-updates", value<bool>()->default_value(true), "enable/disable sparse update(s) for lookup parameter(s); true by default")
@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
 		("position-encoding", value<unsigned>()->default_value(1), "impose position encoding (0: none; 1: learned positional encoding; 2: sinusoid encoding); 1 by default")
 		("max-seq-len", value<unsigned>()->default_value(500), "impose max sequence length; 500 by default")
 		//-----------------------------------------
-		("attention-type", value<unsigned>()->default_value(0), "impose attention type (0: Luong attention type; 1: Bahdanau attention type); 0 by default")
+		("attention-type", value<unsigned>()->default_value(1), "impose attention type (1: Luong attention type; 2: Bahdanau attention type); 1 by default")
 		//-----------------------------------------
 		("epochs,e", value<unsigned>()->default_value(20), "maximum number of training epochs")
 		("patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved for early stopping; default none")
@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
 	TREPORT = vm["treport"].as<unsigned>(); 
 	DREPORT = vm["dreport"].as<unsigned>(); 
 	if (DREPORT % TREPORT != 0) assert("dreport must be divisible by treport.");// to ensure the reporting on development data
-	MINIBATCH_SIZE = vm["minibatch_size"].as<unsigned>();
+	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
 	// load fixed vocabularies from files if required
 	dynet::Dict sd, td;
@@ -170,9 +170,9 @@ int main(int argc, char** argv) {
 		assert("Failed to load data files!");
 
 	// learning rate scheduler
-	unsigned lr_epochs = vm["lr_epochs"].as<unsigned>(), lr_patience = vm["lr_patience"].as<unsigned>();
+	unsigned lr_epochs = vm["lr-epochs"].as<unsigned>(), lr_patience = vm["lr-patience"].as<unsigned>();
 	if (lr_epochs > 0 && lr_patience > 0)
-		cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr_epochs or lr_patience!" << endl;
+		cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;
 
 	// transformer configuration
 	TransformerConfig tfc(sd.size(), td.size()
@@ -191,6 +191,8 @@ int main(int argc, char** argv) {
 	transformer::TransformerModel tf(tfc, sd, td);
 	if (vm.count("initialise")) tf.initialise_params_from_file(vm["initialise"].as<string>());// load pre-trained model (for incremental training)
 
+	cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
+
 	// create SGD trainer
 	Trainer* p_sgd_trainer = create_sgd_trainer(vm, tf.get_model_parameters());
 
@@ -200,7 +202,7 @@ int main(int argc, char** argv) {
 		, *p_sgd_trainer
 		, vm["parameters"].as<string>() /*best saved model parameter file*/
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
-		, lr_epochs, vm["lr_eta_decay"].as<float>(), lr_patience)/*learning rate scheduler*/;
+		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience)/*learning rate scheduler*/;
 
 	// clean up
 	cerr << "Cleaning up..." << endl;
@@ -223,7 +225,7 @@ bool load_data(const variables_map& vm
 	vector<string> train_paths = vm["train"].as<vector<string>>();// to handle multiple training data
 	if (train_paths.size() > 2) assert("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
 	//cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";
-	//train_cor = read_corpus(vm["train"].as<string>(), doco, true, vm["slen_limit"].as<unsigned>(), r2l_target & !swap, vm["eos_padding"].as<unsigned>());
+	//train_cor = read_corpus(vm["train"].as<string>(), doco, true, vm["slen-limit"].as<unsigned>(), r2l_target & !swap, vm["eos_padding"].as<unsigned>());
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
 	train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["slen-limit"].as<unsigned>(), r2l_target & !swap);
 	if ("" == vm["src-vocab"].as<string>() 
@@ -303,17 +305,17 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 	Trainer* sgd = nullptr;
 	unsigned sgd_type = vm["sgd-trainer"].as<unsigned>();
 	if (sgd_type == 1)
-		sgd = new MomentumSGDTrainer(model, vm["lr_eta"].as<float>());
+		sgd = new MomentumSGDTrainer(model, vm["lr-eta"].as<float>());
 	else if (sgd_type == 2)
-		sgd = new AdagradTrainer(model, vm["lr_eta"].as<float>());
+		sgd = new AdagradTrainer(model, vm["lr-eta"].as<float>());
 	else if (sgd_type == 3)
 		sgd = new AdadeltaTrainer(model);
 	else if (sgd_type == 4)
-		sgd = new AdamTrainer(model, vm["lr_eta"].as<float>());
+		sgd = new AdamTrainer(model, vm["lr-eta"].as<float>());
 	else if (sgd_type == 5)
-		sgd = new RMSPropTrainer(model, vm["lr_eta"].as<float>());
+		sgd = new RMSPropTrainer(model, vm["lr-eta"].as<float>());
 	else if (sgd_type == 0)//Vanilla SGD trainer
-		sgd = new SimpleSGDTrainer(model, vm["lr_eta"].as<float>());
+		sgd = new SimpleSGDTrainer(model, vm["lr-eta"].as<float>());
 	else
 	   	assert("Unknown SGD trainer type! (0: vanilla SGD; 1: momentum SGD; 2: Adagrad; 3: AdaDelta; 4: Adam; 5: RMSProp)");
 	sgd->clip_threshold = vm["grad-clip-threshold"].as<float>();// * MINIBATCH_SIZE;// use larger gradient clipping threshold if training with mini-batching, correct?
@@ -341,8 +343,8 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
   
 	double best_loss = 9e+99;
 	
-	unsigned report_every_i = TREPORT;//50;
-	unsigned dev_every_i_reports = DREPORT;//500; 
+	unsigned report_every_i = TREPORT;
+	unsigned dev_every_i_reports = DREPORT;
 
 	// shuffle minibatches
 	cerr << endl << "***SHUFFLE\n";
@@ -388,7 +390,6 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 				cg.set_check_validity(true);
 			}
 	
-			Expression i_cov_penalty, i_fertility_nll;
 			transformer::ModelStats ctstats;
 			Expression i_xent = tf.build_graph(cg, train_src_minibatch[train_ids_minibatch[id]], train_trg_minibatch[train_ids_minibatch[id]], ctstats);
 
