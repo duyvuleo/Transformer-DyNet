@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
 		("dropout-rate", value<float>()->default_value(0.1f), "use dropout thoroughly; 0.1 by default")
 		//-----------------------------------------
 		("use-label-smoothing", "use label smoothing for cross entropy; no by default")
-		("label-smoothing-weight", value<float>()->default_value(0.9f), "use dropout thoroughly; 0.1 by default")
+		("label-smoothing-weight", value<float>()->default_value(0.1f), "use dropout thoroughly; 0.1 by default")
 		//-----------------------------------------
 		("position-encoding", value<unsigned>()->default_value(1), "impose position encoding (0: none; 1: learned positional encoding; 2: sinusoid encoding); 1 by default")
 		//-----------------------------------------

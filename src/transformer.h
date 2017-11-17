@@ -350,6 +350,27 @@ struct EncoderLayer{
 	}
 };
 
+// ---
+dynet::Expression make_sinusoidal_position_encoding(dynet::ComputationGraph &cg, const dynet::Dim& dim, unsigned pos = 0){
+	unsigned nUnits = dim[0];
+	unsigned nWords = dim[1];
+
+	float num_timescales = nUnits / 2;
+	float log_timescale_increment = std::log(10000.f) / (num_timescales - 1.f);
+
+	std::vector<float> vSS(nUnits * nWords, 0.f);
+	for(unsigned p = pos; p < nWords + pos; ++p) {
+		for(int i = 0; i < num_timescales; ++i) {
+			float v = p * std::exp(i * -log_timescale_increment);
+			vSS[(p - pos) * nUnits + i] = std::sin(v);
+			vSS[(p - pos) * nUnits + num_timescales + i] = std::cos(v);
+		}
+	}
+
+	return dynet::input(cg, {nUnits, nWords}, vSS);
+}
+// ---
+
 struct Encoder{
 	explicit Encoder(DyNetModel* mod, TransformerConfig& tfc){
 		_p_embed_s = mod->add_lookup_parameters(tfc._src_vocab_size, {tfc._num_units});
@@ -423,8 +444,11 @@ struct Encoder{
 			i_src = i_src + i_pos;
 		}
 		else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
-			// FIXME: not yet implemented since sin and cos functions are not available yet in DyNet!
+			dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_src.dim(), 0);
+
+			i_src = i_src + i_pos;
 		}
+		else assert("Unknown positional encoding type!");
 
 		if (_p_tfc->_is_training)
 			i_src = dynet::dropout(i_src, _p_tfc->_dropout_rate);// apply dropout
@@ -564,7 +588,7 @@ struct Decoder{
 		return dynet::parameter(cg, _p_embed_t);// target word embedding matrix (num_units x |V_T|)
 	}
 
-	dynet::Expression compute_embeddings(dynet::ComputationGraph &cg, const WordIdSentences& sents/*batch of sentences*/){
+	dynet::Expression compute_embeddings(dynet::ComputationGraph &cg, const WordIdSentences& sents/*batch of sentences*/, unsigned pos){
 		// get max length in a batch
 		size_t max_len = sents[0].size();
 		for(size_t i = 1; i < sents.size(); i++) max_len = std::max(max_len, sents[i].size());
@@ -599,8 +623,11 @@ struct Decoder{
 			i_tgt = i_tgt + i_pos;
 		}
 		else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
-			// FIXME: not yet implemented since sin and cos functions are not available yet in DyNet!
+			dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_tgt.dim(), pos);
+
+			i_tgt = i_tgt + i_pos;
 		}
+		else assert("Unknown positional encoding type!");
 
 		if (_p_tfc->_is_training)
 			i_tgt = dynet::dropout(i_tgt, _p_tfc->_dropout_rate);// apply dropout
@@ -613,7 +640,7 @@ struct Decoder{
 		, const dynet::Expression& i_src)
 	{
 		// compute source (+ postion) embeddings
-		dynet::Expression i_tgt = compute_embeddings(cg, tsents);
+		dynet::Expression i_tgt = compute_embeddings(cg, tsents, 0/*for training*/);
 		
 		dynet::Expression i_l_out = i_tgt;
 		for (auto dec : _v_dec_layers){
@@ -715,18 +742,18 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		// output linear projections
 		dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 	
+		// log_softmax and loss
 		dynet::Expression i_err;
-		if (!_tfc._use_label_smoothing){		
-			// log_softmax and loss
-			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
-		}
-		else{// w/ label smoothing (according to https://arxiv.org/pdf/1701.06548.pdf)
+		if (_tfc._use_label_smoothing && _tfc._is_training/*only applies in training*/)
+		{// w/ label smoothing (according to https://arxiv.org/pdf/1701.06548.pdf)
 			dynet::Expression i_softmax_t = dynet::softmax(i_r_t);
 			dynet::Expression i_logsoftmax_t = dynet::log(i_softmax_t);
 			dynet::Expression i_entropy_t = -dynet::transpose(i_logsoftmax_t) * i_softmax_t;// entropy of i_softmax_t
 			
 			i_err = dynet::pick(-i_logsoftmax_t, next_words) - _tfc._label_smoothing_weight * i_entropy_t;// FIXME: efficient way?
 		}
+		else 
+			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
 
 		v_errors.push_back(i_err);
 	}
