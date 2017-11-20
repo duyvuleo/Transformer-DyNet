@@ -39,7 +39,7 @@ typedef std::shared_ptr<DyNetModel> DyNetModelPointer;
 namespace transformer {
 
 enum ATTENTION_TYPE { DOT_PRODUCT = 1, ADDITIVE_MLP = 2 };
-enum FFL_ACTIVATION_TYPE { RELU = 1, SWISH = 2, SWISH_LEARN = 3 };
+enum FFL_ACTIVATION_TYPE { RELU = 1, SWISH = 2, SWISH_LEARNABLE_BETA = 3 };
 
 //---
 struct SentinelMarkers{
@@ -76,11 +76,10 @@ struct TransformerConfig{
 
 	unsigned _nlayers = 6;
 
-	float _dropout_rate = 0.1f;
-	//float _encoder_dropout_rate = 0.1f;
-	//float _decoder_dropout_rate = 0.1f;
-	//float _attention_dropout_rate = 0.1f;
-	//float _ff_dropout_rate = 0.1f;
+	float _encoder_emb_dropout_rate = 0.1f;
+	float _decoder_emb_dropout_rate = 0.1f;
+	float _attention_dropout_rate = 0.1f;
+	float _ff_dropout_rate = 0.1f;
 
 	bool _use_label_smoothing = false;
 	float _label_smoothing_weight = 0.1f;
@@ -103,7 +102,10 @@ struct TransformerConfig{
 		, unsigned num_units
 		, unsigned nheads
 		, unsigned nlayers
-		, float dropout_rate
+		, float encoder_emb_dropout_rate
+		, float decoder_emb_dropout_rate
+		, float attention_dropout_rate
+		, float ff_dropout_rate
 		, bool use_label_smoothing
 		, float label_smoothing_weight
 		, unsigned position_encoding
@@ -118,7 +120,10 @@ struct TransformerConfig{
 		_num_units = num_units;
 		_nheads = nheads;
 		_nlayers = nlayers;
-		_dropout_rate = dropout_rate;
+		_encoder_emb_dropout_rate = encoder_emb_dropout_rate;
+		_decoder_emb_dropout_rate = decoder_emb_dropout_rate;
+		_attention_dropout_rate = attention_dropout_rate;
+		_ff_dropout_rate = ff_dropout_rate;
 		_use_label_smoothing = use_label_smoothing;
 		_label_smoothing_weight = label_smoothing_weight;
 		_position_encoding = position_encoding;
@@ -135,7 +140,10 @@ struct TransformerConfig{
 		_num_units = tfc._num_units;
 		_nheads = tfc._nheads;
 		_nlayers = tfc._nlayers;
-		_dropout_rate = tfc._dropout_rate;
+		_encoder_emb_dropout_rate = tfc._encoder_emb_dropout_rate;
+		_decoder_emb_dropout_rate = tfc._decoder_emb_dropout_rate;
+		_attention_dropout_rate = tfc._attention_dropout_rate;
+		_ff_dropout_rate = tfc._ff_dropout_rate;
 		_use_label_smoothing = tfc._use_label_smoothing;
 		_label_smoothing_weight = tfc._label_smoothing_weight;
 		_position_encoding = tfc._position_encoding;
@@ -186,12 +194,13 @@ struct ConvLayer{
 };
 
 struct FeedForwardLayer{
-	explicit FeedForwardLayer(DyNetModel* mod, const TransformerConfig& tfc)
+	explicit FeedForwardLayer(DyNetModel* mod, TransformerConfig& tfc)
 		: _innerConv(mod, tfc._num_units, tfc._num_units * 4/*4 according to the paper*/)
 		, _outerConv(mod, tfc._num_units * 4, tfc._num_units)
 	{		
-		_ffl_activation_type = tfc._ffl_activation_type;
-		if (_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH_LEARN)
+		_p_tfc = &tfc;
+
+		if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH_LEARNABLE_BETA)
 			_p_beta = mod->add_parameters({1});
 	}	
 
@@ -199,21 +208,29 @@ struct FeedForwardLayer{
 
 	dynet::Parameter _p_beta;// learnable \beta for Swish activation function (work in progress!)
 
+	// transformer config pointer
+	TransformerConfig* _p_tfc = nullptr;	
+
 	dynet::Expression build_graph(dynet::ComputationGraph& cg, const dynet::Expression& i_inp/*num_units x L*/){
 		// FFN(x) = relu(x * W1 + b1) * W2 + b2
 		dynet::Expression i_inner = dynet::reshape(i_inp, {1, i_inp.dim().d[1], i_inp.dim().d[0]});// get the shape for ConvLayer
 		i_inner = _innerConv.apply(cg, i_inner);// x * W1 + b1
 
-		if (_ffl_activation_type == FFL_ACTIVATION_TYPE::RELU)
+		if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::RELU)
 			i_inner = dynet::rectify(i_inner);
 		// use Swish from https://arxiv.org/pdf/1710.05941.pdf
-		else if (_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH) 
+		else if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH) 
 			i_inner = dynet::silu(i_inner);
-		else if (_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH_LEARN){
+		else if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH_LEARNABLE_BETA){
 			//dynet::Expression i_beta = dynet::parameter(cg, _p_beta);
-			// FIXME: need this i_inner = dynet::silu(i_inner, i_beta); ?		
+			// FIXME: requires this: i_inner = dynet::silu(i_inner, i_beta); ?
 		}
 		else assert("Unknown feed-forward activation type!");
+
+		// dropout for feed-forward layer
+		if (_p_tfc->_is_training && _p_tfc->_ff_dropout_rate > 0.f)
+			//i_inner = dynet::dropout_dim(i_inner, 0/*col-major*/, _p_tfc->_ff_dropout_rate);
+			i_inner = dynet::dropout(i_inner, _p_tfc->_ff_dropout_rate);
 
 		dynet::Expression i_outer = _outerConv.apply(cg, i_inner);// relu(x * W1 + b1) * W2 + b2
 		i_outer = dynet::reshape(i_outer, {i_inp.dim().d[0], i_inp.dim().d[1]});// convert to original shape
@@ -223,8 +240,6 @@ struct FeedForwardLayer{
 
 	ConvLayer _innerConv;
 	ConvLayer _outerConv;
-
-	unsigned _ffl_activation_type = FFL_ACTIVATION_TYPE::RELU;
 };
 //---
 
@@ -297,9 +312,9 @@ struct MultiHeadAttentionLayer{
 				// FIXME: save the soft alignment in i_alpha if necessary!
 				
 				// attention dropout (col-major or whole matrix?)
-				if (_p_tfc->_is_training)
-					//i_alpha = dynet::dropout_dim(i_alpha, 0/*col-major*/, _p_tfc->_dropout_rate);
-					i_alpha = dynet::dropout(i_alpha, _p_tfc->_dropout_rate);// for whole matrix
+				if (_p_tfc->_is_training && _p_tfc->_attention_dropout_rate > 0.f)
+					//i_alpha = dynet::dropout_dim(i_alpha, 0/*col-major*/, _p_tfc->_attention_dropout_rate);
+					i_alpha = dynet::dropout(i_alpha, _p_tfc->_attention_dropout_rate);// for whole matrix
 
 				i_att_h = i_V/*dv x Ly*/ * i_alpha/*Ly x Lx*/;// dv x Lx
 			}
@@ -478,8 +493,9 @@ struct Encoder{
 		}
 		else assert("Unknown positional encoding type!");
 
-		if (_p_tfc->_is_training)
-			i_src = dynet::dropout(i_src, _p_tfc->_dropout_rate);// apply dropout
+		if (_p_tfc->_is_training && _p_tfc->_encoder_emb_dropout_rate > 0.f)
+			//i_src = dynet::dropout_dim(i_src, 0/*col-major*/, _p_tfc->_encoder_emb_dropout_rate);
+			i_src = dynet::dropout(i_src, _p_tfc->_encoder_emb_dropout_rate);// apply dropout
 
 		return i_src;
 	}
@@ -657,8 +673,9 @@ struct Decoder{
 		}
 		else assert("Unknown positional encoding type!");
 
-		if (_p_tfc->_is_training)
-			i_tgt = dynet::dropout(i_tgt, _p_tfc->_dropout_rate);// apply dropout
+		if (_p_tfc->_is_training && _p_tfc->_decoder_emb_dropout_rate > 0.f)
+			//i_tgt = dynet::dropout_dim(i_tgt, 0/*col-major*/, _p_tfc->_decoder_emb_dropout_rate);
+			i_tgt = dynet::dropout(i_tgt, _p_tfc->_decoder_emb_dropout_rate);// apply dropout
 
 		return i_tgt;
 	}

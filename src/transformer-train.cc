@@ -89,10 +89,13 @@ int main(int argc, char** argv) {
 		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units")
 		("num-heads,h", value<unsigned>()->default_value(8), "use <num> fors number of heads in multi-head attention mechanism")
 		//-----------------------------------------
-		("dropout-rate", value<float>()->default_value(0.1f), "use dropout thoroughly; 0.1 by default")
+		("encoder-emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for encoder embeddings; 0.1 by default")
+		("decoder-emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for decoding embeddings; 0.1 by default")
+		("attention-dropout-p", value<float>()->default_value(0.1f), "use dropout for attention; 0.1 by default")
+		("ff-dropout-p", value<float>()->default_value(0.1f), "use dropout for feed-forward layer; 0.1 by default")
 		//-----------------------------------------
 		("use-label-smoothing", "use label smoothing for cross entropy; no by default")
-		("label-smoothing-weight", value<float>()->default_value(0.1f), "use dropout thoroughly; 0.1 by default")
+		("label-smoothing-weight", value<float>()->default_value(0.1f), "impose label smoothing weight in objective function; 0.1 by default")
 		//-----------------------------------------
 		("ff-activation-type", value<unsigned>()->default_value(1), "impose feed-forward activation type (1: RELU, 2: SWISH, 3: SWISH with learnable beta); 1 by default")
 		//-----------------------------------------
@@ -180,7 +183,10 @@ int main(int argc, char** argv) {
 		, vm["num-units"].as<unsigned>()
 		, vm["num-heads"].as<unsigned>()
 		, vm["nlayers"].as<unsigned>()
-		, vm["dropout-rate"].as<float>()
+		, vm["encoder-emb-dropout-p"].as<float>()
+		, vm["decoder-emb-dropout-p"].as<float>()
+		, vm["attention-dropout-p"].as<float>()
+		, vm["ff-dropout-p"].as<float>()
 		, vm.count("use-label-smoothing")
 		, vm["label-smoothing-weight"].as<float>()
 		, vm["position-encoding"].as<unsigned>()
