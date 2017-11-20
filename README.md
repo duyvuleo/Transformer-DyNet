@@ -14,7 +14,7 @@ Before compiling dynet, you need:
 
 First, clone the repository
 
-    git clone https://bitbucket.org/duyvuleo/mantis-dev
+    git clone https://github.com/duyvuleo/Transformer-DyNet.git
 
 As mentioned above, you'll need the latest [development] version of eigen
 
