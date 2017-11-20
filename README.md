@@ -1,4 +1,4 @@
-# An Implementation of Transformer (http://papers.nips.cc/paper/7181-attention-is-all-you-need) in DyNet (https://github.com/clab/dynet)
+# An Implementation of [Transformer](http://papers.nips.cc/paper/7181-attention-is-all-you-need) in [DyNet](https://github.com/clab/dynet)
 
 ### Dependencies
 
@@ -20,7 +20,7 @@ As mentioned above, you'll need the latest [development] version of eigen
 
     hg clone https://bitbucket.org/eigen/eigen/
 
-A modified version of latest dynet (https://github.com/clab/dynet/tree/master/dynet) is already included (e.g., dynet folder).
+A modified version of latest [DyNet](https://github.com/clab/dynet) is already included (e.g., dynet folder).
 
 #### CPU build
 
@@ -65,7 +65,7 @@ This will result in the 3 binaries
 
 ## Contacts
 
-Hoang Cong Duy Vu
+Hoang Cong Duy Vu (vhoang2@student.unimelb.edu.au; duyvuleo@gmail.com)
 
 ---
 Updated Nov 2017
