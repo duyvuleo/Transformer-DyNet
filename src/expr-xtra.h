@@ -55,15 +55,4 @@ Expression softplus(const Expression &expr)
 	return log(exp(expr) + 1);// https://www.tensorflow.org/api_docs/python/tf/nn/softplus
 }
 
-// @Vu -- this only works with x as a matrix
-Expression layer_norm_2d(const Expression& x, const Expression& g, const Expression& b){
-	const dynet::Dim& dim = x.dim();
-	std::vector<dynet::Expression> vCols(dim[1]);
-	for (unsigned i = 0; i < dim[1]; i++){ 
-		Expression c_x = select_cols(x, {i});
-		vCols[i] = layer_norm(c_x, g, b);
-	}
-
-	return concatenate_cols(vCols);
-}
 

@@ -39,6 +39,7 @@ typedef std::shared_ptr<DyNetModel> DyNetModelPointer;
 namespace transformer {
 
 enum ATTENTION_TYPE { DOT_PRODUCT = 1, ADDITIVE_MLP = 2 };
+enum FFL_ACTIVATION_TYPE { RELU = 1, SWISH = 2, SWISH_LEARN = 3 };
 
 //---
 struct SentinelMarkers{
@@ -76,6 +77,10 @@ struct TransformerConfig{
 	unsigned _nlayers = 6;
 
 	float _dropout_rate = 0.1f;
+	//float _encoder_dropout_rate = 0.1f;
+	//float _decoder_dropout_rate = 0.1f;
+	//float _attention_dropout_rate = 0.1f;
+	//float _ff_dropout_rate = 0.1f;
 
 	bool _use_label_smoothing = false;
 	float _label_smoothing_weight = 0.1f;
@@ -86,6 +91,8 @@ struct TransformerConfig{
 	SentinelMarkers _sm;
 
 	unsigned _attention_type = ATTENTION_TYPE::DOT_PRODUCT;
+
+	unsigned _ffl_activation_type = FFL_ACTIVATION_TYPE::RELU;
 
 	bool _is_training = true;
 
@@ -103,6 +110,7 @@ struct TransformerConfig{
 		, unsigned max_length
 		, SentinelMarkers sm
 		, unsigned attention_type
+		, unsigned ffl_activation_type
 		, bool is_training = true)
 	{
 		_src_vocab_size = src_vocab_size;
@@ -118,6 +126,7 @@ struct TransformerConfig{
 		_sm = sm;
 		_attention_type = attention_type;
 		_is_training = is_training;
+		_ffl_activation_type = ffl_activation_type;
 	}
 
 	TransformerConfig(const TransformerConfig& tfc){
@@ -134,6 +143,7 @@ struct TransformerConfig{
 		_sm = tfc._sm;
 		_attention_type = tfc._attention_type;
 		_is_training = tfc._is_training;
+		_ffl_activation_type = tfc._ffl_activation_type;
 	}
 };
 //---
@@ -180,23 +190,41 @@ struct FeedForwardLayer{
 		: _innerConv(mod, tfc._num_units, tfc._num_units * 4/*4 according to the paper*/)
 		, _outerConv(mod, tfc._num_units * 4, tfc._num_units)
 	{		
+		_ffl_activation_type = tfc._ffl_activation_type;
+		if (_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH_LEARN)
+			_p_beta = mod->add_parameters({1});
 	}	
 
 	~FeedForwardLayer(){}	
 
+	dynet::Parameter _p_beta;// learnable \beta for Swish activation function (work in progress!)
+
 	dynet::Expression build_graph(dynet::ComputationGraph& cg, const dynet::Expression& i_inp/*num_units x L*/){
 		// FFN(x) = relu(x * W1 + b1) * W2 + b2
-		dynet::Expression i_inner = dynet::reshape(i_inp, {1, i_inp.dim().d[1], i_inp.dim().d[0]});
+		dynet::Expression i_inner = dynet::reshape(i_inp, {1, i_inp.dim().d[1], i_inp.dim().d[0]});// get the shape for ConvLayer
 		i_inner = _innerConv.apply(cg, i_inner);// x * W1 + b1
-		i_inner = dynet::rectify/*swish*/(i_inner);// relu or swish?
+
+		if (_ffl_activation_type == FFL_ACTIVATION_TYPE::RELU)
+			i_inner = dynet::rectify(i_inner);
+		// use Swish from https://arxiv.org/pdf/1710.05941.pdf
+		else if (_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH) 
+			i_inner = dynet::silu(i_inner);
+		else if (_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH_LEARN){
+			//dynet::Expression i_beta = dynet::parameter(cg, _p_beta);
+			// FIXME: need this i_inner = dynet::silu(i_inner, i_beta); ?		
+		}
+		else assert("Unknown feed-forward activation type!");
+
 		dynet::Expression i_outer = _outerConv.apply(cg, i_inner);// relu(x * W1 + b1) * W2 + b2
-		i_outer = dynet::reshape(i_outer, {i_inp.dim().d[0], i_inp.dim().d[1]});
+		i_outer = dynet::reshape(i_outer, {i_inp.dim().d[0], i_inp.dim().d[1]});// convert to original shape
 
 		return i_outer;
 	}
 
 	ConvLayer _innerConv;
 	ConvLayer _outerConv;
+
+	unsigned _ffl_activation_type = FFL_ACTIVATION_TYPE::RELU;
 };
 //---
 
@@ -335,7 +363,7 @@ struct EncoderLayer{
 		i_encl = i_encl + i_mh_att;
 
 		// position-wise layer normalisation 1
-		i_encl = layer_norm_2d(i_encl, i_ln1_g, i_ln1_b);
+		i_encl = layer_norm(i_encl, i_ln1_g, i_ln1_b);
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_encl);
@@ -344,7 +372,7 @@ struct EncoderLayer{
 		i_encl = i_encl + i_ff;
 
 		// position-wise layer normalisation 2
-		i_encl = layer_norm_2d(i_encl, i_ln2_g, i_ln2_b);
+		i_encl = layer_norm(i_encl, i_ln2_g, i_ln2_b);
 
 		return i_encl;
 	}
@@ -528,7 +556,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_mh_self_att;
 
 		// layer normalisation 1
-		i_decl = layer_norm_2d(i_decl, i_ln1_g, i_ln1_b);
+		i_decl = layer_norm(i_decl, i_ln1_g, i_ln1_b);// position-wise
 
 		// multi-head source attention sub-layer
 		dynet::Expression i_mh_src_att = _src_attention_sublayer.build_graph(cg, i_decl, i_enc_inp);
@@ -537,7 +565,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_mh_src_att;
 
 		// layer normalisation 2
-		i_decl = layer_norm_2d(i_decl, i_ln2_g, i_ln2_b);// position-wise
+		i_decl = layer_norm(i_decl, i_ln2_g, i_ln2_b);// position-wise
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_decl);
@@ -546,7 +574,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_ff;
 
 		// layer normalisation 3
-		i_decl = layer_norm_2d(i_decl, i_ln3_g, i_ln3_b);// position-wise
+		i_decl = layer_norm(i_decl, i_ln3_g, i_ln3_b);// position-wise
 
 		return i_decl;
 	}
@@ -774,7 +802,7 @@ void TransformerModel::initialise_params_from_file(const string &params_file)
 
 void TransformerModel::save_params_to_file(const string &params_file)
 {
-	dynet::save_dynet_model(params_file, _all_params.get());
+	dynet::save_dynet_model(params_file, _all_params.get());// FIXME: use binary streaming instead for saving disk spaces?
 }
 
 void TransformerModel::set_dropout(bool is_activated){

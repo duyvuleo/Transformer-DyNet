@@ -94,6 +94,8 @@ int main(int argc, char** argv) {
 		("use-label-smoothing", "use label smoothing for cross entropy; no by default")
 		("label-smoothing-weight", value<float>()->default_value(0.1f), "use dropout thoroughly; 0.1 by default")
 		//-----------------------------------------
+		("ff-activation-type", value<unsigned>()->default_value(1), "impose feed-forward activation type (1: RELU, 2: SWISH, 3: SWISH with learnable beta); 1 by default")
+		//-----------------------------------------
 		("position-encoding", value<unsigned>()->default_value(1), "impose position encoding (0: none; 1: learned positional encoding; 2: sinusoid encoding); 1 by default")
 		//-----------------------------------------
 		("attention-type", value<unsigned>()->default_value(1), "impose attention type (1: Luong attention type; 2: Bahdanau attention type); 1 by default")
@@ -184,7 +186,8 @@ int main(int argc, char** argv) {
 		, vm["position-encoding"].as<unsigned>()
 		, vm["max-seq-len"].as<unsigned>()
 		, sm
-		, vm["attention-type"].as<unsigned>());
+		, vm["attention-type"].as<unsigned>()
+		, vm["ff-activation-type"].as<unsigned>());
 
 	// initialise transformer object
 	transformer::TransformerModel tf(tfc, sd, td);
