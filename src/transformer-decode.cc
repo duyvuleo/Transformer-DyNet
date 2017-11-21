@@ -29,7 +29,7 @@ bool load_data(const variables_map& vm
 
 // ---
 bool load_model_config(const string& model_cfg_file
-	, std::vector<transformer::TransformerModel>& v_models
+	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, dynet::Dict& sd
 	, dynet::Dict& td
 	, const transformer::SentinelMarkers& sm);
@@ -37,7 +37,7 @@ bool load_model_config(const string& model_cfg_file
 
 // ---
 void decode(const string test_file
-	, std::vector<transformer::TransformerModel>& v_models
+	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned beam_size = 5
 	, unsigned int lc = 0 /*line number to be continued*/
 	, bool remove_unk = false /*whether to include <unk> in the output*/
@@ -59,11 +59,11 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("dynet-autobatch", value<unsigned>()->default_value(0), "impose the auto-batch mode (support both GPU and CPU); no by default")
 		//-----------------------------------------
-		("train,t", value<vector<string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
+		("train,t", value<string>(), "file containing training sentences, with each line consisting of source ||| target.")		
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
 		("src-vocab", value<string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
-		("trg-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
+		("tgt-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
 		//-----------------------------------------
 		("test,T", value<string>(), "file containing testing sentences.")
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")
@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
 	
 	// print help
 	if (vm.count("help") 
-		|| !((vm.count("train") || (vm.count("src-vocab") && vm.count("tgt-vocab")))))
+		|| !(vm.count("train") || (vm.count("src-vocab") && vm.count("tgt-vocab"))) || !vm.count("test"))
 	{
 		cout << opts << "\n";
 		return EXIT_FAILURE;
@@ -109,7 +109,8 @@ int main(int argc, char** argv) {
 
 	// load fixed vocabularies from files if required
 	dynet::Dict sd, td;
-	load_vocabs(vm["src-vocab"].as<string>(), vm["trg-vocab"].as<string>(), sd, td);
+	load_vocabs(vm["src-vocab"].as<string>(), vm["tgt-vocab"].as<string>(), sd, td);
+	cerr << endl;
 
 	transformer::SentinelMarkers sm;
 	sm._kSRC_SOS = sd.convert("<s>");
@@ -123,7 +124,7 @@ int main(int argc, char** argv) {
 		assert("Failed to load data files!");
 
 	// load models
-	std::vector<transformer::TransformerModel> v_tf_models;
+	std::vector<std::shared_ptr<transformer::TransformerModel>> v_tf_models;
 	if (!load_model_config(vm["model-cfg"].as<string>(), v_tf_models, sd, td, sm))
 		assert("Failed to load model(s)!");
 
@@ -143,8 +144,11 @@ bool load_data(const variables_map& vm
 	bool swap = vm.count("swap");
 	bool r2l_target = vm.count("r2l_target");
 
-	cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";
-	train_cor = read_corpus(vm["train"].as<string>(), &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+	if (vm.count("train")){
+		cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";		
+		train_cor = read_corpus(vm["train"].as<string>(), &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+	}
+
 	if ("" == vm["src-vocab"].as<string>() 
 		&& "" == vm["trg-vocab"].as<string>()) // if not using external vocabularies
 	{
@@ -157,10 +161,12 @@ bool load_data(const variables_map& vm
 	if (train_percent < 100 
 		&& train_percent > 0)
 	{
-		cerr << "Only use " << train_percent << "% of " << train_cor.size() << " training instances: ";
-		unsigned int rev_pos = train_percent * train_cor.size() / 100;
-		train_cor.erase(train_cor.begin() + rev_pos, train_cor.end());
-		cerr << train_cor.size() << " instances remaining!" << endl;
+		if (vm.count("train")){
+			cerr << "Only use " << train_percent << "% of " << train_cor.size() << " training instances: ";
+			unsigned int rev_pos = train_percent * train_cor.size() / 100;
+			train_cor.erase(train_cor.begin() + rev_pos, train_cor.end());
+			cerr << train_cor.size() << " instances remaining!" << endl;
+		}
 	}
 	else if (train_percent != 100){
 		cerr << "Invalid --train-percent <num> used. <num> must be (0,100]" << endl;
@@ -195,18 +201,18 @@ bool load_data(const variables_map& vm
 
 // ---
 bool load_model_config(const string& model_cfg_file
-	, std::vector<transformer::TransformerModel>& v_models
+	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, dynet::Dict& sd
 	, dynet::Dict& td
 	, const transformer::SentinelMarkers& sm)
 {
-	cerr << "Loading model(s) from configuration file..." << endl;	
+	cerr << "Loading model(s) from configuration file: " << model_cfg_file << "..." << endl;	
 
 	v_models.clear();
 
 	ifstream inpf(model_cfg_file);
 	assert(inpf);
-
+	
 	unsigned i = 0;
 	std::string line;
 	while (getline(inpf, line)){
@@ -230,15 +236,17 @@ bool load_model_config(const string& model_cfg_file
 		   >> tfc._attention_type
 		   >> tfc._ffl_activation_type;
 		ss >> model_file;
+		tfc._is_training = false;
 
-		v_models.push_back(transformer::TransformerModel(tfc, sd, td));
-		v_models[i].initialise_params_from_file(model_file);// load pre-trained model from file
-		cerr << "Count of model parameters: " << v_models[i].get_model_parameters().parameter_count() << endl;
+		v_models.push_back(std::shared_ptr<transformer::TransformerModel>());
+		v_models[i].reset(new transformer::TransformerModel(tfc, sd, td));
+		v_models[i].get()->initialise_params_from_file(model_file);// load pre-trained model from file
+		cerr << "Count of model parameters: " << v_models[i].get()->get_model_parameters().parameter_count() << endl;
 
 		i++;
 	}
 
-	cerr << "Done!" << endl;
+	cerr << "Done!" << endl << endl;
 
 	return true;
 }
@@ -246,15 +254,15 @@ bool load_model_config(const string& model_cfg_file
 
 // ---
 void decode(const string test_file
-	, std::vector<transformer::TransformerModel>& v_models
+	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned beam_size
 	, unsigned int lc /*line number to be continued*/
 	, bool remove_unk /*whether to include <unk> in the output*/
 	, bool r2l_target /*right-to-left decoding*/)
 {
-	dynet::Dict& sd = v_models[0].get_source_dict();
-	dynet::Dict& td = v_models[0].get_target_dict();
-	const transformer::SentinelMarkers& sm = v_models[0].get_config()._sm;
+	dynet::Dict& sd = v_models[0].get()->get_source_dict();
+	dynet::Dict& td = v_models[0].get()->get_target_dict();
+	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
 
 	if (beam_size <= 0) assert("Beam size must be >= 1!");
 

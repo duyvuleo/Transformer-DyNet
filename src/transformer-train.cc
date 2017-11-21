@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
 	
 	// print help
 	if (vm.count("help") 
-		|| !((vm.count("train") || (vm.count("src-vocab") && vm.count("tgt-vocab"))) && vm.count("devel")))
+		|| !(vm.count("train") && vm.count("devel")))
 	{
 		cout << opts << "\n";
 		return EXIT_FAILURE;

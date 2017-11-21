@@ -20,9 +20,6 @@ WordIdCorpus read_corpus(const string &filename
 	, unsigned slen, bool r2l_target
 	, bool swap)
 {
-	if (!sd->size() || !td->size())
-		assert("Empty vocabularies!");
-
 	int kSRC_SOS = sd->convert("<s>");
 	int kSRC_EOS = sd->convert("</s>");
 	int kTGT_SOS = td->convert("<s>");
