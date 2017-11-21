@@ -709,18 +709,35 @@ struct TransformerModel {
 public:
 	explicit TransformerModel(const TransformerConfig& tfc, dynet::Dict& sd, dynet::Dict& td);
 
+	explicit TransformerModel();
+
 	~TransformerModel(){}
 
+	// for training
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents/*batched*/
 		, const WordIdSentences& tsents/*batched*/
 		, ModelStats &stats);
+	// for decoding
+	dynet::Expression compute_source_rep(dynet::ComputationGraph &cg
+		, const WordIdSentences& ssents/*pseudo batch*/);// source representation
+	dynet::Expression forward(dynet::ComputationGraph & cg
+		, dynet::Expression& i_src_rep
+		, const WordIdSentence &partial_sent
+		, int cur_pos
+		, bool log_prob
+		, std::vector<dynet::Expression> &aligns);// forward step to get softmax scores
 
 	dynet::ParameterCollection& get_model_parameters();
 	void initialise_params_from_file(const string &params_file);
 	void save_params_to_file(const string &params_file);
 
 	void set_dropout(bool is_activated = true);
+
+	dynet::Dict& get_source_dict();
+	dynet::Dict& get_target_dict();
+
+	TransformerConfig& get_config();
 
 protected:
 
@@ -737,6 +754,12 @@ protected:
 	TransformerConfig _tfc;// local configuration storage
 };
 
+TransformerModel::TransformerModel(){
+	_all_params = nullptr;
+	_encoder = nullptr;
+	_decoder = nullptr;
+}
+
 TransformerModel::TransformerModel(const TransformerConfig& tfc, dynet::Dict& sd, dynet::Dict& td)
 : _tfc(tfc)
 {
@@ -752,6 +775,41 @@ TransformerModel::TransformerModel(const TransformerConfig& tfc, dynet::Dict& sd
 	// dictionaries
 	_dicts.first = sd;
 	_dicts.second = td;
+}
+
+dynet::Expression TransformerModel::compute_source_rep(dynet::ComputationGraph &cg
+	, const WordIdSentences& ssents)
+{
+	// encode source
+	ModelStats stats;// unused
+	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, stats);// (batch_size x) num_units x Lx
+
+	return i_src_ctx;
+}
+
+dynet::Expression TransformerModel::forward(dynet::ComputationGraph & cg
+	, dynet::Expression& i_src_rep
+	, const WordIdSentence &partial_sent
+	, int cur_pos
+	, bool log_prob
+	, std::vector<dynet::Expression> &aligns)
+{
+	// decode target
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, WordIdSentences(1, partial_sent), i_src_rep);
+	dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)cur_pos});// shifted right
+
+	// output linear projections
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
+	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
+
+	// FIXME: get the alignments
+
+	// compute softmax prediction
+	if (log_prob)
+		return dynet::log_softmax(i_r_t);
+	else
+		return dynet::softmax(i_r_t);
 }
 
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
@@ -824,6 +882,19 @@ void TransformerModel::save_params_to_file(const string &params_file)
 
 void TransformerModel::set_dropout(bool is_activated){
 	_tfc._is_training = is_activated;
+}
+
+dynet::Dict& TransformerModel::get_source_dict()
+{
+	return _dicts.first;
+}
+dynet::Dict& TransformerModel::get_target_dict()
+{
+	return _dicts.second;
+}
+
+TransformerConfig& TransformerModel::get_config(){
+	return _tfc;
 }
 
 //---

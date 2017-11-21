@@ -21,8 +21,8 @@ using namespace transformer;
 
 using namespace std;
 using namespace dynet;
-using namespace boost::program_options;
 using namespace transformer;
+using namespace boost::program_options;
 
 // hyper-paramaters for training
 unsigned MINIBATCH_SIZE = 1;
@@ -66,14 +66,14 @@ int main(int argc, char** argv) {
 		("help", "print help message")
 		("config,c", value<string>(), "config file specifying additional command line options")
 		//-----------------------------------------
-		("train,t", value<vector<string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
+		("train,t", value<std::vector<string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
 		("devel,d", value<string>(), "file containing development sentences.")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
 		("src-vocab", value<string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
-		("trg-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
+		("tgt-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		//-----------------------------------------
-		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
+		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default") // FIXME: not yet implemented!
 		//-----------------------------------------
 		("minibatch-size,b", value<unsigned>()->default_value(1), "impose the minibatch size for training (support both GPU and CPU); single batch by default")
 		("dynet-autobatch", value<unsigned>()->default_value(0), "impose the auto-batch mode (support both GPU and CPU); no by default")
@@ -142,8 +142,7 @@ int main(int argc, char** argv) {
 	
 	// print help
 	if (vm.count("help") 
-		|| vm.count("train") != 1
-		|| vm.count("devel") != 1)
+		|| !((vm.count("train") || (vm.count("src-vocab") && vm.count("tgt-vocab"))) && vm.count("devel")))
 	{
 		cout << opts << "\n";
 		return EXIT_FAILURE;
@@ -159,8 +158,7 @@ int main(int argc, char** argv) {
 
 	// load fixed vocabularies from files if required
 	dynet::Dict sd, td;
-
-	load_vocabs(vm["src-vocab"].as<string>(), vm["trg-vocab"].as<string>(), sd, td);
+	load_vocabs(vm["src-vocab"].as<string>(), vm["tgt-vocab"].as<string>(), sd, td);
 
 	SentinelMarkers sm;
 	sm._kSRC_SOS = sd.convert("<s>");
@@ -179,7 +177,7 @@ int main(int argc, char** argv) {
 		cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;
 
 	// transformer configuration
-	TransformerConfig tfc(sd.size(), td.size()
+	transformer::TransformerConfig tfc(sd.size(), td.size()
 		, vm["num-units"].as<unsigned>()
 		, vm["num-heads"].as<unsigned>()
 		, vm["nlayers"].as<unsigned>()
@@ -230,14 +228,14 @@ bool load_data(const variables_map& vm
 	bool swap = vm.count("swap");
 	bool r2l_target = vm.count("r2l_target");
 
-	vector<string> train_paths = vm["train"].as<vector<string>>();// to handle multiple training data
+	std::vector<string> train_paths = vm["train"].as<std::vector<string>>();// to handle multiple training data
 	if (train_paths.size() > 2) assert("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
 	//cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";
 	//train_cor = read_corpus(vm["train"].as<string>(), doco, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap, vm["eos_padding"].as<unsigned>());
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
 	train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 	if ("" == vm["src-vocab"].as<string>() 
-		&& "" == vm["trg-vocab"].as<string>()) // if not using external vocabularies
+		&& "" == vm["tgt-vocab"].as<string>()) // if not using external vocabularies
 	{
 		sd.freeze(); // no new word types allowed
 		td.freeze(); // no new word types allowed
@@ -343,9 +341,9 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience)
 {
 	// Create minibatches
-	vector<vector<WordIdSentence> > train_src_minibatch;
-	vector<vector<WordIdSentence> > train_trg_minibatch;
-	vector<size_t> train_ids_minibatch, dev_ids_minibatch;
+	std::vector<std::vector<WordIdSentence> > train_src_minibatch;
+	std::vector<std::vector<WordIdSentence> > train_trg_minibatch;
+	std::vector<size_t> train_ids_minibatch, dev_ids_minibatch;
 	size_t minibatch_size = MINIBATCH_SIZE;
 	create_minibatches(train_cor, minibatch_size, train_src_minibatch, train_trg_minibatch, train_ids_minibatch);
   
