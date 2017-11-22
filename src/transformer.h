@@ -379,7 +379,7 @@ struct EncoderLayer{
 		i_encl = i_encl + i_mh_att;
 
 		// position-wise layer normalisation 1
-		i_encl = layer_norm(i_encl, i_ln1_g, i_ln1_b);
+		i_encl = layer_norm_colwise(i_encl, i_ln1_g, i_ln1_b);
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_encl);
@@ -388,7 +388,7 @@ struct EncoderLayer{
 		i_encl = i_encl + i_ff;
 
 		// position-wise layer normalisation 2
-		i_encl = layer_norm(i_encl, i_ln2_g, i_ln2_b);
+		i_encl = layer_norm_colwise(i_encl, i_ln2_g, i_ln2_b);
 
 		return i_encl;
 	}
@@ -579,7 +579,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_mh_self_att;
 
 		// layer normalisation 1
-		i_decl = layer_norm(i_decl, i_ln1_g, i_ln1_b);// position-wise
+		i_decl = layer_norm_colwise(i_decl, i_ln1_g, i_ln1_b);// position-wise
 
 		// multi-head source attention sub-layer
 		dynet::Expression i_mh_src_att = _src_attention_sublayer.build_graph(cg, i_decl, i_enc_inp);
@@ -588,7 +588,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_mh_src_att;
 
 		// layer normalisation 2
-		i_decl = layer_norm(i_decl, i_ln2_g, i_ln2_b);// position-wise
+		i_decl = layer_norm_colwise(i_decl, i_ln2_g, i_ln2_b);// position-wise
 
 		// position-wise feed-forward sub-layer
 		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_decl);
@@ -597,7 +597,7 @@ struct DecoderLayer{
 		i_decl = i_decl + i_ff;
 
 		// layer normalisation 3
-		i_decl = layer_norm(i_decl, i_ln3_g, i_ln3_b);// position-wise
+		i_decl = layer_norm_colwise(i_decl, i_ln3_g, i_ln3_b);// position-wise
 
 		return i_decl;
 	}
