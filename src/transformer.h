@@ -289,7 +289,7 @@ struct MultiHeadAttentionLayer{
 		dynet::Expression i_mask;
 		if (_is_future_blinding){ 
 			dynet::Dim dim = i_x.dim();
-			i_mask = create_triangle_mask(cg, dim[1]/*Lx*/, false);
+			i_mask = create_triangle_mask(cg, dim[1]/*Lx*/, true);
 		}
 		
 		// Note: this should be done in parallel for efficiency!
@@ -845,7 +845,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	std::vector<unsigned> next_words(tsents.size());
 	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
 		for(size_t bs = 0; bs < tsents.size(); bs++){
-			next_words[bs] = (tsents[bs].size() > (t+1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
+			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
 			if (tsents[bs].size() > t) {
 				stats._words_tgt++;
 				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) stats._words_tgt_unk++;
