@@ -32,6 +32,8 @@ bool DEBUGGING_FLAG = false;
 unsigned TREPORT = 50;
 unsigned DREPORT = 5000;
 
+bool SAMPLING_TRAINING = false;
+
 bool VERBOSE = false;
 
 // ---
@@ -40,6 +42,10 @@ bool load_data(const variables_map& vm
 	, dynet::Dict& sd, dynet::Dict& td
 	, SentinelMarkers& sm);
 // ---
+
+//---
+std::string get_sentence(const WordIdSentence& source, Dict& td);
+//---
 
 // ---
 dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterCollection& model);
@@ -112,6 +118,8 @@ int main(int argc, char** argv) {
 		("lr-epochs", value<unsigned>()->default_value(0), "no. of epochs for starting learning rate annealing (e.g., halving)") // learning rate scheduler 1
 		("lr-patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved, e.g., for starting learning rate annealing (e.g., halving)") // learning rate scheduler 2
 		//-----------------------------------------
+		("sampling", "sample translation during training; default not")
+		//-----------------------------------------
 		("r2l-target", "use right-to-left direction for target during training; default not")
 		//-----------------------------------------
 		("swap", "swap roles of source and target, i.e., learn p(source|target)")
@@ -153,6 +161,7 @@ int main(int argc, char** argv) {
 	VERBOSE = vm.count("verbose");
 	TREPORT = vm["treport"].as<unsigned>(); 
 	DREPORT = vm["dreport"].as<unsigned>(); 
+	SAMPLING_TRAINING = vm.count("sampling");
 	if (DREPORT % TREPORT != 0) assert("dreport must be divisible by treport.");// to ensure the reporting on development data
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
@@ -353,7 +362,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	unsigned dev_every_i_reports = DREPORT;
 
 	// shuffle minibatches
-	cerr << endl << "***SHUFFLE\n";
+	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
 
 	unsigned sid = 0, id = 0, last_print = 0;
@@ -382,15 +391,15 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 
 				if (epoch >= max_epochs) break;
 
-				// Shuffle the access order
-				cerr << "***SHUFFLE\n";
-				std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+				// shuffle the access order
+				cerr << "***SHUFFLE" << endl;
+				std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);				
 
 				timer_epoch.reset();
 			}
 
 			// build graph for this instance
-			ComputationGraph cg;// dynamic computation graph for each data batch
+			dynet::ComputationGraph cg;// dynamic computation graph for each data batch
 			if (DEBUGGING_FLAG){//http://dynet.readthedocs.io/en/latest/debugging.html
 				cg.set_immediate_compute(true);
 				cg.set_check_validity(true);
@@ -434,7 +443,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 				sgd.status();
 				cerr << "sents=" << sid << " ";
 				cerr /*<< "loss=" << tstats._loss*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " E=" << (tstats._loss / tstats._words_tgt) << " ppl=" << exp(tstats._loss / tstats._words_tgt) << ' ';
-				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (tstats._words_src + tstats._words_tgt) * 1000 / elapsed << " words/sec)" << endl;  			
+				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (tstats._words_src + tstats._words_tgt) * 1000 / elapsed << " words/sec)" << endl;  					
 			}
 			   		 
 			++id;
@@ -445,12 +454,22 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		// show score on dev data?
 		tf.set_dropout(false);// disable dropout for evaluating dev data
 
+		// sample a random sentence
+		if (SAMPLING_TRAINING){
+			dynet::ComputationGraph cg;
+			WordIdSentence target;
+			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;
+			cerr << "***Source: " << get_sentence(train_src_minibatch[train_ids_minibatch[id]][0], tf.get_source_dict()) << endl;
+			cerr << "***Sampled translation: " << tf.sample(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
+			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
+		}
+
 		transformer::ModelStats dstats;
 		for (unsigned i = 0; i < devel_cor.size(); ++i) {
 			WordIdSentence ssent, tsent;
 			tie(ssent, tsent) = devel_cor[i];  
 
-			ComputationGraph cg;
+			dynet::ComputationGraph cg;
 			auto i_xent = tf.build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), dstats);
 			dstats._loss += as_scalar(cg.forward(i_xent));
 		}
@@ -490,4 +509,14 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 }
 // ---
 
+//---
+std::string get_sentence(const WordIdSentence& source, Dict& td){
+	std::stringstream ss;
+	for (WordId w : source){
+		ss << td.convert(w) << " ";
+	}
+
+	return ss.str();
+}
+//---
 
