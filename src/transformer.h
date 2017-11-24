@@ -648,7 +648,7 @@ struct Decoder{
 		// source encoding
 		std::vector<dynet::Expression> target_embeddings;   
 		std::vector<unsigned> words(sents.size());
-		for (unsigned l = 0; l < max_len - 1; l++){// offset by 1
+		for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1
 			for (unsigned bs = 0; bs < sents.size(); ++bs){
 				words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
 			}
@@ -669,7 +669,7 @@ struct Decoder{
 		if (_p_tfc->_position_encoding == 1){// learned positional embedding 
 			std::vector<dynet::Expression> pos_embeddings;  
 			std::vector<unsigned> positions(sents.size());
-			for (unsigned l = 0; l < max_len - 1; l++){// offset by 1
+			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1
 				for (unsigned bs = 0; bs < sents.size(); ++bs) 
 					positions[bs] = l;
 
@@ -736,7 +736,7 @@ public:
 	dynet::Expression compute_source_rep(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents/*pseudo batch*/);// source representation
 	dynet::Expression step_forward(dynet::ComputationGraph & cg
-		, dynet::Expression& i_src_rep
+		, const dynet::Expression& i_src_rep
 		, const WordIdSentence &partial_sent
 		, bool log_prob
 		, std::vector<dynet::Expression> &aligns);// forward step to get softmax scores
@@ -802,7 +802,7 @@ dynet::Expression TransformerModel::compute_source_rep(dynet::ComputationGraph &
 }
 
 dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
-	, dynet::Expression& i_src_rep
+	, const dynet::Expression& i_src_rep
 	, const WordIdSentence &partial_sent
 	, bool log_prob
 	, std::vector<dynet::Expression> &aligns)
@@ -889,8 +889,10 @@ std::string TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSe
 	// start of sentence
 	target.push_back(sos_sym); 
 
+	cerr << "sample::1" << endl;
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);
 
+	cerr << "sample::2" << endl;
 	std::vector<dynet::Expression> aligns;// unused
 	std::stringstream ss;
 	ss << "<s>";
