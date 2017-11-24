@@ -310,17 +310,7 @@ struct MultiHeadAttentionLayer{
 				else
 					i_alpha = dynet::softmax(i_alpha_pre);// Ly x Lx (normalised, col-major)
 				// FIXME: save the soft alignment in i_alpha if necessary!
-
-				/*cerr << "ALPHA 1------------------------------------" << endl;
-				dynet::Expression i_alpha_1 = dynet::select_cols(i_alpha, {1});
-				cg.incremental_forward(i_alpha_1);
-				cerr << dynet::print_vec(dynet::as_vector(i_alpha_1.value())) << endl;
-				dynet::Expression i_sum_alpha_1 = dynet::sum_elems(i_alpha_1);		
-				cg.incremental_forward(i_sum_alpha_1);				
-				cerr << "Shape=(" << i_sum_alpha_1.dim()[0] << "," << i_sum_alpha_1.dim()[1] << ")" << endl;
-				cerr << "sum=" << dynet::as_scalar(i_sum_alpha_1.value()) << endl;
-				cerr << "------------------------------------" << endl;*/
-								
+						
 				// attention dropout (col-major or whole matrix?)
 				if (_p_tfc->_is_training && _p_tfc->_attention_dropout_rate > 0.f)
 					i_alpha = dynet::dropout_dim(i_alpha, 1/*col-major*/, _p_tfc->_attention_dropout_rate);
