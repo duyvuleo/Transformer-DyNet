@@ -57,21 +57,21 @@ dynet::Expression softplus(const dynet::Expression &expr)
 
 // @Vu: this layer_norm_colwise is an upgrade of dynet::layer_norm which only supports vector.
 // Here, x can be either vector or matrix.
-/*dynet::Expression layer_norm_colwise(const dynet::Expression& x, const dynet::Expression& g, const dynet::Expression& b, float epsilon=1e-8){
+dynet::Expression layer_norm_colwise(const dynet::Expression& x, const dynet::Expression& g, const dynet::Expression& b, float epsilon=1e-8){
 	dynet::Expression mu = dynet::concatenate(std::vector<dynet::Expression>(x.dim()[0], dynet::transpose(dynet::mean_dim(x, {0}))));
 	dynet::Expression sigma = dynet::concatenate(std::vector<dynet::Expression>(x.dim()[0], dynet::transpose(dynet::std_dim(x, {0}))));
 	dynet::Expression x_centered = x - mu;
 	return dynet::cmult(g, dynet::cdiv(x_centered, sigma + epsilon)) + b;
-}*/
+}// version 2: faster
 
-Expression layer_norm_colwise(const Expression& x, const Expression& g, const Expression& b){
-    std::vector<Expression> vCols(x.dim().d[1]);
-    for (unsigned i = 0; i < x.dim().d[1]; i++){ 
-        dynet::Expression c_x = dynet::select_cols(x, {i});
-        vCols[i] = dynet::layer_norm(c_x, g, b);
-    }
-    return dynet::concatenate_cols(vCols);
-}
-
+/*Expression layer_norm_colwise(const Expression& x, const Expression& g, const Expression& b){
+	std::vector<Expression> vCols(x.dim().d[1]);
+	for (unsigned i = 0; i < x.dim().d[1]; i++){ 
+		dynet::Expression c_x = dynet::select_cols(x, {i});
+		vCols[i] = dynet::layer_norm(c_x, g, b);
+	}
+	return dynet::concatenate_cols(vCols);
+}// version 1
+*/
 
 

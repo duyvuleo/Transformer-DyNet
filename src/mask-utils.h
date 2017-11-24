@@ -28,7 +28,7 @@ dynet::Expression create_triangle_mask(dynet::ComputationGraph &cg, unsigned len
 	
 	dynet::Expression i_mask = dynet::input(cg, {length, length}, vMask);
 
-	i_mask = (1.f - i_mask) * -99999999.f;// convert 0/1 mask to transformer style -inf mask
+	i_mask = (1.f - i_mask) * -999999.f;// convert 0/1 mask to transformer style -inf mask
 
 	return i_mask;
 }

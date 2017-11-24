@@ -288,8 +288,8 @@ struct MultiHeadAttentionLayer{
 		// create mask for self-attention in decoder
 		dynet::Expression i_mask;
 		if (_is_future_blinding){ 
-			dynet::Dim dim = i_x.dim();
-			i_mask = create_triangle_mask(cg, dim[1]/*Lx*/, true);
+			const dynet::Dim& dim = i_x.dim();
+			i_mask = create_triangle_mask(cg, dim[1]/*Lx*/, false);
 		}
 		
 		// Note: this should be done in parallel for efficiency!
@@ -310,7 +310,17 @@ struct MultiHeadAttentionLayer{
 				else
 					i_alpha = dynet::softmax(i_alpha_pre);// Ly x Lx (normalised, col-major)
 				// FIXME: save the soft alignment in i_alpha if necessary!
-				
+
+				/*cerr << "ALPHA 1------------------------------------" << endl;
+				dynet::Expression i_alpha_1 = dynet::select_cols(i_alpha, {1});
+				cg.incremental_forward(i_alpha_1);
+				cerr << dynet::print_vec(dynet::as_vector(i_alpha_1.value())) << endl;
+				dynet::Expression i_sum_alpha_1 = dynet::sum_elems(i_alpha_1);		
+				cg.incremental_forward(i_sum_alpha_1);				
+				cerr << "Shape=(" << i_sum_alpha_1.dim()[0] << "," << i_sum_alpha_1.dim()[1] << ")" << endl;
+				cerr << "sum=" << dynet::as_scalar(i_sum_alpha_1.value()) << endl;
+				cerr << "------------------------------------" << endl;*/
+								
 				// attention dropout (col-major or whole matrix?)
 				if (_p_tfc->_is_training && _p_tfc->_attention_dropout_rate > 0.f)
 					i_alpha = dynet::dropout_dim(i_alpha, 1/*col-major*/, _p_tfc->_attention_dropout_rate);
@@ -648,7 +658,7 @@ struct Decoder{
 		// source encoding
 		std::vector<dynet::Expression> target_embeddings;   
 		std::vector<unsigned> words(sents.size());
-		for (unsigned l = 0; l < max_len; l++){
+		for (unsigned l = 0; l < max_len - 1; l++){// offset by 1
 			for (unsigned bs = 0; bs < sents.size(); ++bs){
 				words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
 			}
@@ -669,7 +679,7 @@ struct Decoder{
 		if (_p_tfc->_position_encoding == 1){// learned positional embedding 
 			std::vector<dynet::Expression> pos_embeddings;  
 			std::vector<unsigned> positions(sents.size());
-			for (unsigned l = 0; l < max_len; l++){
+			for (unsigned l = 0; l < max_len - 1; l++){// offset by 1
 				for (unsigned bs = 0; bs < sents.size(); ++bs) 
 					positions[bs] = l;
 
@@ -840,6 +850,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
 
+	// FIXME: can be faster using ConvLayer?
 	std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;
 	std::vector<unsigned> next_words(tsents.size());
@@ -853,7 +864,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		}
 
 		// compute the logit
-		dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {t + 1});// shifted right
+		dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {t});// shifted right
 
 		// output linear projections
 		dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
@@ -862,7 +873,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		dynet::Expression i_err;
 		if (_tfc._use_label_smoothing && _tfc._is_training/*only applies in training*/)
 		{// w/ label smoothing (according to https://arxiv.org/pdf/1701.06548.pdf)
-			dynet::Expression i_softmax_t = dynet::softmax(i_r_t);
+			dynet::Expression i_softmax_t = dynet::softmax(i_r_t);	
 			dynet::Expression i_logsoftmax_t = dynet::log(i_softmax_t);
 			dynet::Expression i_entropy_t = -dynet::transpose(i_logsoftmax_t) * i_softmax_t;// entropy of i_softmax_t
 			
