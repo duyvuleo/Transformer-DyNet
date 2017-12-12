@@ -348,9 +348,9 @@ struct MultiHeadAttentionLayer{
 		_p_WK.resize(tfc._nheads);
 		_p_WV.resize(tfc._nheads);
 		for (unsigned h = 0; h < tfc._nheads; h++){
-			_p_WQ[h] = mod->add_parameters({tfc._num_units / tfc._nheads, tfc._num_units});// dk = tfc._num_units / tfc._nheads
+			_p_WQ[h] = mod->add_parameters({tfc._num_units / tfc._nheads, tfc._num_units});// dk = num_units/nheads
 			_p_WK[h] = mod->add_parameters({tfc._num_units / tfc._nheads, tfc._num_units});// dk
-			_p_WV[h] = mod->add_parameters({tfc._num_units / tfc._nheads, tfc._num_units});// dv = tfc._num_units / tfc._nheads
+			_p_WV[h] = mod->add_parameters({tfc._num_units / tfc._nheads, tfc._num_units});// dv = num_units/nheads
 		}
 
 		_p_WO = mod->add_parameters({tfc._num_units, tfc._num_units});
@@ -393,19 +393,19 @@ struct MultiHeadAttentionLayer{
 		// e.g., utilising pseudo-batching?	
 		std::vector<dynet::Expression> v_atts(_p_tfc->_nheads);
 		for (unsigned h = 0; h < _p_tfc->_nheads; h++){
-			dynet::Expression i_Q/*queries*/ = dynet::parameter(cg, _p_WQ[h])/*dk x num_units*/ * i_x/*num_units x Lx*/;// dk x Lx
-			dynet::Expression i_K/*keys*/ = dynet::parameter(cg, _p_WK[h])/*dk x num_units*/ * i_y/*num_units x Ly*/;// dk x Ly
-			dynet::Expression i_V/*values*/ = dynet::parameter(cg, _p_WV[h])/*dv x num_units*/ * i_y/*num_units x Ly*/;// dv x Ly
+			dynet::Expression i_Q/*queries*/ = dynet::parameter(cg, _p_WQ[h])/*dk x num_units*/ * i_x/*num_units x Lx*/;// ((dk, Lx), batch_size)
+			dynet::Expression i_K/*keys*/ = dynet::parameter(cg, _p_WK[h])/*dk x num_units*/ * i_y/*num_units x Ly*/;// ((dk, Ly), batch_size)
+			dynet::Expression i_V/*values*/ = dynet::parameter(cg, _p_WV[h])/*dv x num_units*/ * i_y/*num_units x Ly*/;// ((dk, Ly), batch_size)
 
 			dynet::Expression i_att_h;
 			if (_p_tfc->_attention_type == ATTENTION_TYPE::DOT_PRODUCT){// Luong attention type
-				dynet::Expression i_alpha_pre = (dynet::transpose(i_K)/*Ly * dk*/ * i_Q/*dk x Lx*/) * _att_scale;// Ly x Lx (unnormalised) 
+				dynet::Expression i_alpha_pre = (dynet::transpose(i_K) * i_Q) * _att_scale;// ((Ly, Lx), batch_size) (unnormalised) 
 
 				dynet::Expression i_alpha;
 				if (_is_future_blinding)
-					i_alpha = dynet::softmax(i_alpha_pre + i_mask);// Ly x Lx (normalised, col-major)
+					i_alpha = dynet::softmax(i_alpha_pre + i_mask);// ((Ly, Lx), batch_size) (normalised, col-major)
 				else
-					i_alpha = dynet::softmax(i_alpha_pre);// Ly x Lx (normalised, col-major)
+					i_alpha = dynet::softmax(i_alpha_pre);// ((Ly, Lx), batch_size) (normalised, col-major)
 				// FIXME: save the soft alignment in i_alpha if necessary!
 						
 				// attention dropout (col-major or whole matrix?)
@@ -413,7 +413,7 @@ struct MultiHeadAttentionLayer{
 					//i_alpha = dynet::dropout_dim(i_alpha, 1/*col-major*/, _p_tfc->_attention_dropout_rate);
 					i_alpha = dynet::dropout(i_alpha, _p_tfc->_attention_dropout_rate);// for whole matrix
 
-				i_att_h = i_V/*dv x Ly*/ * i_alpha/*Ly x Lx*/;// dv x Lx
+				i_att_h = i_V * i_alpha;// ((dk, Lx), batch_size)
 			}
 			else if (_p_tfc->_attention_type == ATTENTION_TYPE::ADDITIVE_MLP){// Bahdanau attention type
 				// FIXME
@@ -425,10 +425,10 @@ struct MultiHeadAttentionLayer{
 		}
 
 		// joint all head attentions
-		dynet::Expression i_atts = dynet::concatenate(v_atts);// (nheads * dv=num_units) x Lx
+		dynet::Expression i_atts = dynet::concatenate(v_atts);// ((dk*nheads=num_units, Lx), batch_size)
 
 		// linear projection
-		dynet::Expression i_proj_atts = dynet::parameter(cg, _p_WO)/*num_units x num_units*/ * i_atts/*num_units x Lx*/;// num_units x Lx
+		dynet::Expression i_proj_atts = dynet::parameter(cg, _p_WO) * i_atts;// ((num_units, Lx), batch_size)
 
 		return i_proj_atts;
 	}
@@ -955,7 +955,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
 
-	// FIXME: can be faster using ConvLayer?
+	// FIXME: can be faster using LinearLayer?
 	std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;
 	std::vector<unsigned> next_words(tsents.size());
@@ -1016,6 +1016,8 @@ std::string TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSe
 	unsigned t = 0;
 	while (target.back() != eos_sym) 
 	{
+		cg.checkpoint();
+		
 		//cerr << "step_forward" << endl;		
 		dynet::Expression ydist = this->step_forward(cg, i_src_rep, target, false, aligns);
 
@@ -1036,6 +1038,8 @@ std::string TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSe
 
 		t += 1;
 		if (_tfc._position_encoding == 1 && t >= _tfc._max_length) break;// to prevent over-length sample in learned positional encoding
+
+		cg.revert();
 	}
 
 	_tfc._is_training = true;
@@ -1064,6 +1068,8 @@ std::string TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const W
 	unsigned t = 0;
 	while (target.back() != eos_sym) 
 	{
+		cg.checkpoint();
+		
 		//cerr << "step_forward" << endl;		
 		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, target, false, aligns);
 
@@ -1089,6 +1095,8 @@ std::string TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const W
 
 		t += 1;
 		if (_tfc._position_encoding == 1 && t >= _tfc._max_length) break;// to prevent over-length sample in learned positional encoding
+
+		cg.revert();
 	}
 
 	_tfc._is_training = true;
@@ -1140,6 +1148,8 @@ std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const Wor
 		std::vector<Hypothesis> new_chart;
 
 		for (auto &hprev: chart) {
+			cg.checkpoint();
+
 			//cerr << "step_forward" << endl;		
 			dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, hprev.target, false, aligns);
 
@@ -1159,6 +1169,8 @@ std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const Wor
 						new_chart.push_back(hnew);
 				//} 
 			}
+	
+			cg.revert();
 		}
 
 		if (new_chart.size() > beam_width) {
@@ -1181,6 +1193,9 @@ std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const Wor
 	for (unsigned i = 1; i < target.size(); i++){
 		ss << " " << tdict.convert(target[i]) << " [p=" << best->costs[i] << "]";// translation with individual scores
 	}
+
+	_tfc._is_training = true;
+
 	return ss.str();
 }
 

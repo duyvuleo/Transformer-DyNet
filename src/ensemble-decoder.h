@@ -164,6 +164,8 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 
 			if (sent_len != 0 && *sent.rbegin() == sm._kTGT_EOS) continue;
 
+			cg.checkpoint();
+
 			// Perform the forward step on all models
 			//cerr << "GenerateNbest::(2)::(a,Forward) ";
 			std::vector<Expression> i_softmaxes, i_aligns;
@@ -220,6 +222,8 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 					next_beam_id[bid] = next_beam_id[bid-1];
 				next_beam_id[bid] = Beam_Info(my_score, hypid, wid, best_align);
 			}
+
+			cg.revert();
 		}
 
 		// Create the new hypotheses
