@@ -38,10 +38,10 @@ bool load_model_config(const string& model_cfg_file
 // ---
 void decode(const string test_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
-	, unsigned beam_size = 5
-	, unsigned int lc = 0 /*line number to be continued*/
-	, bool remove_unk = false /*whether to include <unk> in the output*/
-	, bool r2l_target = false /*right-to-left decoding*/);
+	, unsigned beam_size=5
+	, unsigned int lc=0 /*line number to be continued*/
+	, bool remove_unk=false /*whether to include <unk> in the output*/
+	, bool r2l_target=false /*right-to-left decoding*/);
 // ---
 
 //************************************************************************************************************************************************************
@@ -237,6 +237,7 @@ bool load_model_config(const string& model_cfg_file
 		   >> tfc._ffl_activation_type;
 		ss >> model_file;
 		tfc._is_training = false;
+		tfc._use_dropout = false;
 
 		v_models.push_back(std::shared_ptr<transformer::TransformerModel>());
 		v_models[i].reset(new transformer::TransformerModel(tfc, sd, td));

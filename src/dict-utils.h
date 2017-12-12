@@ -11,7 +11,7 @@ using namespace std;
 using namespace dynet;
 
 inline void load_vocabs(const string& src_vocab_file, const string& trg_vocab_file
-	, dynet::Dict& sd, dynet::Dict& td, bool freeze = true);
+	, dynet::Dict& sd, dynet::Dict& td, bool freeze=true);
 
 inline void load_vocabs(const string& src_vocab_file, const string& trg_vocab_file
 	, dynet::Dict& sd, dynet::Dict& td, bool freeze)

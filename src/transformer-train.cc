@@ -204,8 +204,10 @@ int main(int argc, char** argv) {
 
 	// initialise transformer object
 	transformer::TransformerModel tf(tfc, sd, td);
-	if (vm.count("initialise")) tf.initialise_params_from_file(vm["initialise"].as<string>());// load pre-trained model (for incremental training)
-
+	if (vm.count("initialise")){
+		cerr << endl << "Loading model from file: " << vm["initialise"].as<string>() << "..." << endl;
+		tf.initialise_params_from_file(vm["initialise"].as<string>());// load pre-trained model (for incremental training)
+	}
 	cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
 
 	// create SGD trainer
@@ -239,8 +241,6 @@ bool load_data(const variables_map& vm
 
 	std::vector<string> train_paths = vm["train"].as<std::vector<string>>();// to handle multiple training data
 	if (train_paths.size() > 2) assert("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
-	//cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";
-	//train_cor = read_corpus(vm["train"].as<string>(), doco, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap, vm["eos_padding"].as<unsigned>());
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
 	train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 	if ("" == vm["src-vocab"].as<string>() 
@@ -454,13 +454,15 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		// show score on dev data?
 		tf.set_dropout(false);// disable dropout for evaluating dev data
 
-		// sample a random sentence
+		// sample a random sentence (for observing translations during training progress)
 		if (SAMPLING_TRAINING){
 			dynet::ComputationGraph cg;
-			WordIdSentence target;
+			WordIdSentence target;// raw translation (w/o scores)
 			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;
 			cerr << "***Source: " << get_sentence(train_src_minibatch[train_ids_minibatch[id]][0], tf.get_source_dict()) << endl;
 			cerr << "***Sampled translation: " << tf.sample(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
+			//cg.clear();
+			//cerr << "***Greedy translation: " << tf.greedy_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
 			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
 		}
 

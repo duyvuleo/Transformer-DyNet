@@ -12,7 +12,9 @@
 using namespace std;
 using namespace dynet;
 
-dynet::Expression create_triangle_mask(dynet::ComputationGraph &cg, unsigned length, bool upper = true/*false for lower*/);
+#define PSEUDO_MIN_VALUE -99999999.f
+
+dynet::Expression create_triangle_mask(dynet::ComputationGraph &cg, unsigned length, bool upper=true/*false for lower*/);
 
 dynet::Expression create_triangle_mask(dynet::ComputationGraph &cg, unsigned length, bool upper) {
 	// fill triangle mask
@@ -28,7 +30,7 @@ dynet::Expression create_triangle_mask(dynet::ComputationGraph &cg, unsigned len
 	
 	dynet::Expression i_mask = dynet::input(cg, {length, length}, vMask);
 
-	i_mask = (1.f - i_mask) * -99999999.f;// convert 0/1 mask to transformer style -inf mask
+	i_mask = (1.f - i_mask) * PSEUDO_MIN_VALUE;// convert 0/1 mask to transformer style -inf mask
 
 	return i_mask;
 }

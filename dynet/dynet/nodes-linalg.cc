@@ -21,7 +21,7 @@ string Transpose::as_string(const vector<string>& arg_names) const {
 
 Dim Transpose::dim_forward(const vector<Dim>& xs) const {
   DYNET_ARG_CHECK(xs.size() == 1, "Bad arguments to Transpose: " << xs);
-  DYNET_ARG_CHECK(xs[0].nd == dims.size() || xs[0].num_nonone_dims() == 1, "Dimensions passed to transpose (" << dims.size() << ") must be equal to dimensions in input tensor (" << xs[0].nd << ')');
+  DYNET_ARG_CHECK(xs[0].nd == dims.size() || xs[0].num_nonone_dims() == 1 || xs[0].nd == 1, "Dimensions passed to transpose (" << dims.size() << ") must be equal to dimensions in input tensor (" << xs[0].nd << ')');
   Dim ret(xs[0]);
   ret.nd = dims.size();
   for(size_t i = 0; i < dims.size(); ++i)
