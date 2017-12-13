@@ -921,6 +921,7 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
 {
 	// decode target
 	//cerr << "step_forward::step_forward::1" << endl;
+	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, WordIdSentences(1, partial_sent), i_src_rep);
 	dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
 
@@ -930,7 +931,7 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 
-	// FIXME: get the alignments
+	// FIXME: get the alignments for visualisation
 
 	// compute softmax prediction
 	//cerr << "step_forward::step_forward::3" << endl;
@@ -955,7 +956,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
 
-	// FIXME: can be faster using LinearLayer?
+	// FIXME: can be more efficient if using direct computing for i_tgt_ctx (e.g., use affine_transform)
 	std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;
 	std::vector<unsigned> next_words(tsents.size());
@@ -1048,7 +1049,7 @@ std::string TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSe
 }
 
 std::string TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target)
-{// FIXME: seems memory leak problem for very long sentences
+{
 	_tfc._is_training = false;
 	
 	const int& sos_sym = _tfc._sm._kTGT_SOS;
