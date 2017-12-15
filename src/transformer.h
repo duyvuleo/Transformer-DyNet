@@ -38,7 +38,8 @@ typedef std::shared_ptr<DyNetModel> DyNetModelPointer;
 
 namespace transformer {
 
-#define MULTI_HEAD_ATTENTION_PARALLEL // to use pseudo-batching for multi-head attention computing
+#define MULTI_HEAD_ATTENTION_PARALLEL // to use pseudo-batching for multi-head attention computing (faster)
+#define USE_COLWISE_DROPOUT // use col-wise dropout
 
 enum ATTENTION_TYPE { DOT_PRODUCT=1, ADDITIVE_MLP=2 };
 enum FFL_ACTIVATION_TYPE { RELU=1, SWISH=2, SWISH_LEARNABLE_BETA=3 };
@@ -78,9 +79,13 @@ struct TransformerConfig{
 
 	unsigned _nlayers = 6;
 
+	unsigned _n_ff_units_factor = 4;
+
 	bool _use_dropout = true;
 	float _encoder_emb_dropout_rate = 0.1f;
+	float _encoder_sublayer_dropout_rate = 0.1f;
 	float _decoder_emb_dropout_rate = 0.1f;
+	float _decoder_sublayer_dropout_rate = 0.1f;
 	float _attention_dropout_rate = 0.1f;
 	float _ff_dropout_rate = 0.1f;
 
@@ -105,8 +110,11 @@ struct TransformerConfig{
 		, unsigned num_units
 		, unsigned nheads
 		, unsigned nlayers
+		, unsigned n_ff_units_factor
 		, float encoder_emb_dropout_rate
+		, float encoder_sublayer_dropout_rate
 		, float decoder_emb_dropout_rate
+		, float decoder_sublayer_dropout_rate
 		, float attention_dropout_rate
 		, float ff_dropout_rate
 		, bool use_label_smoothing
@@ -116,15 +124,18 @@ struct TransformerConfig{
 		, SentinelMarkers sm
 		, unsigned attention_type
 		, unsigned ffl_activation_type
-		, bool is_training = true)
+		, bool is_training=true)
 	{
 		_src_vocab_size = src_vocab_size;
 		_tgt_vocab_size = tgt_vocab_size;
 		_num_units = num_units;
 		_nheads = nheads;
 		_nlayers = nlayers;
+		_n_ff_units_factor = n_ff_units_factor;
 		_encoder_emb_dropout_rate = encoder_emb_dropout_rate;
+		_encoder_sublayer_dropout_rate = encoder_sublayer_dropout_rate;
 		_decoder_emb_dropout_rate = decoder_emb_dropout_rate;
+		_decoder_sublayer_dropout_rate = decoder_sublayer_dropout_rate;
 		_attention_dropout_rate = attention_dropout_rate;
 		_ff_dropout_rate = ff_dropout_rate;
 		_use_label_smoothing = use_label_smoothing;
@@ -144,8 +155,11 @@ struct TransformerConfig{
 		_num_units = tfc._num_units;
 		_nheads = tfc._nheads;
 		_nlayers = tfc._nlayers;
+		_n_ff_units_factor = tfc._n_ff_units_factor;
 		_encoder_emb_dropout_rate = tfc._encoder_emb_dropout_rate;
+		_encoder_sublayer_dropout_rate = tfc._encoder_sublayer_dropout_rate;
 		_decoder_emb_dropout_rate = tfc._decoder_emb_dropout_rate;
+		_decoder_sublayer_dropout_rate = tfc._decoder_sublayer_dropout_rate;
 		_attention_dropout_rate = tfc._attention_dropout_rate;
 		_ff_dropout_rate = tfc._ff_dropout_rate;
 		_use_label_smoothing = tfc._use_label_smoothing;
@@ -163,7 +177,7 @@ struct TransformerConfig{
 
 // --- 
 struct ModelStats {
-	double _loss = 0.0f;
+	double _losses[2] = {0.f, 0.f};// If having additional loss, resize this array!
 	unsigned _words_src = 0;
 	unsigned _words_tgt = 0;
 	unsigned _words_src_unk = 0;
@@ -173,7 +187,7 @@ struct ModelStats {
 };
 // --- 
 
-//--- Simple Linear Layer
+//--- Simple Linear Layer (w/ or w/o bias)
 struct LinearLayer{
 	explicit LinearLayer(DyNetModel* mod, unsigned input_dim, unsigned output_dim, bool have_bias=true)
 		: _have_bias(have_bias)
@@ -191,15 +205,14 @@ struct LinearLayer{
 		else
 			i_b = dynet::zeros(cg, {i_W.dim()[0]});
 	
-		dynet::Expression i_x_out = (!time_distributed)?make_time_distributed(i_x):i_x;
-		i_x_out = dynet::affine_transform({i_b, i_W, i_x_out});
+		dynet::Expression i_x_out = (!time_distributed)?make_time_distributed(i_x)/*((input_dim, 1), batch_size * seq_len)*/:i_x/*((input_dim, seq_len), batch_size)*/;
+		i_x_out = dynet::affine_transform({i_b, i_W, i_x_out});// dim of i_x_out depends on i_x
 
 		if (!reconstruct_shape) return i_x_out;
 
 		auto& d = i_x.dim();
 		auto b = d.batch_elems();
-
-		return make_reverse_time_distributed(i_x_out, d[1], b);
+		return make_reverse_time_distributed(i_x_out, d[1], b);// ((input_dim, seq_len), batch_size)
 	}
 
 	~LinearLayer(){}
@@ -209,10 +222,33 @@ struct LinearLayer{
 	bool _have_bias = true;
 };
 
+//--- Highway Network Layer
+/* Highway Network (cf. http://arxiv.org/abs/1505.00387).
+    t = sigmoid(Wy + b)
+    z = t * g(Wy + b) + (1 - t) * y
+    where g is nonlinearity, t is transform gate, and (1 - t) is carry gate.
+*/
+struct HighwayNetworkLayer{
+	explicit HighwayNetworkLayer(DyNetModel* mod, unsigned input_dim, unsigned output_dim, bool have_bias=true)
+		: _l_layer(mod, input_dim, output_dim, have_bias)
+	{}
+
+	dynet::Expression apply(dynet::ComputationGraph& cg, const dynet::Expression& i_x, bool reconstruct_shape=true, bool time_distributed=false){
+		dynet::Expression i_l = _l_layer.apply(cg, i_x, reconstruct_shape, time_distributed);
+		dynet::Expression i_t = dynet::logistic(i_l);
+		dynet::Expression i_z = dynet::cmult(i_t, dynet::rectify(i_l)) + dynet::cmult(1.f - i_t, i_x);
+		return i_z;
+	}
+
+	LinearLayer _l_layer;
+
+	~HighwayNetworkLayer(){}
+};
+
 struct FeedForwardLayer{
 	explicit FeedForwardLayer(DyNetModel* mod, TransformerConfig& tfc)
-		: _l_inner(mod, tfc._num_units, tfc._num_units * 4/*4 according to the paper*/)
-		, _l_outer(mod, tfc._num_units * 4, tfc._num_units)
+		: _l_inner(mod, tfc._num_units, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/)
+		, _l_outer(mod, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, tfc._num_units)
 	{		
 		_p_tfc = &tfc;
 
@@ -238,16 +274,21 @@ struct FeedForwardLayer{
 			i_inner = dynet::silu(i_inner);
 		else if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH_LEARNABLE_BETA){
 			//dynet::Expression i_beta = dynet::parameter(cg, _p_beta);
-			// FIXME: requires this: i_inner = dynet::silu(i_inner, i_beta); ?
+			// FIXME: requires this: i_inner = dynet::silu(i_inner, i_beta); ? Not supported in DyNet yet!
+			assert("Not implemented yet!");
 		}
 		else assert("Unknown feed-forward activation type!");
 
 		dynet::Expression i_outer = _l_outer.apply(cg, i_inner, false, true);// relu(x * W1 + b1) * W2 + b2
+		DYNET_ARG_CHECK(i_outer.dim().ndims() > 1, "Failed FeedForwardLayer::i_outer #dims=" << i_outer.dim().ndims())
 
 		// dropout for feed-forward layer
 		if (_p_tfc->_use_dropout && _p_tfc->_ff_dropout_rate > 0.f)
-			//i_outer = dynet::dropout_dim(i_outer, 1/*col-major*/, _p_tfc->_ff_dropout_rate);
+#ifdef USE_COLWISE_DROPOUT
+			i_outer = dynet::dropout_dim(i_outer, 1/*col-major*/, _p_tfc->_ff_dropout_rate);
+#else
 			i_outer = dynet::dropout(i_outer, _p_tfc->_ff_dropout_rate);
+#endif
 
 		return i_outer;
 	}
@@ -280,6 +321,7 @@ struct MultiHeadAttentionLayer{
 	LinearLayer _l_W_Q;
 	LinearLayer _l_W_K;
 	LinearLayer _l_W_V;
+	//HighwayNetworkLayer _l_W_O;// finishing linear layer (probably use Highway Network instead)
 	LinearLayer _l_W_O;// finishing linear layer
 
 	// attention scale factor
@@ -322,9 +364,13 @@ struct MultiHeadAttentionLayer{
 			// FIXME: save the soft alignment in i_batch_alphas if necessary!
 					
 			// attention dropout (col-major or whole matrix?)
+			DYNET_ARG_CHECK(i_batch_alphas.dim().ndims() > 1, "Failed MultiHeadAttentionLayer::i_batch_alphas #dims=" << i_batch_alphas.dim().ndims())
 			if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
-				//i_alpha = dynet::dropout_dim(i_alpha, 1/*col-major*/, _p_tfc->_attention_dropout_rate);
-				i_batch_alphas = dynet::dropout(i_batch_alphas, _p_tfc->_attention_dropout_rate);// for whole matrix
+#ifdef USE_COLWISE_DROPOUT
+				i_batch_alphas = dynet::dropout_dim(i_batch_alphas, 1/*col-major*/, _p_tfc->_attention_dropout_rate);// col-wise dropout
+#else
+				i_batch_alphas = dynet::dropout(i_batch_alphas, _p_tfc->_attention_dropout_rate);// full matrix
+#endif
 
 			i_batch_alphas = i_batch_V/*((num_units/nheads, Ly), batch_size*nheads)*/ * i_batch_alphas/*((Ly, Lx), batch_size*nheads))*/;// ((num_units/nheads, Lx), batch_size*nheads)
 
@@ -409,14 +455,17 @@ struct MultiHeadAttentionLayer{
 				// FIXME: save the soft alignment in i_alpha if necessary!
 						
 				// attention dropout (col-major or whole matrix?)
+				DYNET_ARG_CHECK(i_alpha.dim().ndims() > 1, "Failed MultiHeadAttentionLayer::i_alpha #dims=" << i_alpha.dim().ndims())
 				if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
-					//i_alpha = dynet::dropout_dim(i_alpha, 1/*col-major*/, _p_tfc->_attention_dropout_rate);
-					i_alpha = dynet::dropout(i_alpha, _p_tfc->_attention_dropout_rate);// for whole matrix
+#ifdef USE_COLWISE_DROPOUT
+					i_alpha = dynet::dropout_dim(i_alpha, 1/*col-major*/, _p_tfc->_attention_dropout_rate);// col-wise dropout
+#else
+					i_alpha = dynet::dropout(i_alpha, _p_tfc->_attention_dropout_rate);// full dropout
+#endif
 
 				i_att_h = i_V * i_alpha;// ((dk, Lx), batch_size)
 			}
 			else if (_p_tfc->_attention_type == ATTENTION_TYPE::ADDITIVE_MLP){// Bahdanau attention type
-				// FIXME
 				assert("Not yet implemented!");
 			}
 			else assert("MultiHeadAttentionLayer: Unknown attention type!");
@@ -447,6 +496,8 @@ struct EncoderLayer{
 		_p_ln1_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
 		_p_ln2_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
 		_p_ln2_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
+
+		_p_tfc = &tfc;
 	}
 
 	~EncoderLayer(){}
@@ -461,6 +512,9 @@ struct EncoderLayer{
 	dynet::Parameter _p_ln1_g, _p_ln1_b;// layer normalisation 1
 	dynet::Parameter _p_ln2_g, _p_ln2_b;// layer normalisation 2
 
+	// transformer config pointer
+	TransformerConfig* _p_tfc = nullptr;
+
 	dynet::Expression build_graph(dynet::ComputationGraph &cg, const dynet::Expression& i_src){	
 		// get expressions for layer normalisation, e.g., i_ln1_g, i_ln1_b, i_ln2_g, i_ln2_b
 		dynet::Expression i_ln1_g = dynet::parameter(cg, _p_ln1_g);
@@ -471,28 +525,37 @@ struct EncoderLayer{
 		dynet::Expression i_encl = i_src;
 		
 		// multi-head attention sub-layer
-		dynet::Expression i_mh_att = _self_attention_sublayer.build_graph(cg, i_encl, i_encl);
+		dynet::Expression i_mh_att = _self_attention_sublayer.build_graph(cg, i_encl, i_encl);// ((num_units, Lx), batch_size)	
+
+		// dropout to the above sub-layer
+		DYNET_ARG_CHECK(i_mh_att.dim().ndims() > 1, "Failed EncoderLayer::i_mh_att #dims=" << i_mh_att.dim().ndims())
+		if (_p_tfc->_use_dropout && _p_tfc->_encoder_sublayer_dropout_rate > 0.f)
+#ifdef USE_COLWISE_DROPOUT
+			i_mh_att = dynet::dropout_dim(i_mh_att, 1/*col-major*/, _p_tfc->_encoder_sublayer_dropout_rate);// col-wise dropout
+#else
+			i_mh_att = dynet::dropout(i_mh_att, _p_tfc->_encoder_sublayer_dropout_rate);// full dropout
+#endif
 
 		// w/ residual connection
-		i_encl = i_encl + i_mh_att;
+		i_encl = i_encl + i_mh_att;// ((num_units, Lx), batch_size)
 
 		// position-wise layer normalisation 1
-		i_encl = layer_norm_colwise_3(i_encl, i_ln1_g, i_ln1_b);
+		i_encl = layer_norm_colwise_3(i_encl, i_ln1_g, i_ln1_b);// ((num_units, Lx), batch_size)
 
 		// position-wise feed-forward sub-layer
-		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_encl);
+		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_encl);// ((num_units, Lx), batch_size)
 
 		// w/ residual connection
-		i_encl = i_encl + i_ff;
+		i_encl = i_encl + i_ff;// ((num_units, Lx), batch_size)
 
 		// position-wise layer normalisation 2
-		i_encl = layer_norm_colwise_3(i_encl, i_ln2_g, i_ln2_b);
+		i_encl = layer_norm_colwise_3(i_encl, i_ln2_g, i_ln2_b);// ((num_units, Lx), batch_size)
 
 		return i_encl;
 	}
 };
 
-// --- Sinusoidal Positional Encoding
+// --- Sinusoidal Positional Encoding (to be tested)
 dynet::Expression make_sinusoidal_position_encoding(dynet::ComputationGraph &cg, const dynet::Dim& dim, unsigned pos=0){
 	unsigned nUnits = dim[0];
 	unsigned nWords = dim[1];
@@ -567,12 +630,7 @@ struct Encoder{
 
 			source_embeddings.push_back(dynet::lookup(cg, _p_embed_s, words));
 		}
-		dynet::Expression i_src = dynet::concatenate_cols(source_embeddings);// (batch_size x) num_units x _batch_slen
-
-		// dropout 1
-		if (_p_tfc->_use_dropout && _p_tfc->_encoder_emb_dropout_rate > 0.f)
-			//i_src = dynet::dropout_dim(i_src, 1/*col-major*/, _p_tfc->_encoder_emb_dropout_rate);
-			i_src = dynet::dropout(i_src, _p_tfc->_encoder_emb_dropout_rate);// apply dropout
+		dynet::Expression i_src = dynet::concatenate_cols(source_embeddings);// ((num_units, Lx), batch_size)
 
 		i_src = i_src * _scale_emb;// scaled embeddings
 
@@ -586,7 +644,7 @@ struct Encoder{
 
 				pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
 			}
-			dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// (batch_size x) num_units x _batch_slen
+			dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// ((num_units, Lx), batch_size)
 
 			i_src = i_src + i_pos;
 		}
@@ -597,30 +655,35 @@ struct Encoder{
 		}
 		else assert("Unknown positional encoding type!");	
 
-		// dropout 2
+		// dropout to the sums of the embeddings and the positional encodings
+		DYNET_ARG_CHECK(i_src.dim().ndims() > 1, "Failed Encoder::i_src #dims=" << i_src.dim().ndims())
 		if (_p_tfc->_use_dropout && _p_tfc->_encoder_emb_dropout_rate > 0.f)
-			//i_src = dynet::dropout_dim(i_src, 1/*col-major*/, _p_tfc->_encoder_emb_dropout_rate);
-			i_src = dynet::dropout(i_src, _p_tfc->_encoder_emb_dropout_rate);// apply dropout	
+#ifdef USE_COLWISE_DROPOUT
+			i_src = dynet::dropout_dim(i_src, 1/*col-major*/, _p_tfc->_encoder_emb_dropout_rate);// col-wise dropout
+#else
+			i_src = dynet::dropout(i_src, _p_tfc->_encoder_emb_dropout_rate);// full dropout
+#endif
 
 		return i_src;
 	}
 
 	dynet::Expression build_graph(dynet::ComputationGraph &cg, const WordIdSentences& ssents/*batch of sentences*/, ModelStats &stats){
 		// compute source (+ postion) embeddings
-		dynet::Expression i_src = compute_embeddings(cg, ssents, stats);
+		dynet::Expression i_src = compute_embeddings(cg, ssents, stats);// ((num_units, Lx), batch_size)
 		
 		// compute stacked encoder layers
 		dynet::Expression i_l_out = i_src;
 		for (auto enc : _v_enc_layers){
 			// stacking approach
 			i_l_out = enc.build_graph(cg, i_l_out);// each position in the encoder can attend to all positions in the previous layer of the encoder.
+			
 			// FIXME: should we have residual connection here?
 			// e.g., 
-			// dynet::Expression i_l = enc.build_graph(cg, i_l_out);
-			// i_l_out = i_l_out + i_l;
+			//dynet::Expression i_l = enc.build_graph(cg, i_l_out);
+			//i_l_out = i_l_out + i_l;
 		}
 
-		return i_l_out;
+		return i_l_out;// ((num_units, Lx), batch_size)
 	}
 };
 typedef std::shared_ptr<Encoder> EncoderPointer;
@@ -640,6 +703,8 @@ struct DecoderLayer{
 		_p_ln2_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
 		_p_ln3_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
 		_p_ln3_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
+
+		_p_tfc = &tfc;
 	}
 
 	~DecoderLayer(){}	
@@ -656,6 +721,9 @@ struct DecoderLayer{
 	dynet::Parameter _p_ln2_g, _p_ln2_b;// layer normalisation 2
 	dynet::Parameter _p_ln3_g, _p_ln3_b;// layer normalisation 3
 
+	// transformer config pointer
+	TransformerConfig* _p_tfc = nullptr;
+
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const dynet::Expression& i_enc_inp
 		, const dynet::Expression& i_dec_inp)
@@ -671,37 +739,49 @@ struct DecoderLayer{
 		dynet::Expression i_decl = i_dec_inp;
 		
 		// multi-head self attention sub-layer
-		//cerr << "DecoderLayer::build_graph::1" << endl;
-		dynet::Expression i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_decl, i_decl);
+		dynet::Expression i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_decl, i_decl);// ((num_units, Ly), batch_size)
+
+		// dropout to the output of sub-layer
+		DYNET_ARG_CHECK(i_mh_self_att.dim().ndims() > 1, "Failed DecoderLayer::i_mh_self_att #dims=" << i_mh_self_att.dim().ndims())
+		if (_p_tfc->_use_dropout && _p_tfc->_decoder_sublayer_dropout_rate > 0.f)
+#ifdef USE_COLWISE_DROPOUT
+			i_mh_self_att = dynet::dropout_dim(i_mh_self_att, 1/*col-major*/, _p_tfc->_decoder_sublayer_dropout_rate);// col-wise dropout
+#else
+			i_mh_self_att = dynet::dropout(i_mh_self_att, _p_tfc->_decoder_sublayer_dropout_rate);// full dropout
+#endif
 
 		// w/ residual connection
-		i_decl = i_decl + i_mh_self_att;
+		i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)
 
 		// layer normalisation 1
-		//cerr << "DecoderLayer::build_graph::2" << endl;
-		i_decl = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// position-wise
+		i_decl = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 
 		// multi-head source attention sub-layer
-		//cerr << "DecoderLayer::build_graph::3" << endl;
-		dynet::Expression i_mh_src_att = _src_attention_sublayer.build_graph(cg, i_decl, i_enc_inp);
+		dynet::Expression i_mh_src_att = _src_attention_sublayer.build_graph(cg, i_decl, i_enc_inp);// ((num_units, Ly), batch_size)
+
+		// dropout to the output of sub-layer
+		DYNET_ARG_CHECK(i_mh_src_att.dim().ndims() > 1, "Failed DecoderLayer::i_mh_src_att #dims=" << i_mh_src_att.dim().ndims())
+		if (_p_tfc->_use_dropout && _p_tfc->_decoder_sublayer_dropout_rate > 0.f)
+#ifdef USE_COLWISE_DROPOUT
+			i_mh_src_att = dynet::dropout_dim(i_mh_src_att, 1/*col-major*/, _p_tfc->_decoder_sublayer_dropout_rate);// col-wise dropout
+#else
+			i_mh_src_att = dynet::dropout(i_mh_src_att, _p_tfc->_decoder_sublayer_dropout_rate);// full dropout
+#endif
 
 		// w/ residual connection
 		i_decl = i_decl + i_mh_src_att;
 
 		// layer normalisation 2
-		//cerr << "DecoderLayer::build_graph::4" << endl;
-		i_decl = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// position-wise
+		i_decl = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 
 		// position-wise feed-forward sub-layer
-		//cerr << "DecoderLayer::build_graph::5" << endl;
-		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_decl);
+		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_decl);// ((num_units, Ly), batch_size)
 
 		// w/ residual connection
 		i_decl = i_decl + i_ff;
 
 		// layer normalisation 3
-		//cerr << "DecoderLayer::build_graph::6" << endl;
-		i_decl = layer_norm_colwise_3(i_decl, i_ln3_g, i_ln3_b);// position-wise
+		i_decl = layer_norm_colwise_3(i_decl, i_ln3_g, i_ln3_b);// ((num_units, Ly), batch_size)
 
 		return i_decl;
 	}
@@ -750,38 +830,31 @@ struct Decoder{
 		_batch_tlen = max_len;
 	
 		// source encoding
-		//cerr << "Decoder::compute_embeddings::1" << endl;
 		std::vector<dynet::Expression> target_embeddings;   
 		std::vector<unsigned> words(sents.size());
-		for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1
+		for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
 			for (unsigned bs = 0; bs < sents.size(); ++bs){
 				words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
 			}
 
 			target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));
 		}
-		dynet::Expression i_tgt = dynet::concatenate_cols(target_embeddings);// (batch_size x) num_units x (_batch_tlen-1)
-
-		// dropout 1
-		if (_p_tfc->_use_dropout && _p_tfc->_decoder_emb_dropout_rate > 0.f)
-			//i_tgt = dynet::dropout_dim(i_tgt, 1/*col-major*/, _p_tfc->_decoder_emb_dropout_rate);
-			i_tgt = dynet::dropout(i_tgt, _p_tfc->_decoder_emb_dropout_rate);// apply dropout
+		dynet::Expression i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
 
 		// scale
 		i_tgt = i_tgt * _scale_emb;// scaled embeddings
 
 		// + postional encoding
-		//cerr << "Decoder::compute_embeddings::2" << endl;
 		if (_p_tfc->_position_encoding == 1){// learned positional embedding 
 			std::vector<dynet::Expression> pos_embeddings;  
 			std::vector<unsigned> positions(sents.size());
-			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1
+			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
 				for (unsigned bs = 0; bs < sents.size(); ++bs) 
 					positions[bs] = l;
 
 				pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
 			}
-			dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// (batch_size x) num_units x (_batch_tlen-1)
+			dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
 
 			i_tgt = i_tgt + i_pos;
 		}
@@ -792,12 +865,14 @@ struct Decoder{
 		}
 		else assert("Unknown positional encoding type!");
 
-		// dropout 2
+		// dropout to the sums of the embeddings and the positional encodings
+		DYNET_ARG_CHECK(i_tgt.dim().ndims() > 1, "Failed Decoder::i_tgt #dims=" << i_tgt.dim().ndims())
 		if (_p_tfc->_use_dropout && _p_tfc->_decoder_emb_dropout_rate > 0.f)
-			//i_tgt = dynet::dropout_dim(i_tgt, 1/*col-major*/, _p_tfc->_decoder_emb_dropout_rate);
-			i_tgt = dynet::dropout(i_tgt, _p_tfc->_decoder_emb_dropout_rate);// apply dropout		
-
-		//cerr << "Decoder::compute_embeddings::3" << endl;
+#ifdef USE_COLWISE_DROPOUT
+			i_tgt = dynet::dropout_dim(i_tgt, 1/*col-major*/, _p_tfc->_decoder_emb_dropout_rate);// col-wise dropout
+#else
+			i_tgt = dynet::dropout(i_tgt, _p_tfc->_decoder_emb_dropout_rate);// full dropout		
+#endif
 
 		return i_tgt;
 	}
@@ -807,21 +882,20 @@ struct Decoder{
 		, const dynet::Expression& i_src)
 	{
 		// compute source (+ postion) embeddings
-		//cerr << "Decoder::compute_embeddings" << endl;
-		dynet::Expression i_tgt = compute_embeddings(cg, tsents, 0/*for training*/);
+		dynet::Expression i_tgt = compute_embeddings(cg, tsents, 0/*for training*/);// ((num_units, Ly), batch_size)
 		
 		dynet::Expression i_l_out = i_tgt;
 		for (auto dec : _v_dec_layers){
 			// stacking approach
-			//cerr << "Decoder::compute_embeddings" << endl;
 			i_l_out = dec.build_graph(cg, i_src, i_l_out);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
+			
 			// FIXME: should we have residual connection here?
 			// e.g., 
-			// dynet::Expression i_l = dec.build_graph(cg, i_src, i_l_out);
-			// i_l_out = i_l_out + i_l;
+			//dynet::Expression i_l = dec.build_graph(cg, i_src, i_l_out);
+			//i_l_out = i_l_out + i_l;
 		}
-
-		return i_l_out;// (batch_size x) num_units x (Ly-1)
+	
+		return i_l_out;// ((num_units, Ly), batch_size)
 	}
 };
 typedef std::shared_ptr<Decoder> DecoderPointer;
@@ -841,7 +915,8 @@ public:
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents/*batched*/
 		, const WordIdSentences& tsents/*batched*/
-		, ModelStats &stats);
+		, ModelStats &stats
+		, bool is_eval_on_dev=false);
 	// for decoding
 	dynet::Expression compute_source_rep(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents/*pseudo batch*/);// source representation
@@ -920,13 +995,11 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
 	, std::vector<dynet::Expression> &aligns)
 {
 	// decode target
-	//cerr << "step_forward::step_forward::1" << endl;
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, WordIdSentences(1, partial_sent), i_src_rep);
 	dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
 
 	// output linear projections
-	//cerr << "step_forward::step_forward::2" << endl;
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
@@ -934,7 +1007,6 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
 	// FIXME: get the alignments for visualisation
 
 	// compute softmax prediction
-	//cerr << "step_forward::step_forward::3" << endl;
 	if (log_prob)
 		return dynet::log_softmax(i_r_t);
 	else
@@ -944,19 +1016,22 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	, const WordIdSentences& ssents
 	, const WordIdSentences& tsents
-	, ModelStats &stats)
+	, ModelStats &stats
+	, bool is_eval_on_dev)
 {
 	// encode source
-	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, stats);// (batch_size x) num_units x Lx
+	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, stats);// ((num_units, Lx), batch_size)
 	
 	// decode target
-	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// (batch_size x) num_units x Ly
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// ((num_units, Ly), batch_size)
 
 	// get losses	
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
 
-	// FIXME: can be more efficient if using direct computing for i_tgt_ctx (e.g., use affine_transform)
+// both of the followings work well!
+#if 0 
+	// Note: can be more efficient if using direct computing for i_tgt_ctx (e.g., use affine_transform)
 	std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;
 	std::vector<unsigned> next_words(tsents.size());
@@ -977,19 +1052,46 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	
 		// log_softmax and loss
 		dynet::Expression i_err;
-		if (_tfc._use_label_smoothing && _tfc._is_training/*only applies in training*/)
+		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
 		{// w/ label smoothing (according to https://arxiv.org/pdf/1701.06548.pdf)
-			dynet::Expression i_softmax_t = dynet::softmax(i_r_t);	
-			dynet::Expression i_logsoftmax_t = dynet::log(i_softmax_t);
-			dynet::Expression i_entropy_t = -dynet::transpose(i_logsoftmax_t) * i_softmax_t;// entropy of i_softmax_t
-			
-			i_err = dynet::pick(-i_logsoftmax_t, next_words) - _tfc._label_smoothing_weight * i_entropy_t;
+			assert("Not implemented yet!");
 		}
 		else 
 			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
 
 		v_errors.push_back(i_err);
 	}
+#else // FIXME: this way is much faster but get weird error ("bad argument in SelectCols") related to select_cols
+	// compute the logit and linear projections
+	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
+
+	std::vector<dynet::Expression> v_errors;
+	unsigned tlen = _decoder.get()->_batch_tlen;
+	std::vector<unsigned> next_words(tsents.size());
+	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
+		for(size_t bs = 0; bs < tsents.size(); bs++){
+			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
+			if (tsents[bs].size() > t) {
+				stats._words_tgt++;
+				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) stats._words_tgt_unk++;
+			}
+		}
+
+		// get the prediction at timestep t
+		dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
+	
+		// log_softmax and loss
+		dynet::Expression i_err;
+		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
+		{// w/ label smoothing (according to https://arxiv.org/pdf/1701.06548.pdf)
+			assert("Not implemented yet!");
+		}
+		else 
+			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
+
+		v_errors.push_back(i_err);
+	}
+#endif
 
 	dynet::Expression i_tloss = dynet::sum_batches(dynet::sum(v_errors));
 

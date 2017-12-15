@@ -91,12 +91,15 @@ int main(int argc, char** argv) {
 		("initialise,i", value<string>(), "load initial parameters from file")
 		("parameters,p", value<string>(), "save best parameters to this file")
 		//-----------------------------------------
-		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers")
-		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units")
-		("num-heads,h", value<unsigned>()->default_value(8), "use <num> fors number of heads in multi-head attention mechanism")
+		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers; 6 by default")
+		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units; 512 by default")
+		("num-heads,h", value<unsigned>()->default_value(8), "use <num> for number of heads in multi-head attention mechanism; 4 by default")
+		("n_ff_units_factor", value<unsigned>()->default_value(4), "use <num> times of input dim for output dim in feed-forward layer; 4 by default")
 		//-----------------------------------------
 		("encoder-emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for encoder embeddings; 0.1 by default")
+		("encoder-sublayer-dropout-p", value<float>()->default_value(0.1f), "use dropout for sub-layer's output in encoder; 0.1 by default")
 		("decoder-emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for decoding embeddings; 0.1 by default")
+		("decoder-sublayer-dropout-p", value<float>()->default_value(0.1f), "use dropout for sub-layer's output in decoder; 0.1 by default")
 		("attention-dropout-p", value<float>()->default_value(0.1f), "use dropout for attention; 0.1 by default")
 		("ff-dropout-p", value<float>()->default_value(0.1f), "use dropout for feed-forward layer; 0.1 by default")
 		//-----------------------------------------
@@ -190,8 +193,11 @@ int main(int argc, char** argv) {
 		, vm["num-units"].as<unsigned>()
 		, vm["num-heads"].as<unsigned>()
 		, vm["nlayers"].as<unsigned>()
+		, vm["n_ff_units_factor"].as<unsigned>()
 		, vm["encoder-emb-dropout-p"].as<float>()
+		, vm["encoder-sublayer-dropout-p"].as<float>()
 		, vm["decoder-emb-dropout-p"].as<float>()
+		, vm["decoder-sublayer-dropout-p"].as<float>()
 		, vm["attention-dropout-p"].as<float>()
 		, vm["ff-dropout-p"].as<float>()
 		, vm.count("use-label-smoothing")
@@ -349,6 +355,8 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience)
 {
+	//transformer::TransformerConfig& tfc = tf.get_config();
+
 	// Create minibatches
 	std::vector<std::vector<WordIdSentence> > train_src_minibatch;
 	std::vector<std::vector<WordIdSentence> > train_trg_minibatch;
@@ -414,14 +422,14 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 			cg.forward(i_objective);
 
 			// grab the parts of the objective
-			float closs = as_scalar(cg.get_value(i_xent.i));
-			if (!is_valid(closs)){
+			float loss = as_scalar(cg.get_value(i_xent.i));
+			if (!is_valid(loss)){
 				std::cerr << "***Warning***: nan or -nan values occurred!" << std::endl;
 				++id;
 				continue;
 			}
 
-			tstats._loss += closs;
+			tstats._losses[0] += loss;
 			tstats._words_src += ctstats._words_src;
 			tstats._words_src_unk += ctstats._words_src_unk;  
 			tstats._words_tgt += ctstats._words_tgt;
@@ -442,7 +450,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 
 				sgd.status();
 				cerr << "sents=" << sid << " ";
-				cerr /*<< "loss=" << tstats._loss*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " E=" << (tstats._loss / tstats._words_tgt) << " ppl=" << exp(tstats._loss / tstats._words_tgt) << ' ';
+				cerr /*<< "loss=" << tstats._losses[0]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " E=" << (tstats._losses[0] / tstats._words_tgt) << " ppl=" << exp(tstats._losses[0] / tstats._words_tgt) << ' ';
 				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (tstats._words_src + tstats._words_tgt) * 1000 / elapsed << " words/sec)" << endl;  					
 			}
 			   		 
@@ -455,14 +463,14 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		tf.set_dropout(false);// disable dropout for evaluating dev data
 
 		// sample a random sentence (for observing translations during training progress)
-		if (SAMPLING_TRAINING){
+		if (SAMPLING_TRAINING){// Note: this will slow down the training process, suitable for debugging only.
 			dynet::ComputationGraph cg;
 			WordIdSentence target;// raw translation (w/o scores)
 			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;
 			cerr << "***Source: " << get_sentence(train_src_minibatch[train_ids_minibatch[id]][0], tf.get_source_dict()) << endl;
 			cerr << "***Sampled translation: " << tf.sample(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
-			//cg.clear();
-			//cerr << "***Greedy translation: " << tf.greedy_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
+			cg.clear();
+			cerr << "***Greedy translation: " << tf.greedy_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
 			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
 		}
 
@@ -472,19 +480,19 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 			tie(ssent, tsent) = devel_cor[i];  
 
 			dynet::ComputationGraph cg;
-			auto i_xent = tf.build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), dstats);
-			dstats._loss += as_scalar(cg.forward(i_xent));
+			auto i_xent = tf.build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), dstats, true);
+			dstats._losses[0] += as_scalar(cg.forward(i_xent));
 		}
 		
-		if (dstats._loss < best_loss) {
-			best_loss = dstats._loss;
+		if (dstats._losses[0] < best_loss) {
+			best_loss = dstats._losses[0];
 			tf.save_params_to_file(params_out_file);// FIXME: save params from last K runs?
 			cpt = 0;
 		}
 		else cpt++;
 
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " E=" << (dstats._loss / dstats._words_tgt) << " ppl=" << exp(dstats._loss / dstats._words_tgt) << ' ';
+		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " E=" << (dstats._losses[0] / dstats._words_tgt) << " ppl=" << exp(dstats._losses[0] / dstats._words_tgt) << ' ';
 		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << exp(best_loss / dstats._words_tgt) << ") ";
 		timer_iteration.show();
 

@@ -229,8 +229,8 @@ bool load_model_config(const string& model_cfg_file
 		tfc._tgt_vocab_size = td.size();
 		tfc._sm = sm;
 		
-		ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers 
-		   >> tfc._encoder_emb_dropout_rate >> tfc._decoder_emb_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+		ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+		   >> tfc._encoder_emb_dropout_rate >> tfc._encoder_sublayer_dropout_rate >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
 		   >> tfc._use_label_smoothing >> tfc._label_smoothing_weight
 		   >> tfc._position_encoding >> tfc._max_length
 		   >> tfc._attention_type
