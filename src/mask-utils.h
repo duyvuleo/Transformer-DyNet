@@ -12,7 +12,7 @@
 using namespace std;
 using namespace dynet;
 
-#define PSEUDO_MIN_VALUE -99999999.f
+#define PSEUDO_MIN_VALUE -999999.f
 
 dynet::Expression create_triangle_mask(dynet::ComputationGraph &cg, unsigned length, bool upper=true/*false for lower*/);
 

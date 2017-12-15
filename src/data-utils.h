@@ -49,11 +49,6 @@ WordIdCorpus read_corpus(const string &filename
 				continue;// ignore this sentence
 		}
 
-		corpus.push_back(WordIdSentencePair(source, target));
-
-		stoks += source.size();
-		ttoks += target.size();
-
 		if ((source.front() != kSRC_SOS && source.back() != kSRC_EOS) ||
 				(target.front() != kTGT_SOS && target.back() != kTGT_EOS)) {
 			stringstream ss;
@@ -62,6 +57,15 @@ WordIdCorpus read_corpus(const string &filename
 
 			abort();
 		}
+
+		if (source.size() < 3 || target.size() < 3){ // ignore empty sentences, e.g., <s> </s>
+			continue;
+		}
+
+		corpus.push_back(WordIdSentencePair(source, target));
+
+		stoks += source.size();
+		ttoks += target.size();
 
 		++lc;
 	}

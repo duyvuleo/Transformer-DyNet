@@ -202,11 +202,12 @@ struct LinearLayer{
 		dynet::Expression i_b; 
 		if (_have_bias)
 			i_b = dynet::parameter(cg, _p_b);
-		else
-			i_b = dynet::zeros(cg, {i_W.dim()[0]});
 	
-		dynet::Expression i_x_out = (!time_distributed)?make_time_distributed(i_x)/*((input_dim, 1), batch_size * seq_len)*/:i_x/*((input_dim, seq_len), batch_size)*/;
-		i_x_out = dynet::affine_transform({i_b, i_W, i_x_out});// dim of i_x_out depends on i_x
+		dynet::Expression i_x_in = (!time_distributed)?make_time_distributed(i_x)/*((input_dim, 1), batch_size * seq_len)*/:i_x/*((input_dim, seq_len), batch_size)*/;
+
+		dynet::Expression i_x_out;
+		if (_have_bias) i_x_out = dynet::affine_transform({i_b, i_W, i_x_in});// dim of i_x_out depends on i_x
+		else i_x_out = i_W * i_x_in;
 
 		if (!reconstruct_shape) return i_x_out;
 
@@ -280,7 +281,6 @@ struct FeedForwardLayer{
 		else assert("Unknown feed-forward activation type!");
 
 		dynet::Expression i_outer = _l_outer.apply(cg, i_inner, false, true);// relu(x * W1 + b1) * W2 + b2
-		DYNET_ARG_CHECK(i_outer.dim().ndims() > 1, "Failed FeedForwardLayer::i_outer #dims=" << i_outer.dim().ndims())
 
 		// dropout for feed-forward layer
 		if (_p_tfc->_use_dropout && _p_tfc->_ff_dropout_rate > 0.f)
@@ -364,7 +364,6 @@ struct MultiHeadAttentionLayer{
 			// FIXME: save the soft alignment in i_batch_alphas if necessary!
 					
 			// attention dropout (col-major or whole matrix?)
-			DYNET_ARG_CHECK(i_batch_alphas.dim().ndims() > 1, "Failed MultiHeadAttentionLayer::i_batch_alphas #dims=" << i_batch_alphas.dim().ndims())
 			if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 				i_batch_alphas = dynet::dropout_dim(i_batch_alphas, 1/*col-major*/, _p_tfc->_attention_dropout_rate);// col-wise dropout
@@ -374,7 +373,7 @@ struct MultiHeadAttentionLayer{
 
 			i_batch_alphas = i_batch_V/*((num_units/nheads, Ly), batch_size*nheads)*/ * i_batch_alphas/*((Ly, Lx), batch_size*nheads))*/;// ((num_units/nheads, Lx), batch_size*nheads)
 
-			i_atts = dynet::concatenate(split_batch(i_batch_alphas, _p_tfc->_nheads));// ((num_units, Lx), batch_size)
+			i_atts = dynet::concatenate(split_batch(i_batch_alphas, _p_tfc->_nheads));// ((num_units, Lx), batch_size)			
 		}
 		else if (_p_tfc->_attention_type == ATTENTION_TYPE::ADDITIVE_MLP){// Bahdanau attention type
 			// FIXME
@@ -455,7 +454,6 @@ struct MultiHeadAttentionLayer{
 				// FIXME: save the soft alignment in i_alpha if necessary!
 						
 				// attention dropout (col-major or whole matrix?)
-				DYNET_ARG_CHECK(i_alpha.dim().ndims() > 1, "Failed MultiHeadAttentionLayer::i_alpha #dims=" << i_alpha.dim().ndims())
 				if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 					i_alpha = dynet::dropout_dim(i_alpha, 1/*col-major*/, _p_tfc->_attention_dropout_rate);// col-wise dropout
@@ -528,7 +526,6 @@ struct EncoderLayer{
 		dynet::Expression i_mh_att = _self_attention_sublayer.build_graph(cg, i_encl, i_encl);// ((num_units, Lx), batch_size)	
 
 		// dropout to the above sub-layer
-		DYNET_ARG_CHECK(i_mh_att.dim().ndims() > 1, "Failed EncoderLayer::i_mh_att #dims=" << i_mh_att.dim().ndims())
 		if (_p_tfc->_use_dropout && _p_tfc->_encoder_sublayer_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 			i_mh_att = dynet::dropout_dim(i_mh_att, 1/*col-major*/, _p_tfc->_encoder_sublayer_dropout_rate);// col-wise dropout
@@ -656,7 +653,6 @@ struct Encoder{
 		else assert("Unknown positional encoding type!");	
 
 		// dropout to the sums of the embeddings and the positional encodings
-		DYNET_ARG_CHECK(i_src.dim().ndims() > 1, "Failed Encoder::i_src #dims=" << i_src.dim().ndims())
 		if (_p_tfc->_use_dropout && _p_tfc->_encoder_emb_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 			i_src = dynet::dropout_dim(i_src, 1/*col-major*/, _p_tfc->_encoder_emb_dropout_rate);// col-wise dropout
@@ -742,7 +738,6 @@ struct DecoderLayer{
 		dynet::Expression i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_decl, i_decl);// ((num_units, Ly), batch_size)
 
 		// dropout to the output of sub-layer
-		DYNET_ARG_CHECK(i_mh_self_att.dim().ndims() > 1, "Failed DecoderLayer::i_mh_self_att #dims=" << i_mh_self_att.dim().ndims())
 		if (_p_tfc->_use_dropout && _p_tfc->_decoder_sublayer_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 			i_mh_self_att = dynet::dropout_dim(i_mh_self_att, 1/*col-major*/, _p_tfc->_decoder_sublayer_dropout_rate);// col-wise dropout
@@ -760,7 +755,6 @@ struct DecoderLayer{
 		dynet::Expression i_mh_src_att = _src_attention_sublayer.build_graph(cg, i_decl, i_enc_inp);// ((num_units, Ly), batch_size)
 
 		// dropout to the output of sub-layer
-		DYNET_ARG_CHECK(i_mh_src_att.dim().ndims() > 1, "Failed DecoderLayer::i_mh_src_att #dims=" << i_mh_src_att.dim().ndims())
 		if (_p_tfc->_use_dropout && _p_tfc->_decoder_sublayer_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 			i_mh_src_att = dynet::dropout_dim(i_mh_src_att, 1/*col-major*/, _p_tfc->_decoder_sublayer_dropout_rate);// col-wise dropout
@@ -866,7 +860,6 @@ struct Decoder{
 		else assert("Unknown positional encoding type!");
 
 		// dropout to the sums of the embeddings and the positional encodings
-		DYNET_ARG_CHECK(i_tgt.dim().ndims() > 1, "Failed Decoder::i_tgt #dims=" << i_tgt.dim().ndims())
 		if (_p_tfc->_use_dropout && _p_tfc->_decoder_emb_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 			i_tgt = dynet::dropout_dim(i_tgt, 1/*col-major*/, _p_tfc->_decoder_emb_dropout_rate);// col-wise dropout
@@ -997,7 +990,9 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, WordIdSentences(1, partial_sent), i_src_rep);
-	dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
+	dynet::Expression i_tgt_t;
+	if (partial_sent.size() == 1) i_tgt_t = i_tgt_ctx;
+	else i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
 
 	// output linear projections
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
