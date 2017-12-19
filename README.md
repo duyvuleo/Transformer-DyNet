@@ -137,7 +137,12 @@ For example,
 
     128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
     
-Finally, you can evaluate the translation result with BLEU:
+It's worth noting that we can have multiple models for ensembling decoding, i.e., 
+
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
+
+Finally, we can evaluate the translation result with BLEU:
 
     <your-moses-path>/mosesdecoder-RELEASE-3.0/scripts/generic/multi-bleu.perl <your-path>/data/iwslt15-envi/tst2013.vi < <your-path>/models/iwslt-envi/translation-beam5.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu > <your-path>/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu.score-BLEU 
 
@@ -147,18 +152,19 @@ Finally, you can evaluate the translation result with BLEU:
 
 	* Data for English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn))
 
-						BLEU (tokenized + case-sensitive)
+							BLEU (tokenized + case-sensitive)
 								test2012(dev)		test2013(test)		PPLX(dev)
-	- [NMT] (https://github.com/tensorflow/nmt)			23.8			26.1			-
+	- NMT (https://github.com/tensorflow/nmt)		23.8			26.1			-
 	(1 biLSTM-layer encoder, 2 LSTM-layer decoders, 512 hidden/embedding dim, 512 attention dim, dropout 0.2 for attention, SGD, beam10)
-	- [(Luong & Manning, 2015)](https://nlp.stanford.edu/pubs/luong-manning-iwslt15.pdf)				-			23.3			-
+	- (Luong & Manning, 2015)				-			23.3			-
+	(https://nlp.stanford.edu/pubs/luong-manning-iwslt15.pdf)
 	------------------------------------------------------------------------------------------------------------------
-	[Mantidae](https://github.com/duyvuleo/Mantidae)
+	Mantidae (https://github.com/duyvuleo/Mantidae)
 	- Baseline (attentional model)				-			23.72			15.5722
 	(1 bi-LSTM encoder, 2 decoders, 512 hidden/embedding dim, 512 attention dim, SGD, beam5)
 		+ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963
 	------------------------------------------------------------------------------------------------------------------
-	[Transformer-Dynet](https://github.com/duyvuleo/Transformer-DyNet)
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1						-			22.42			13.6715
 	(2 heads, 2 encoder/decoder layers, 128 units, SGD, beam5)
 		+ dropout (0.1)					-			23.29			12.1089 (50 epochs)
