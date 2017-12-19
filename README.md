@@ -65,14 +65,26 @@ In general, the programs built on GPU will run much faster than on CPU (even enh
 
 The data can be processed by using the script (/scripts/wrap-data.py),
 
-    python scripts/wrap-data.py <src-lang> <trg-lang> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>
-    python scripts/wrap-data.py <src-lang> <trg-lang> <train-prefix> <dev-prefix> <test-prefix> <src-freq-cutoff> <trg-freq-cutoff>
+    python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>
+or
+    python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <src-freq-cutoff> <trg-freq-cutoff>
 
-This script will create necessary data files that can be processed by transformer-train and transformer-decode.
+Example:
+
+    python scripts/wrap-data.py en vi sample-data/train.10k sample-data/test2012 sample-data/test2013 vocab
+or
+    python scripts/wrap-data.py en vi sample-data/train.10k sample-data/test2012 sample-data/test2013 2 2
+
+This script will create necessary data files (*.capped) that can be processed by transformer-train and transformer-decode.
+
+First, print command line's help of transformer-train and transformer-decode,
+
+    ./build_gpu/transformer-train --help
+    ./build_gpu/transformer-decode --help
 
 The model can be run as follows:
 
-    nice ./build_gpu/transformer-train --dynet-devices GPU:2 --max-seq-len 300 --minibatch-size 1024  --treport 200 --dreport 20000  --src-vocab <your-path>/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi -t <your-path>/data/iwslt-envi/train.en-vi.vcb.capped -d experiments/data/iwslt-envi/tst2012.en-vi.vcb.capped -p <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 2 --num-units 128 --num-heads 2 &><your-path>/models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu &
+    nice ./build_gpu/transformer-train --dynet-devices GPU:2 --max-seq-len 300 --minibatch-size 1024  --treport 200 --dreport 20000  --src-vocab <your-path>/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi -t <your-path>/data/iwslt-envi/train.en-vi.vcb.capped -d <your-path>/data/iwslt-envi/tst2012.en-vi.vcb.capped -p <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 2 --num-units 128 --num-heads 2 &><your-path>/models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu &
 
 which will train a small model on a tiny training set, i.e.,
 
