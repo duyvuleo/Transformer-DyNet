@@ -145,36 +145,30 @@ Finally, you can evaluate the translation result with BLEU:
 
 ### IWSLT English-Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn))
 
-(Evaluation with BLEU (tokenized + case-sensitive))
-Systems | tst2012 (dev) | test2013 (test) | PPX (dev)
---- | :---: | :---: | :---:
-https://github.com/tensorflow/nmt | 23.8 | **26.1** | -
-[(Luong & Manning, 2015)](https://nlp.stanford.edu/pubs/luong-manning-iwslt15.pdf) | - | 23.3 | -
-
-* English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn))
-					BLEU (tokenized + case-sensitive)
-							test2012(dev)		test2013(test)		PPLX(dev)
-- https://github.com/tensorflow/nmt			23.8			26.1			-
-(1 biLSTM-layer encoder, 2 LSTM-layer decoders, 512 hidden/embedding dim, 512 attention dim, dropout 0.2 for attention, SGD, beam10)
-- (Luong & Manning, 2015)				-			23.3			-
-(https://nlp.stanford.edu/pubs/luong-manning-iwslt15.pdf)
-------------------------------------------------------------------------------------------------------------------
-Mantidae
-- Baseline (attentional model)				-			23.72			15.5722
-(1 bi-LSTM encoder, 2 decoders, 512 hidden/embedding dim, 512 attention dim, SGD, beam5)
-	+ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963
-------------------------------------------------------------------------------------------------------------------
-Transformer-Dynet
-- Baseline 1						-			22.42			13.6715
-(2 heads, 2 encoder/decoder layers, 128 units, SGD, beam5)
-	+ dropout (0.1)					-			23.29			12.1089 (50 epochs)
-	(source and target embeddings, sub-layers (attention + feedforward))
-- Baseline 2
-- Baseline 3									21.39			12.3806 (16 epochs)
-(8 heads, 6 encoder/decoder layers, 512 units, SGD, beam5)
-	+ dropout (0.1)					-			25.30			10.5158 (28 epochs)
-	(source and target embeddings, sub-layers (attention + feedforward))
-******************************************************************************************************************
+	* English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn))
+						BLEU (tokenized + case-sensitive)
+								test2012(dev)		test2013(test)		PPLX(dev)
+	- https://github.com/tensorflow/nmt			23.8			26.1			-
+	(1 biLSTM-layer encoder, 2 LSTM-layer decoders, 512 hidden/embedding dim, 512 attention dim, dropout 0.2 for attention, SGD, beam10)
+	- (Luong & Manning, 2015)				-			23.3			-
+	(https://nlp.stanford.edu/pubs/luong-manning-iwslt15.pdf)
+	------------------------------------------------------------------------------------------------------------------
+	Mantidae
+	- Baseline (attentional model)				-			23.72			15.5722
+	(1 bi-LSTM encoder, 2 decoders, 512 hidden/embedding dim, 512 attention dim, SGD, beam5)
+		+ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963
+	------------------------------------------------------------------------------------------------------------------
+	Transformer-Dynet
+	- Baseline 1						-			22.42			13.6715
+	(2 heads, 2 encoder/decoder layers, 128 units, SGD, beam5)
+		+ dropout (0.1)					-			23.29			12.1089 (50 epochs)
+		(source and target embeddings, sub-layers (attention + feedforward))
+	- Baseline 2
+	- Baseline 3									21.39			12.3806 (16 epochs)
+	(8 heads, 6 encoder/decoder layers, 512 units, SGD, beam5)
+		+ dropout (0.1)					-			25.30			10.5158 (28 epochs)
+		(source and target embeddings, sub-layers (attention + feedforward))
+	******************************************************************************************************************
 
 ### WMT17 English-German (comming soon)
 
