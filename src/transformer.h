@@ -178,10 +178,10 @@ struct TransformerConfig{
 // --- 
 struct ModelStats {
 	double _losses[2] = {0.f, 0.f};// If having additional loss, resize this array!
-	unsigned _words_src = 0;
-	unsigned _words_tgt = 0;
-	unsigned _words_src_unk = 0;
-	unsigned _words_tgt_unk = 0;
+	unsigned int _words_src = 0;
+	unsigned int _words_tgt = 0;
+	unsigned int _words_src_unk = 0;
+	unsigned int _words_tgt_unk = 0;
 
 	ModelStats(){}
 };
@@ -992,7 +992,9 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, WordIdSentences(1, partial_sent), i_src_rep);
 	dynet::Expression i_tgt_t;
 	if (partial_sent.size() == 1) i_tgt_t = i_tgt_ctx;
-	else i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
+	else 
+		//i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
+		i_tgt_t = dynet::pick(i_tgt_ctx, (unsigned)(partial_sent.size() - 1), 1);// shifted right, ((|V_T|, 1), batch_size)
 
 	// output linear projections
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
@@ -1040,7 +1042,8 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		}
 
 		// compute the logit
-		dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {t});// shifted right
+		//dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {t});// shifted right
+		dynet::Expression i_tgt_t = dynet::pick(i_tgt_ctx, t, 1);// shifted right, ((|V_T|, 1), batch_size)
 
 		// output linear projections
 		dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
@@ -1073,7 +1076,8 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		}
 
 		// get the prediction at timestep t
-		dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
+		//dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
+		dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// shifted right, ((|V_T|, 1), batch_size)
 	
 		// log_softmax and loss
 		dynet::Expression i_err;
