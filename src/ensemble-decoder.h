@@ -15,6 +15,8 @@
 using namespace std;
 using namespace dynet;
 
+#define USE_BEAM_SEARCH_LENGTH_NORMALISATION
+
 class EnsembleDecoderHyp {
 public:
 	EnsembleDecoderHyp(float score, const WordIdSentence & sent, const WordIdSentence & align) :
@@ -34,13 +36,15 @@ protected:
 typedef std::shared_ptr<EnsembleDecoderHyp> EnsembleDecoderHypPtr;
 
 inline bool operator<(const EnsembleDecoderHypPtr & lhs, const EnsembleDecoderHypPtr & rhs) {
+#ifndef USE_BEAM_SEARCH_LENGTH_NORMALISATION
 	if(lhs->get_score() != rhs->get_score()) return lhs->get_score() > rhs->get_score();
 	return lhs->get_sentence() < rhs->get_sentence();
-
+#else
 	//score with word-based length normalization. better?
-	//float score_l = lhs->get_score()/lhs->get_sentence().size(), score_r = rhs->get_score()/rhs->get_sentence().size();
-	//if( score_l != score_r) return score_l > score_r;
-	//return lhs->get_sentence() < rhs->get_sentence();//shorter is better!
+	float score_l = lhs->get_score()/lhs->get_sentence().size(), score_r = rhs->get_score()/rhs->get_sentence().size();
+	if( score_l != score_r) return score_l > score_r;
+	return lhs->get_sentence() < rhs->get_sentence();
+#endif
 }
 
 typedef tuple<float,int,int,int> Beam_Info;
