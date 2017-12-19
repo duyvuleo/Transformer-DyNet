@@ -143,22 +143,22 @@ Finally, you can evaluate the translation result with BLEU:
 
 ## Benchmarking
 
-### IWSLT English-Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn))
+### IWSLT English-Vietnamese 
 
-	* English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn))
+	* Data for English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn))
+
 						BLEU (tokenized + case-sensitive)
 								test2012(dev)		test2013(test)		PPLX(dev)
-	- https://github.com/tensorflow/nmt			23.8			26.1			-
+	- [NMT] (https://github.com/tensorflow/nmt)			23.8			26.1			-
 	(1 biLSTM-layer encoder, 2 LSTM-layer decoders, 512 hidden/embedding dim, 512 attention dim, dropout 0.2 for attention, SGD, beam10)
-	- (Luong & Manning, 2015)				-			23.3			-
-	(https://nlp.stanford.edu/pubs/luong-manning-iwslt15.pdf)
+	- [(Luong & Manning, 2015)](https://nlp.stanford.edu/pubs/luong-manning-iwslt15.pdf)				-			23.3			-
 	------------------------------------------------------------------------------------------------------------------
-	Mantidae
+	[Mantidae](https://github.com/duyvuleo/Mantidae)
 	- Baseline (attentional model)				-			23.72			15.5722
 	(1 bi-LSTM encoder, 2 decoders, 512 hidden/embedding dim, 512 attention dim, SGD, beam5)
 		+ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963
 	------------------------------------------------------------------------------------------------------------------
-	Transformer-Dynet
+	[Transformer-Dynet](https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1						-			22.42			13.6715
 	(2 heads, 2 encoder/decoder layers, 128 units, SGD, beam5)
 		+ dropout (0.1)					-			23.29			12.1089 (50 epochs)
