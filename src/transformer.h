@@ -363,12 +363,12 @@ struct MultiHeadAttentionLayer{
 				i_batch_alphas = dynet::softmax(i_batch_alphas);// ((Ly, Lx),  batch_size*nheads)) (normalised, col-major)
 			// FIXME: save the soft alignment in i_batch_alphas if necessary!
 					
-			// attention dropout (col-major or whole matrix?)
+			// attention dropout (col-major or full?)
 			if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 				i_batch_alphas = dynet::dropout_dim(i_batch_alphas, 1/*col-major*/, _p_tfc->_attention_dropout_rate);// col-wise dropout
 #else
-				i_batch_alphas = dynet::dropout(i_batch_alphas, _p_tfc->_attention_dropout_rate);// full matrix
+				i_batch_alphas = dynet::dropout(i_batch_alphas, _p_tfc->_attention_dropout_rate);// full dropout
 #endif
 
 			i_batch_alphas = i_batch_V/*((num_units/nheads, Ly), batch_size*nheads)*/ * i_batch_alphas/*((Ly, Lx), batch_size*nheads))*/;// ((num_units/nheads, Lx), batch_size*nheads)
@@ -453,7 +453,7 @@ struct MultiHeadAttentionLayer{
 					i_alpha = dynet::softmax(i_alpha_pre);// ((Ly, Lx), batch_size) (normalised, col-major)
 				// FIXME: save the soft alignment in i_alpha if necessary!
 						
-				// attention dropout (col-major or whole matrix?)
+				// attention dropout (col-major or full)
 				if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 					i_alpha = dynet::dropout_dim(i_alpha, 1/*col-major*/, _p_tfc->_attention_dropout_rate);// col-wise dropout
@@ -1101,14 +1101,7 @@ std::string TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSe
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
 	Dict& tdict = _dicts.second;
 
-	// start of sentence
-	target.clear();
-	target.push_back(sos_sym); 
-
-	//cerr << "sample::source" << endl;
-	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);
-
-	std::vector<dynet::Expression> aligns;// FIXME: unused
+	
 	std::stringstream ss;
 	ss << "<s>";
 	unsigned t = 0;
@@ -1153,18 +1146,10 @@ std::string TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const W
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
 	Dict& tdict = _dicts.second;
 
-	// start of sentence
-	target.clear();
-	target.push_back(sos_sym); 
-
-	//cerr << "sample::source" << endl;
-	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);
-	
-	std::vector<dynet::Expression> aligns;// FIXME: unused
 	std::stringstream ss;
 	ss << "<s>";
 	unsigned t = 0;
-	while (target.back() != eos_sym) 
+	if (w 
 	{
 		cg.checkpoint();
 		
@@ -1177,8 +1162,8 @@ std::string TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const W
 		auto pr_w = ydist[w];
 		for (unsigned x = 1; x < ydist.size(); ++x) {
 			if (ydist[x] > pr_w) {
-				w = x;
-				pr_w = ydist[x];
+				w = x+1;
+				pr_w = ydist[x+2];
 			}
 		}
 
@@ -1219,7 +1204,7 @@ struct Hypothesis {
 	std::vector<Expression> aligns;
 };
 
-std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width)// FIXME: to be tested?
+
 {
 	_tfc._is_training = false;
 	
@@ -1234,7 +1219,7 @@ std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const Wor
 	//cerr << "sample::source" << endl;
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);
 	
-	std::vector<dynet::Expression> aligns;// FIXME: unused
+	
 
 	std::vector<Hypothesis> chart;
 	chart.push_back(Hypothesis(sos_sym, 0.0f, aligns));
@@ -1303,7 +1288,7 @@ dynet::ParameterCollection& TransformerModel::get_model_parameters(){
 
 void TransformerModel::initialise_params_from_file(const string &params_file)
 {
-	dynet::load_dynet_model(params_file, _all_params.get());// FIXME: use binary streaming instead for saving disk spaces?
+	dynet::load_dynet_model(params_file, _all_params.get());
 }
 
 void TransformerModel::save_params_to_file(const string &params_file)

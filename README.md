@@ -63,7 +63,7 @@ In general, the programs built on GPU will run much faster than on CPU (even enh
 
 #### Using the model
 
-The data can be processed by using the script (/scripts/process-data.py),
+The data can be processed by using the script (/scripts/wrap-data.py),
 
     python scripts/wrap-data.py <src-lang> <trg-lang> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>
     python scripts/wrap-data.py <src-lang> <trg-lang> <train-prefix> <dev-prefix> <test-prefix> <src-freq-cutoff> <trg-freq-cutoff>
