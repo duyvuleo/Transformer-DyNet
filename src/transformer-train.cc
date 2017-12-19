@@ -451,7 +451,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 				sgd.status();
 				cerr << "sents=" << sid << " ";
 				cerr /*<< "loss=" << tstats._losses[0]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " E=" << (tstats._losses[0] / tstats._words_tgt) << " ppl=" << exp(tstats._losses[0] / tstats._words_tgt) << ' ';
-				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (tstats._words_src + tstats._words_tgt) * 1000 / elapsed << " words/sec)" << endl;  					
+				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;  					
 			}
 			   		 
 			++id;
