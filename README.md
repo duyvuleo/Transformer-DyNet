@@ -150,7 +150,7 @@ Finally, we can evaluate the translation result with BLEU:
 
 ### IWSLT English-Vietnamese 
 
-	* Data for English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn))
+	* Data for English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn)), can be obtained from https://github.com/tensorflow/nmt. 
 
 							BLEU (tokenized + case-sensitive)
 								test2012(dev)		test2013(test)		PPLX(dev)
@@ -165,18 +165,21 @@ Finally, we can evaluate the translation result with BLEU:
 		+ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963
 	------------------------------------------------------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
-	- Baseline 1						-			22.42			13.6715
+	- Baseline 1
 	(2 heads, 2 encoder/decoder layers, 128 units, SGD, beam5)
 		+ dropout (0.1)					-			23.29			12.1089 (50 epochs)
 		(source and target embeddings, sub-layers (attention + feedforward))
 	- Baseline 2
-	- Baseline 3									21.39			12.3806 (16 epochs)
+	(4 heads, 2 encoder/decoder layers, 256 units, SGD, beam5)
+		+ dropout (0.1)					-			24.14			11.0308 (35 epochs)
+		(source and target embeddings, sub-layers (attention + feedforward))
+	- Baseline 3
 	(8 heads, 6 encoder/decoder layers, 512 units, SGD, beam5)
 		+ dropout (0.1)					-			25.30			10.5158 (28 epochs)
 		(source and target embeddings, sub-layers (attention + feedforward))
 	******************************************************************************************************************
 
-### WMT17 English-German (comming soon)
+### WMT17 English-German (coming soon)
 
 ## Contacts
 
