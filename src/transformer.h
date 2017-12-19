@@ -1056,7 +1056,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 
 		v_errors.push_back(i_err);
 	}
-#else // FIXME: this way is much faster but get weird error ("bad argument in SelectCols") related to select_cols
+#else // Note: this way is much faster!
 	// compute the logit and linear projections
 	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
 
