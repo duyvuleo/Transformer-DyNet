@@ -66,13 +66,17 @@ In general, the programs built on GPU will run much faster than on CPU (even enh
 The data can be processed by using the script (/scripts/wrap-data.py),
 
     python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>
+
 or
+
     python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <src-freq-cutoff> <trg-freq-cutoff>
 
 Example:
 
     python scripts/wrap-data.py en vi sample-data/train.10k sample-data/test2012 sample-data/test2013 vocab
+
 or
+
     python scripts/wrap-data.py en vi sample-data/train.10k sample-data/test2012 sample-data/test2013 2 2
 
 This script will create necessary data files (*.capped) that can be processed by transformer-train and transformer-decode.
