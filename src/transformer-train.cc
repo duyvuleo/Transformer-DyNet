@@ -109,6 +109,7 @@ int main(int argc, char** argv) {
 		("ff-activation-type", value<unsigned>()->default_value(1), "impose feed-forward activation type (1: RELU, 2: SWISH, 3: SWISH with learnable beta); 1 by default")
 		//-----------------------------------------
 		("position-encoding", value<unsigned>()->default_value(1), "impose position encoding (0: none; 1: learned positional encoding; 2: sinusoid encoding); 1 by default")
+		("max-pos-seq-len", value<unsigned>()->default_value(300), "specify the maximum word-based sentence length (either source or target) for learned positional encoding; 300 by default")
 		//-----------------------------------------
 		("attention-type", value<unsigned>()->default_value(1), "impose attention type (1: Luong attention type; 2: Bahdanau attention type); 1 by default")
 		//-----------------------------------------
@@ -203,7 +204,7 @@ int main(int argc, char** argv) {
 		, vm.count("use-label-smoothing")
 		, vm["label-smoothing-weight"].as<float>()
 		, vm["position-encoding"].as<unsigned>()
-		, vm["max-seq-len"].as<unsigned>()
+		, vm["max-pos-seq-len"].as<unsigned>()
 		, sm
 		, vm["attention-type"].as<unsigned>()
 		, vm["ff-activation-type"].as<unsigned>());

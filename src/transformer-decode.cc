@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
 		("src-vocab", value<string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
-		("tgt-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
+		("tgt-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")	
 		//-----------------------------------------
 		("test,T", value<string>(), "file containing testing sentences.")
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")

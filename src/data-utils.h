@@ -32,6 +32,7 @@ WordIdCorpus read_corpus(const string &filename
 
 	string line;
 	int lc = 0, stoks = 0, ttoks = 0;
+	unsigned int max_src_len = 0, max_tgt_len = 0;
 	while (getline(in, line)) {
 		WordIdSentence source, target;
 
@@ -64,6 +65,9 @@ WordIdCorpus read_corpus(const string &filename
 
 		corpus.push_back(WordIdSentencePair(source, target));
 
+		max_src_len = std::max(max_src_len, (unsigned int)source.size());
+		max_tgt_len = std::max(max_tgt_len, (unsigned int)target.size());
+
 		stoks += source.size();
 		ttoks += target.size();
 
@@ -72,9 +76,9 @@ WordIdCorpus read_corpus(const string &filename
 
 	// print stats
 	if (cid)
-		cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t), " << sd->size() << " & " << td->size() << " types\n";
+		cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t), " << "max length (s & t): " << max_src_len << " & " << max_tgt_len << ", " << sd->size() << " & " << td->size() << " types" << endl;
 	else 
-		cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t)\n" ;
+		cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t), " << "max length (s & t): " << max_src_len << " & " << max_tgt_len << endl;
 
 	return corpus;
 }
