@@ -1120,12 +1120,12 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		// log_softmax and loss
 		dynet::Expression i_err;
 		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
-		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html)
+		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
 			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
-			//assert("Not implemented yet!");
-			dynet::Expression i_softmax = dynet::softmax(i_r_t);
-			dynet::Expression i_softmax_labelsm = (1.f - _tfc._label_smoothing_weight) * i_softmax + (_tfc._label_smoothing_weight / (_tfc._tgt_vocab_size - 1)) * (1.f - i_softmax);//x -> x * (1 - \epsilon) + (1-x) * \epsilon / (|V|-1)
-			i_err = dynet::pick(-dynet::log(i_softmax_labelsm), next_words);
+			dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
+			dynet::Expression i_pre_loss = -dynet::pick(i_log_softmax, next_words);
+			dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
+			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
 		}
 		else 
 			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
