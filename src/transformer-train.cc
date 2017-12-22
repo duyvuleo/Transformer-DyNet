@@ -134,6 +134,7 @@ int main(int argc, char** argv) {
 		("verbose,v", "be extremely chatty")
 		//-----------------------------------------
 		("debug", "enable/disable simpler debugging by immediate computing mode or checking validity (refers to http://dynet.readthedocs.io/en/latest/debugging.html)")// for CPU only
+		("dynet-profiling", value<int>()->default_value(0), "enable/disable auto profiling (https://github.com/clab/dynet/pull/1088/commits/bc34db98fa5e2e694f54f0e6b1d720d517c7530e)")// for debugging only			
 	;
 	
 	store(parse_command_line(argc, argv, opts), vm); 

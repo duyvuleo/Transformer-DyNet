@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
 		("swap", "swap roles of source and target, i.e., learn p(source|target)")
 		//-----------------------------------------
 		("verbose,v", "be extremely chatty")
+		("dynet-profiling", value<int>()->default_value(0), "enable/disable auto profiling (https://github.com/clab/dynet/pull/1088/commits/bc34db98fa5e2e694f54f0e6b1d720d517c7530e)")// for debugging only		
 		//-----------------------------------------
 	;
 	
