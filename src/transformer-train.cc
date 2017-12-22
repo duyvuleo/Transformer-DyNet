@@ -29,6 +29,8 @@ unsigned MINIBATCH_SIZE = 1;
 
 bool DEBUGGING_FLAG = false;
 
+bool PRINT_GRAPHVIZ = false;
+
 unsigned TREPORT = 50;
 unsigned DREPORT = 5000;
 
@@ -131,6 +133,8 @@ int main(int argc, char** argv) {
 		("treport", value<unsigned>()->default_value(50), "no. of training instances for reporting current model status on training data")
 		("dreport", value<unsigned>()->default_value(5000), "no. of training instances for reporting current model status on development data (dreport = N * treport)")
 		//-----------------------------------------
+		("print-graphviz", "print graphviz-style computation graph; default not")
+		//-----------------------------------------
 		("verbose,v", "be extremely chatty")
 		//-----------------------------------------
 		("debug", "enable/disable simpler debugging by immediate computing mode or checking validity (refers to http://dynet.readthedocs.io/en/latest/debugging.html)")// for CPU only
@@ -167,6 +171,7 @@ int main(int argc, char** argv) {
 	TREPORT = vm["treport"].as<unsigned>(); 
 	DREPORT = vm["dreport"].as<unsigned>(); 
 	SAMPLING_TRAINING = vm.count("sampling");
+	PRINT_GRAPHVIZ = vm.count("print-graphviz");
 	if (DREPORT % TREPORT != 0) assert("dreport must be divisible by treport.");// to ensure the reporting on development data
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
@@ -417,6 +422,12 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	
 			transformer::ModelStats ctstats;
 			Expression i_xent = tf.build_graph(cg, train_src_minibatch[train_ids_minibatch[id]], train_trg_minibatch[train_ids_minibatch[id]], ctstats);
+	
+			if (PRINT_GRAPHVIZ) {
+				cerr << "***********************************************************************************" << endl;
+				cg.print_graphviz();
+				cerr << "***********************************************************************************" << endl;
+			}
 
 			Expression i_objective = i_xent;
 
