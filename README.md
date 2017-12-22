@@ -198,7 +198,7 @@ Finally, we can evaluate the translation result with BLEU:
 		(source and target embeddings, sub-layers (attention + feedforward))
 	- Baseline 3
 	(8 heads, 6 encoder/decoder layers, 512 units, SGD, beam5)
-		+ dropout (0.1)					-			25.30			10.5158 (28 epochs)
+		+ dropout (0.1)					22.32			25.30			10.5158 (28 epochs)
 		(source and target embeddings, sub-layers (attention + feedforward))
 	******************************************************************************************************************
 
