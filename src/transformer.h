@@ -40,6 +40,7 @@ namespace transformer {
 
 #define MULTI_HEAD_ATTENTION_PARALLEL // to use pseudo-batching for multi-head attention computing (faster)
 #define USE_COLWISE_DROPOUT // use col-wise dropout
+#define USE_LECUN_DIST_PARAM_INIT // use Le Cun's uniform distribution for LinearLayer params initialisation
 
 enum ATTENTION_TYPE { DOT_PRODUCT=1, ADDITIVE_MLP=2 };
 enum FFL_ACTIVATION_TYPE { RELU=1, SWISH=2, SWISH_LEARNABLE_BETA=3 };
@@ -187,14 +188,39 @@ struct ModelStats {
 };
 // --- 
 
+// --- Le Cun's uniform distribution
+/*
+ * Initialize parameters with samples from a Le Cun's uniform distribution
+ * Reference: LeCun 98, Efficient Backprop
+ * http://yann.lecun.com/exdb/publis/pdf/lecun-98b.pdf
+ * Code: https://github.com/neulab/xnmt/blob/TF_new/xnmt/initializer.py
+ */
+struct ParameterInitLeCunUniform : public ParameterInit {
+	ParameterInitLeCunUniform(float fan_in, float scale=1.f) 
+		: fan_in(fan_in), scale(scale) { 
+		if (scale == 0.0f) throw std::domain_error("Scale of the Le Cun uniform distribution cannot be 0 in ParameterInitLeCunUniform"); 
+	}
+
+	virtual void initialize_params(Tensor & values) const override;
+
+private:
+	float fan_in, scale;
+};
+
+void ParameterInitLeCunUniform::initialize_params(Tensor & values) const {
+	float s = scale * std::sqrt(3.f / fan_in);
+	TensorTools::randomize_uniform(values, -s, s);
+}
+// --- 
+
 //--- Simple Linear Layer (w/ or w/o bias)
 struct LinearLayer{
-	explicit LinearLayer(DyNetModel* mod, unsigned input_dim, unsigned output_dim, bool have_bias=true)
+	explicit LinearLayer(DyNetModel* mod, unsigned input_dim, unsigned output_dim, bool have_bias=true, bool initLC=false)
 		: _have_bias(have_bias)
-	{
-		_p_W = mod->add_parameters({output_dim, input_dim});
+	{		
+		_p_W = (initLC == false)?mod->add_parameters({output_dim, input_dim}):mod->add_parameters({output_dim, input_dim}, ParameterInitLeCunUniform(input_dim));
 		if (_have_bias)
-			_p_b = mod->add_parameters({output_dim});
+			_p_b = (initLC == false)?mod->add_parameters({output_dim}):mod->add_parameters({output_dim}, ParameterInitLeCunUniform(output_dim));
 	}
 
 	dynet::Expression apply(dynet::ComputationGraph& cg, const dynet::Expression& i_x, bool reconstruct_shape=true, bool time_distributed=false){
@@ -231,7 +257,11 @@ struct LinearLayer{
 */
 struct HighwayNetworkLayer{
 	explicit HighwayNetworkLayer(DyNetModel* mod, unsigned input_dim, unsigned output_dim, bool have_bias=true)
+#ifdef USE_LECUN_DIST_PARAM_INIT
+		: _l_layer(mod, input_dim, output_dim, have_bias, true)
+#else
 		: _l_layer(mod, input_dim, output_dim, have_bias)
+#endif
 	{}
 
 	dynet::Expression apply(dynet::ComputationGraph& cg, const dynet::Expression& i_x, bool reconstruct_shape=true, bool time_distributed=false){
@@ -303,10 +333,17 @@ struct FeedForwardLayer{
 struct MultiHeadAttentionLayer{
 #ifdef MULTI_HEAD_ATTENTION_PARALLEL
 	explicit MultiHeadAttentionLayer(DyNetModel* mod, TransformerConfig& tfc, bool is_future_blinding=false)
+#ifdef USE_LECUN_DIST_PARAM_INIT
+		: _l_W_Q(mod, tfc._num_units, tfc._num_units, false/*linear layer w/o bias*/, true)
+		, _l_W_K(mod, tfc._num_units, tfc._num_units, false, true)
+		, _l_W_V(mod, tfc._num_units, tfc._num_units, false, true)
+		, _l_W_O(mod, tfc._num_units, tfc._num_units, false, true)
+#else
 		: _l_W_Q(mod, tfc._num_units, tfc._num_units, false/*linear layer w/o bias*/)
 		, _l_W_K(mod, tfc._num_units, tfc._num_units, false)
 		, _l_W_V(mod, tfc._num_units, tfc._num_units, false)
 		, _l_W_O(mod, tfc._num_units, tfc._num_units, false)
+#endif
 	{
 		_att_scale = 1.f / sqrt(tfc._num_units / tfc._nheads);
 
@@ -972,11 +1009,11 @@ TransformerModel::TransformerModel(const TransformerConfig& tfc, dynet::Dict& sd
 }
 
 dynet::Expression TransformerModel::compute_source_rep(dynet::ComputationGraph &cg
-	, const WordIdSentences& ssents)
+	, const WordIdSentences& ssents)// for decoding only
 {
 	// encode source
 	ModelStats stats;// unused
-	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, stats);// (batch_size x) num_units x Lx
+	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, stats);// ((num_units, Lx), batch_size)
 
 	return i_src_ctx;
 }
@@ -996,7 +1033,7 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
 		//i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
 		i_tgt_t = dynet::pick(i_tgt_ctx, (unsigned)(partial_sent.size() - 1), 1);// shifted right, ((|V_T|, 1), batch_size)
 
-	// output linear projections
+	// output linear projections (w/ bias)
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
@@ -1051,7 +1088,8 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		// log_softmax and loss
 		dynet::Expression i_err;
 		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
-		{// w/ label smoothing (according to https://arxiv.org/pdf/1701.06548.pdf)
+		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html)
+			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
 			assert("Not implemented yet!");
 		}
 		else 
@@ -1082,8 +1120,12 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		// log_softmax and loss
 		dynet::Expression i_err;
 		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
-		{// w/ label smoothing (according to https://arxiv.org/pdf/1701.06548.pdf)
-			assert("Not implemented yet!");
+		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html)
+			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
+			//assert("Not implemented yet!");
+			dynet::Expression i_softmax = dynet::softmax(i_r_t);
+			dynet::Expression i_softmax_labelsm = (1.f - _tfc._label_smoothing_weight) * i_softmax + (_tfc._label_smoothing_weight / (_tfc._tgt_vocab_size - 1)) * (1.f - i_softmax);//x -> x * (1 - \epsilon) + (1-x) * \epsilon / (|V|-1)
+			i_err = dynet::pick(-dynet::log(i_softmax_labelsm), next_words);
 		}
 		else 
 			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
