@@ -374,6 +374,9 @@ struct MultiHeadAttentionLayer{
 		, const dynet::Expression& i_y/*keys and values. i_y is equal to i_x if using self_attention*/)
 	{
 		// create mask for self-attention in decoder
+		// FIXME: we also need query and key masks to filter out the attentions allocated to padding postions within a minibatch.
+		// refer to https://github.com/Kyubyong/transformer/issues/16
+		// and take a look at mx.sym.SequenceMask?
 		dynet::Expression i_mask;
 		if (_is_future_blinding){ 
 			const dynet::Dim& dim = i_x.dim();
@@ -673,8 +676,11 @@ struct Encoder{
 			std::vector<dynet::Expression> pos_embeddings;  
 			std::vector<unsigned> positions(sents.size());
 			for (unsigned l = 0; l < max_len; l++){
-				for (unsigned bs = 0; bs < sents.size(); ++bs) 
-					positions[bs] = l;
+				for (unsigned bs = 0; bs < sents.size(); ++bs){
+					if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to (_p_tfc._max_length - 1).
+					else
+						positions[bs] = l;
+			}
 
 				pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
 			}
@@ -880,8 +886,11 @@ struct Decoder{
 			std::vector<dynet::Expression> pos_embeddings;  
 			std::vector<unsigned> positions(sents.size());
 			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
-				for (unsigned bs = 0; bs < sents.size(); ++bs) 
-					positions[bs] = l;
+				for (unsigned bs = 0; bs < sents.size(); ++bs){
+					if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
+					else
+						positions[bs] = l;
+			}
 
 				pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
 			}
@@ -1035,7 +1044,7 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph & cg
 
 	// output linear projections (w/ bias)
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
-	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 
 	// FIXME: get the alignments for visualisation
@@ -1061,7 +1070,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 
 	// get losses	
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
-	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix)
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 
 // both of the followings work well!
 #if 0 
@@ -1088,9 +1097,12 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		// log_softmax and loss
 		dynet::Expression i_err;
 		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
-		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html)
+		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
 			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
-			assert("Not implemented yet!");
+			dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
+			dynet::Expression i_pre_loss = -dynet::pick(i_log_softmax, next_words);
+			dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
+			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
 		}
 		else 
 			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
