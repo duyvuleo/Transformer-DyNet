@@ -35,4 +35,3 @@ dynet::Expression create_triangle_mask(dynet::ComputationGraph &cg, unsigned len
 	return i_mask;
 }
 
-

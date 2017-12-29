@@ -14,6 +14,7 @@
 
 using namespace std;
 using namespace dynet;
+using namespace transformer;
 
 #define USE_BEAM_SEARCH_LENGTH_NORMALISATION
 
@@ -140,7 +141,7 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 	//cerr << "GenerateNbest::(1)" << endl;
 	std::vector<dynet::Expression> v_src_reps;
 	for (auto & tf : v_models){
-		v_src_reps.push_back(tf.get()->compute_source_rep(cg, WordIdSentences(1, sent_src)));
+		v_src_reps.push_back(tf.get()->compute_source_rep(cg, WordIdSentences(1, sent_src)/*pseudo batch (1)*/));
 	}
 
 	// The n-best hypotheses

@@ -204,6 +204,16 @@ Finally, we can evaluate the translation result with BLEU:
 
 ### WMT17 English-German (coming soon)
 
+## ToDo
+
+1) Masking for keys and values as well, to support mini-batching?
+
+2) Test sinusoid positional encodings?
+
+3) Weighted transformer?
+
+4) Other new ideas?
+
 ## Contacts
 
 Hoang Cong Duy Vu (vhoang2@student.unimelb.edu.au; duyvuleo@gmail.com)
