@@ -206,13 +206,17 @@ Finally, we can evaluate the translation result with BLEU:
 
 ## ToDo
 
-1) Masking for keys and values as well, to support mini-batching?
+1. sinusoid positional encoding testing or re-code using DyNet’s new functions (e.g., cos, sin)
 
-2) Test sinusoid positional encodings?
+2. implementation for Bahdanau attention type
 
-3) Weighted transformer?
+3. n-gram features?. To create a deep layer tanh(decoder output * W_o + n-gram embeddings * W_ng) before projection.
 
-4) Other new ideas?
+4. embeddings->RNN instead of embeddings+pos (a hybrid architecture between AM and transformer?)
+
+5. weighted transformer
+
+5. Other new ideas?
 
 ## Contacts
 

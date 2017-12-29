@@ -391,7 +391,7 @@ struct MaskBase{
 //--- Multi-Head Attention Layer
 struct MultiHeadAttentionLayer{
 #ifdef MULTI_HEAD_ATTENTION_PARALLEL
-	explicit MultiHeadAttentionLayer(DyNetModel* mod, TransformerConfig& tfc, bool is_self_attention=true, bool is_future_blinding=false)
+	explicit MultiHeadAttentionLayer(DyNetModel* mod, TransformerConfig& tfc, bool is_future_blinding=false)
 #ifdef USE_LECUN_DIST_PARAM_INIT
 		: _l_W_Q(mod, tfc._num_units, tfc._num_units, false/*linear layer w/o bias*/, true)
 		, _l_W_K(mod, tfc._num_units, tfc._num_units, false, true)
@@ -407,7 +407,6 @@ struct MultiHeadAttentionLayer{
 		_att_scale = 1.f / sqrt(tfc._num_units / tfc._nheads);
 
 		_is_future_blinding = is_future_blinding;
-		_is_self_attention = is_self_attention;
 
 		_p_tfc = &tfc;
 	}
@@ -425,8 +424,6 @@ struct MultiHeadAttentionLayer{
 	float _att_scale = 0.f;
 
 	bool _is_future_blinding = false;
-
-	bool _is_self_attention = true;
 
 	// transformer config pointer
 	TransformerConfig* _p_tfc = nullptr;
@@ -487,7 +484,7 @@ struct MultiHeadAttentionLayer{
 		return i_proj_atts;
 	}
 #else // without using pseudo-batching
-	explicit MultiHeadAttentionLayer(DyNetModel* mod, TransformerConfig& tfc, bool is_self_attention=true, bool is_future_blinding=false)
+	explicit MultiHeadAttentionLayer(DyNetModel* mod, TransformerConfig& tfc, bool is_future_blinding=false)
 	{
 		_p_WQ.resize(tfc._nheads);
 		_p_WK.resize(tfc._nheads);
@@ -503,7 +500,6 @@ struct MultiHeadAttentionLayer{
 		_att_scale = 1.f / sqrt(tfc._num_units / tfc._nheads);
 
 		_is_future_blinding = is_future_blinding;
-		_is_self_attention = is_self_attention;
 
 		_p_tfc = &tfc;
 	}
@@ -520,7 +516,6 @@ struct MultiHeadAttentionLayer{
 	float _att_scale = 0.f;
 
 	bool _is_future_blinding = false;
-	bool _is_self_attention = true;
 
 	// transformer config pointer
 	TransformerConfig* _p_tfc = nullptr;
@@ -588,7 +583,7 @@ struct MultiHeadAttentionLayer{
 //--- Encoder Layer
 struct EncoderLayer{
 	explicit EncoderLayer(DyNetModel* mod, TransformerConfig& tfc)
-		:_self_attention_sublayer(mod, tfc, true)
+		:_self_attention_sublayer(mod, tfc)
 		, _feed_forward_sublayer(mod, tfc)
 	{		
 		// for layer normalisation
@@ -816,8 +811,8 @@ typedef std::shared_ptr<Encoder> EncoderPointer;
 //--- Decoder Layer
 struct DecoderLayer{
 	explicit DecoderLayer(DyNetModel* mod, TransformerConfig& tfc)
-		:_self_attention_sublayer(mod, tfc, true, true)
-		, _src_attention_sublayer(mod, tfc, false)
+		:_self_attention_sublayer(mod, tfc, true)
+		, _src_attention_sublayer(mod, tfc)
 		, _feed_forward_sublayer(mod, tfc)
 	{	
 		// initialisation for layer normalisation
