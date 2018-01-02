@@ -188,18 +188,16 @@ Finally, we can evaluate the translation result with BLEU:
 		+ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963
 	------------------------------------------------------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
-	- Baseline 1
+	- Baseline 1 (small model)
 	(2 heads, 2 encoder/decoder layers, 128 units, SGD, beam5)
-		+ dropout (0.1)					-			23.29			12.1089 (50 epochs)
+		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-	- Baseline 2
-	(4 heads, 2 encoder/decoder layers, 256 units, SGD, beam5)
-		+ dropout (0.1)					-			24.14			11.0308 (35 epochs)
-		(source and target embeddings, sub-layers (attention + feedforward))
-	- Baseline 3
+		and label smoothing (0.1)			-			24.08			12.5148
+	- Baseline 2 (big model)
 	(8 heads, 6 encoder/decoder layers, 512 units, SGD, beam5)
-		+ dropout (0.1)					22.32			25.30			10.5158 (28 epochs)
+		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)			-			25.44			10.2474			
 	******************************************************************************************************************
 
 ### WMT17 English-German (coming soon)
