@@ -197,18 +197,17 @@ Finally, we can evaluate the translation result with BLEU:
 	(8 heads, 6 encoder/decoder layers, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			-			25.44			10.2474			
+		and label smoothing (0.1)			-			25.64			10.4374
+		ensemble (3 different runs)			-			27.11			-
 	******************************************************************************************************************
 
 ### WMT17 English-German (coming soon)
 
 ## ToDo
 
-1. sinusoid positional encoding testing or re-code using DyNet’s new functions (e.g., cos, sin)
+1. implementation for Bahdanau attention type
 
-2. implementation for Bahdanau attention type
-
-3. n-gram features?. To create a deep layer tanh(decoder output * W_o + n-gram embeddings * W_ng) before projection.
+2. n-gram features?. To create a deep layer tanh(decoder output * W_o + n-gram embeddings * W_ng) before projection.
 
 4. embeddings->RNN instead of embeddings+pos (a hybrid architecture between AM and transformer?)
 
