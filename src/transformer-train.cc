@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
 		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers; 6 by default")
 		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units; 512 by default")
 		("num-heads,h", value<unsigned>()->default_value(8), "use <num> for number of heads in multi-head attention mechanism; 4 by default")
-		("n_ff_units_factor", value<unsigned>()->default_value(4), "use <num> times of input dim for output dim in feed-forward layer; 4 by default")
+		("n-ff-units-factor", value<unsigned>()->default_value(4), "use <num> times of input dim for output dim in feed-forward layer; 4 by default")
 		//-----------------------------------------
 		("encoder-emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for encoder embeddings; 0.1 by default")
 		("encoder-sublayer-dropout-p", value<float>()->default_value(0.1f), "use dropout for sub-layer's output in encoder; 0.1 by default")
@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("ff-activation-type", value<unsigned>()->default_value(1), "impose feed-forward activation type (1: RELU, 2: SWISH, 3: SWISH with learnable beta); 1 by default")
 		//-----------------------------------------
-		("position-encoding", value<unsigned>()->default_value(1), "impose position encoding (0: none; 1: learned positional encoding; 2: sinusoid encoding); 1 by default")
+		("position-encoding", value<unsigned>()->default_value(1), "impose position encoding (0: none; 1: learned positional embedding; 2: sinusoid encoding); 1 by default")
 		("max-pos-seq-len", value<unsigned>()->default_value(300), "specify the maximum word-based sentence length (either source or target) for learned positional encoding; 300 by default")
 		//-----------------------------------------
 		("attention-type", value<unsigned>()->default_value(1), "impose attention type (1: Luong attention type; 2: Bahdanau attention type); 1 by default")
@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
 		, vm["num-units"].as<unsigned>()
 		, vm["num-heads"].as<unsigned>()
 		, vm["nlayers"].as<unsigned>()
-		, vm["n_ff_units_factor"].as<unsigned>()
+		, vm["n-ff-units-factor"].as<unsigned>()
 		, vm["encoder-emb-dropout-p"].as<float>()
 		, vm["encoder-sublayer-dropout-p"].as<float>()
 		, vm["decoder-emb-dropout-p"].as<float>()

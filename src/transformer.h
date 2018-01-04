@@ -40,7 +40,8 @@ namespace transformer {
 
 #define MULTI_HEAD_ATTENTION_PARALLEL // to use pseudo-batching for multi-head attention computing (faster)
 #define USE_COLWISE_DROPOUT // use col-wise dropout
-#define USE_LECUN_DIST_PARAM_INIT // use Le Cun's uniform distribution for LinearLayer params initialisation
+#define USE_LECUN_DIST_PARAM_INIT // use Le Cun's uniform distribution for LinearLayer params initialisation (arguably faster convergence)
+#define USE_KEY_QUERY_MASKINGS // use key and query maskings in multi-head attention
 
 enum ATTENTION_TYPE { DOT_PRODUCT=1, ADDITIVE_MLP=2 };
 enum FFL_ACTIVATION_TYPE { RELU=1, SWISH=2, SWISH_LEARNABLE_BETA=3 };
@@ -330,6 +331,7 @@ struct FeedForwardLayer{
 //---
 
 // ---
+// This MaskBase consists of all functions for maskings (both padding positions and future blinding)
 struct MaskBase{
 	explicit MaskBase(){}
 
@@ -341,7 +343,7 @@ struct MaskBase{
 
 	void create_seq_mask_expr(dynet::ComputationGraph& cg
 		, const std::vector<vector<float>>& v_seq_masks
-		, bool self=true)
+		, bool self=true/*self-attention?*/)
 	{
 		unsigned l = v_seq_masks[0].size();
 
@@ -447,8 +449,10 @@ struct MultiHeadAttentionLayer{
 		if (_p_tfc->_attention_type == ATTENTION_TYPE::DOT_PRODUCT){// Luong attention type
 			dynet::Expression i_batch_alphas = (dynet::transpose(i_batch_K) * i_batch_Q) * _att_scale;// ((Lx, Ly),  batch_size*nheads)) (unnormalised) 
 
+#ifdef USE_KEY_QUERY_MASKINGS
 			// key masking
 			i_batch_alphas = i_batch_alphas + i_mask._i_mask_pp_k;
+#endif
 
 			// future blinding masking
 			if (_is_future_blinding)
@@ -457,8 +461,10 @@ struct MultiHeadAttentionLayer{
 				i_batch_alphas = dynet::softmax(i_batch_alphas);// ((Lx, Ly),  batch_size*nheads)) (normalised, col-major)
 			// FIXME: save the soft alignment in i_batch_alphas if necessary!
 			
+#ifdef USE_KEY_QUERY_MASKINGS
 			// query masking
 			i_batch_alphas = dynet::cmult(i_batch_alphas, i_mask._i_mask_pp_q);
+#endif
 					
 			// attention dropout (col-major or full?)
 			if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
@@ -537,8 +543,10 @@ struct MultiHeadAttentionLayer{
 			if (_p_tfc->_attention_type == ATTENTION_TYPE::DOT_PRODUCT){// Luong attention type
 				dynet::Expression i_alpha_pre = (dynet::transpose(i_K) * i_Q) * _att_scale;// ((Lx, Ly), batch_size) (unnormalised) 
 
+#ifdef USE_KEY_QUERY_MASKINGS
 				// key masking
 				i_alpha_pre = i_alpha_pre + i_mask._i_mask_pp_k);
+#endif
 
 				dynet::Expression i_alpha;
 				if (_is_future_blinding)
@@ -547,8 +555,10 @@ struct MultiHeadAttentionLayer{
 					i_alpha = dynet::softmax(i_alpha_pre);// ((Lx, Ly), batch_size) (normalised, col-major)
 				// FIXME: save the soft alignment in i_alpha if necessary!
 
+#ifdef USE_KEY_QUERY_MASKINGS
 				// query masking
 				i_alpha = dynet::cmult(i_alpha, i_mask._i_mask_pp_q));
+#endif
 						
 				// attention dropout (col-major or full?)
 				if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
@@ -579,6 +589,28 @@ struct MultiHeadAttentionLayer{
 #endif
 };
 //---
+
+// --- Sinusoidal Positional Encoding
+// Note: doing this way may be a bit slow!
+dynet::Expression make_sinusoidal_position_encoding(dynet::ComputationGraph &cg, const dynet::Dim& dim){
+	unsigned nUnits = dim[0];
+	unsigned nWords = dim[1];
+
+	float num_timescales = nUnits / 2;
+	float log_timescale_increment = std::log(10000.f) / (num_timescales - 1.f);
+
+	std::vector<float> vSS(nUnits * nWords, 0.f);
+	for(unsigned p = 0; p < nWords; ++p) {
+		for(int i = 0; i < num_timescales; ++i) {
+			float v = p * std::exp(i * -log_timescale_increment);
+			vSS[p * nUnits + i] = std::sin(v);
+			vSS[p * nUnits + num_timescales + i] = std::cos(v);
+		}
+	}
+
+	return dynet::input(cg, {nUnits, nWords}, vSS);
+}
+// ---
 
 //--- Encoder Layer
 struct EncoderLayer{
@@ -651,27 +683,6 @@ struct EncoderLayer{
 		return i_encl;
 	}
 };
-
-// --- Sinusoidal Positional Encoding (to be tested)
-dynet::Expression make_sinusoidal_position_encoding(dynet::ComputationGraph &cg, const dynet::Dim& dim, unsigned pos=0){
-	unsigned nUnits = dim[0];
-	unsigned nWords = dim[1];
-
-	float num_timescales = nUnits / 2;
-	float log_timescale_increment = std::log(10000.f) / (num_timescales - 1.f);
-
-	std::vector<float> vSS(nUnits * nWords, 0.f);
-	for(unsigned p = pos; p < nWords + pos; ++p) {
-		for(int i = 0; i < num_timescales; ++i) {
-			float v = p * std::exp(i * -log_timescale_increment);
-			vSS[(p - pos) * nUnits + i] = std::sin(v);
-			vSS[(p - pos) * nUnits + num_timescales + i] = std::cos(v);
-		}
-	}
-
-	return dynet::input(cg, {nUnits, nWords}, vSS);
-}
-// ---
 
 struct Encoder{
 	explicit Encoder(DyNetModel* mod, TransformerConfig& tfc){
@@ -761,7 +772,7 @@ struct Encoder{
 			i_src = i_src + i_pos;
 		}
 		else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
-			dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_src.dim(), 0);
+			dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_src.dim());
 
 			i_src = i_src + i_pos;
 		}
@@ -916,7 +927,7 @@ struct Decoder{
 
 		for (unsigned l = 0; l < tfc._nlayers; l++){
 			_v_dec_layers.push_back(DecoderLayer(mod, tfc));
-		}		
+		}
 
 		_scale_emb = std::sqrt(tfc._num_units);
 
@@ -929,6 +940,10 @@ struct Decoder{
 
 	dynet::LookupParameter _p_embed_t;// source embeddings
 	dynet::LookupParameter _p_embed_pos;// position embeddings
+
+	dynet::Parameter _p_ng_Q;
+	//dynet::Parameter _p_ng_P;
+	dynet::Parameter _p_ng_b;
 
 	std::vector<DecoderLayer> _v_dec_layers;// stack of identical decoder layers
 
@@ -951,8 +966,7 @@ struct Decoder{
 	}
 
 	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
-		, const WordIdSentences& sents/*batch of target sentences*/
-		, unsigned pos)
+		, const WordIdSentences& sents/*batch of target sentences*/)
 	{
 		// compute embeddings			
 		// get max length in a batch
@@ -1003,7 +1017,7 @@ struct Decoder{
 			i_tgt = i_tgt + i_pos;
 		}
 		else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
-			dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_tgt.dim(), pos);
+			dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_tgt.dim());
 
 			i_tgt = i_tgt + i_pos;
 		}
@@ -1045,7 +1059,7 @@ struct Decoder{
 		, const dynet::Expression& i_src_rep)
 	{		
 		// compute source (+ postion) embeddings
-		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, tsents, 0/*for training*/);// ((num_units, Ly), batch_size)
+		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, tsents);// ((num_units, Ly), batch_size)
 			
 		dynet::Expression i_dec_l_out = i_tgt_rep;
 		for (auto dec : _v_dec_layers){
