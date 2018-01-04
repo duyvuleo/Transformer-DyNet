@@ -151,7 +151,7 @@ bool load_data(const variables_map& vm
 	}
 
 	if ("" == vm["src-vocab"].as<string>() 
-		&& "" == vm["trg-vocab"].as<string>()) // if not using external vocabularies
+		&& "" == vm["tgt-vocab"].as<string>()) // if not using external vocabularies
 	{
 		sd.freeze(); // no new word types allowed
 		td.freeze(); // no new word types allowed
@@ -219,7 +219,11 @@ bool load_model_config(const string& model_cfg_file
 	while (getline(inpf, line)){
 		if ("" == line) break;
 
-		// each line has the format: FIXME
+		// each line has the format: 
+		// <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <your-trained-model-path>
+		// e.g.,
+		// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
+		// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
 		cerr << "Loading model " << i+1 << "..." << endl;
 		stringstream ss(line);
 
