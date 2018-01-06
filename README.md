@@ -189,35 +189,42 @@ Finally, we can evaluate the translation result with BLEU:
 	------------------------------------------------------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1 (small model)
-	(2 heads, 2 encoder/decoder layers, 128 units, SGD, beam5)
+	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			-			24.08			12.5148
+		and label smoothing (0.1)			-			25.23			12.2025
 	- Baseline 2 (big model)
-	(8 heads, 6 encoder/decoder layers, 512 units, SGD, beam5)
+	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			22.84			25.64			10.4374
-		ensemble (3 different runs)			24.47			27.11			-
+		and label smoothing (0.1)			23.85			27.00			10.4435
+		ensemble (3 different runs)			-			-			-
 	******************************************************************************************************************
+
+### The Kyoto Free Translation Task (English-Japanese) (updating) 
 
 ### WMT17 English-German (coming soon)
 
+## Limitation
+
+Currently, this impelementation supports single GPU only. It may be a bit slower than available toolkits (e.g., tensor2tensor, marian, sockeye). Using with multi-GPUs will be supported in the future. 
+
+Due to limited computational resources, I only have the results for low- and medium- resource data (IWSLT, KFTT). I will try my best to get some results for large-scale WMT data. 
+
 ## ToDo
 
-1. sinusoid positional encoding testing or re-code using DyNet’s new functions (e.g., cos, sin)
 
-2. implementation for Bahdanau attention type?
+1. implementation for Bahdanau attention type?
 
-3. n-gram features?. To create a deep layer tanh(decoder output * W_o + n-gram embeddings * W_ng) before projection. (refers to https://arxiv.org/abs/1709.08907)
+2. n-gram features?. To create a deep layer tanh(decoder output * W_o + n-gram embeddings * W_ng) before projection. (refers to https://arxiv.org/abs/1709.08907)
 
-4. embeddings->RNN instead of embeddings+pos (a hybrid architecture between AM and transformer?) With GNMT style?
+3. embeddings->RNN instead of embeddings+pos (a hybrid architecture between AM and transformer?) With GNMT style?
 
-5. deep FFN layers (https://arxiv.org/ftp/arxiv/papers/1712/1712.09662.pdf)
+4. deep FFN layers (https://arxiv.org/ftp/arxiv/papers/1712/1712.09662.pdf)
 
-6. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf)
+5. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf)
 
-7. Other new ideas?
+6. Other new ideas?
 
 ## Contacts
 
