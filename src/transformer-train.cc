@@ -288,16 +288,16 @@ bool load_data(const variables_map& vm
 	if (DREPORT >= train_cor.size())
 		cerr << "WARNING: --dreport <num> (" << DREPORT << ")" << " is too large, <= training data size (" << train_cor.size() << ")" << endl;
 
-	if (vm.count("devel")) {
-		cerr << "Reading dev data from " << vm["devel"].as<string>() << "...\n";
-		devel_cor = read_corpus(vm["devel"].as<string>(), &sd, &td, false/*for development*/, 0, r2l_target & !swap);
-	}
-
-	// set up <s>, </s>, <unk> ids
+	// set up <unk> ids
 	sd.set_unk("<unk>");
 	sm._kSRC_UNK = sd.get_unk_id();
 	td.set_unk("<unk>");
 	sm._kTGT_UNK = td.get_unk_id();
+
+	if (vm.count("devel")) {
+		cerr << "Reading dev data from " << vm["devel"].as<string>() << "...\n";
+		devel_cor = read_corpus(vm["devel"].as<string>(), &sd, &td, false/*for development*/, 0, r2l_target & !swap);
+	}
 
 	if (swap) {
 		cerr << "Swapping role of source and target\n";

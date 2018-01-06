@@ -148,6 +148,7 @@ bool load_data(const variables_map& vm
 	if (vm.count("train")){
 		cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";		
 		train_cor = read_corpus(vm["train"].as<string>(), &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+		cerr << endl;
 	}
 
 	if ("" == vm["src-vocab"].as<string>() 
