@@ -173,7 +173,7 @@ Finally, we can evaluate the translation result with BLEU:
 
 ### IWSLT English-Vietnamese 
 
-	* Data for English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 types (vn)), can be obtained from https://github.com/tensorflow/nmt. 
+	* Data for English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 (vn) types), can be obtained from https://github.com/tensorflow/nmt. 
 
 							BLEU (tokenized + case-sensitive)
 								test2012(dev)		test2013(test)		PPLX(dev)
@@ -197,11 +197,42 @@ Finally, we can evaluate the translation result with BLEU:
 	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			23.85			27.00			10.4435
-		ensemble (3 different runs)			-			-			-
+		and label smoothing (0.1)			24.39			27.00			10.0834
+		ensemble (3 different runs)			28.75			28.75			-
 	******************************************************************************************************************
 
 ### The Kyoto Free Translation Task (English-Japanese) (updating) 
+
+	* Data for English --> Japanese (train (clean version): 329882; dev&dev-tune: 2401; test: 1160; vocab (src & trg freq >=3) 51159 (en) & 51626 (ja) types), can be obtained from http://www.phontron.com/kftt/#dataonly. 
+
+							BLEU (tokenized + case-sensitive)
+								dev		test		PPLX(dev)		Comment
+	- NAIST's SMT system at KFTT 2012			21.08		23.15		-
+	(KyTea/GIZA++/Moses/Lader 1.0)
+	- Attentional Model (Arthur et al, 2016)		-		20.86		-			test set size reported: 1169?
+	(https://arxiv.org/pdf/1606.02006.pdf)
+	(4 stacked LSTMs for decoders, hidden dim 800, BiLSTM encoder with input dim 1600, Adam, beam5)
+		w/ translation lexicon 	integration		-		23.20		-
+	------------------------------------------------------------------------------------------------------------------
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
+	- Baseline 1 (small model)
+	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)			-		16.70		18.6736					
+	- Baseline 2 (medium model)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)			-		20.06		15.5922
+			w/ BPE (joint, 25K)			-		21.77		12.4524	
+			w/ BPE (joint, 32K)			
+	- Baseline 3 (medium model)
+	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)			-		-		-	
+	******************************************************************************************************************
 
 ### WMT17 English-German (coming soon)
 
