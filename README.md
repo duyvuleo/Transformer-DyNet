@@ -198,7 +198,7 @@ Finally, we can evaluate the translation result with BLEU:
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
 		and label smoothing (0.1)			24.39			27.00			10.0834
-		ensemble (3 different runs)			28.75			28.75			-
+		ensemble (3 different runs)			25.63			28.75			-
 	******************************************************************************************************************
 
 ### The Kyoto Free Translation Task (English-Japanese) (updating) 
