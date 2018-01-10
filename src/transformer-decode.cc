@@ -240,7 +240,7 @@ bool load_model_config(const string& model_cfg_file
 		   >> tfc._use_label_smoothing >> tfc._label_smoothing_weight
 		   >> tfc._position_encoding >> tfc._max_length
 		   >> tfc._attention_type
-		   >> tfc._ffl_activation_type;
+		   >> tfc._ffl_activation_type
 		   >> tfc._use_hybrid_model;		
 		ss >> model_file;
 		tfc._is_training = false;
