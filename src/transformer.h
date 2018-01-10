@@ -436,8 +436,8 @@ struct MultiHeadAttentionLayer{
 		, const MaskBase& i_mask)
 	{
 		dynet::Expression i_Q = _l_W_Q.apply(cg, i_y, false, true);// ((num_units, Ly), batch_size)
-		dynet::Expression i_K = _l_W_Q.apply(cg, i_x, false, true);// ((num_units, Lx), batch_size)
-		dynet::Expression i_V = _l_W_Q.apply(cg, i_x, false, true);// ((num_units, Lx), batch_size)
+		dynet::Expression i_K = _l_W_K.apply(cg, i_x, false, true);// ((num_units, Lx), batch_size)
+		dynet::Expression i_V = _l_W_V.apply(cg, i_x, false, true);// ((num_units, Lx), batch_size)
 
 		// Note: this will be done in parallel for efficiency!
 		// e.g., utilising pseudo-batching
@@ -1519,6 +1519,4 @@ TransformerConfig& TransformerModel::get_config(){
 //---
 
 }; // namespace transformer
-
-
 
