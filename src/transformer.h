@@ -14,6 +14,7 @@
 #include "dynet/timing.h"
 #include "dynet/dict.h"
 #include "dynet/expr.h"
+#include "dynet/lstm.h"
 
 // STL
 #include <algorithm>
@@ -42,6 +43,7 @@ namespace transformer {
 #define USE_COLWISE_DROPOUT // use col-wise dropout
 #define USE_LECUN_DIST_PARAM_INIT // use Le Cun's uniform distribution for LinearLayer params initialisation (arguably faster convergence)
 #define USE_KEY_QUERY_MASKINGS // use key and query maskings in multi-head attention
+#define USE_LINEAR_TRANSFORMATION_BROADCASTING // use linear transformation broadcasting at final output layer (much faster)
 
 enum ATTENTION_TYPE { DOT_PRODUCT=1, ADDITIVE_MLP=2 };
 enum FFL_ACTIVATION_TYPE { RELU=1, SWISH=2, SWISH_LEARNABLE_BETA=3 };
@@ -103,6 +105,8 @@ struct TransformerConfig{
 
 	unsigned _ffl_activation_type = FFL_ACTIVATION_TYPE::RELU;
 
+	bool _use_hybrid_model = false;
+
 	bool _is_training = true;
 
 	TransformerConfig(){}
@@ -126,6 +130,7 @@ struct TransformerConfig{
 		, SentinelMarkers sm
 		, unsigned attention_type
 		, unsigned ffl_activation_type
+		, bool use_hybrid_model=false
 		, bool is_training=true)
 	{
 		_src_vocab_size = src_vocab_size;
@@ -147,6 +152,7 @@ struct TransformerConfig{
 		_sm = sm;
 		_attention_type = attention_type;
 		_ffl_activation_type = ffl_activation_type;
+		_use_hybrid_model = use_hybrid_model;
 		_is_training = is_training;
 		_use_dropout = _is_training;
 	}
@@ -171,6 +177,7 @@ struct TransformerConfig{
 		_sm = tfc._sm;
 		_attention_type = tfc._attention_type;
 		_ffl_activation_type = tfc._ffl_activation_type;
+		_use_hybrid_model = tfc._use_hybrid_model;
 		_is_training = tfc._is_training;
 		_use_dropout = _is_training;
 	}
@@ -591,7 +598,7 @@ struct MultiHeadAttentionLayer{
 //---
 
 // --- Sinusoidal Positional Encoding
-// Note: doing this way may be a bit slow!
+// Note: think effective way to make this much faster!
 dynet::Expression make_sinusoidal_position_encoding(dynet::ComputationGraph &cg, const dynet::Dim& dim){
 	unsigned nUnits = dim[0];
 	unsigned nWords = dim[1];
@@ -685,11 +692,22 @@ struct EncoderLayer{
 };
 
 struct Encoder{
-	explicit Encoder(DyNetModel* mod, TransformerConfig& tfc){
+	explicit Encoder(DyNetModel* mod, TransformerConfig& tfc)
+	{
 		_p_embed_s = mod->add_lookup_parameters(tfc._src_vocab_size, {tfc._num_units});
 
-		if (tfc._position_encoding == 1){
+		if (!tfc._use_hybrid_model && tfc._position_encoding == 1){
 			_p_embed_pos = mod->add_lookup_parameters(tfc._max_length, {tfc._num_units});
+		}
+
+		if (tfc._use_hybrid_model){
+			_v_p_src_rnns.resize(3);// first twos are forward and backward RNNs; third is forward RNN.
+			for (unsigned l = 0; l < 3; l++){
+				if (l == 2)
+					_v_p_src_rnns[l].reset(new dynet::LSTMBuilder(1, tfc._num_units * 2, tfc._num_units, *mod, true/*w/ layer norm*/));
+				else
+					_v_p_src_rnns[l].reset(new dynet::LSTMBuilder(1, tfc._num_units, tfc._num_units, *mod, true/*w/ layer norm*/));
+			}
 		}
 
 		for (unsigned l = 0; l < tfc._nlayers; l++){
@@ -708,6 +726,9 @@ struct Encoder{
 	dynet::LookupParameter _p_embed_pos;// position embeddings
 	unsigned _position_encoding = 1;
 
+	// hybrid architecture: use LSTM-based RNNs over word embeddings instead of word embeddings + positional encodings
+	std::vector<std::shared_ptr<dynet::LSTMBuilder>> _v_p_src_rnns;
+	
 	std::vector<EncoderLayer> _v_enc_layers;// stack of identical encoder layers
 
 	// --- intermediate variables
@@ -728,55 +749,109 @@ struct Encoder{
 		size_t max_len = sents[0].size();
 		for(size_t i = 1; i < sents.size(); i++) max_len = std::max(max_len, sents[i].size());
 		_batch_slen = max_len;
-	
-		// source embeddings
+
 		std::vector<dynet::Expression> source_embeddings;   
 		std::vector<unsigned> words(sents.size());
 		std::vector<std::vector<float>> v_seq_masks(sents.size());
-		for (unsigned l = 0; l < max_len; l++){
-			for (unsigned bs = 0; bs < sents.size(); ++bs){
-				//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;		
-				if (l < sents[bs].size()){ 
-					words[bs] = (unsigned)sents[bs][l];
-					stats._words_src++; 
-					if (sents[bs][l] == _p_tfc->_sm._kSRC_UNK) stats._words_src_unk++;
-					v_seq_masks[bs].push_back(0.f);// padding position
-				}
-				else{
-					words[bs] = (unsigned)_p_tfc->_sm._kSRC_EOS;
-					v_seq_masks[bs].push_back(1.f);// padding position
-				}
-			}
+		dynet::Expression i_src;
+		if (_p_tfc->_use_hybrid_model){
+			// first 2 layers (forward and backward)
+			// run a RNN backward and forward over the source sentence
+			// and stack the top-level hidden states from each model 
+			// and feed them into yet another forward RNN as 
+			// the representation at each position
+			// inspired from Google NMT system (https://arxiv.org/pdf/1609.08144.pdf)
 
-			source_embeddings.push_back(dynet::lookup(cg, _p_embed_s, words));
-		}
-		dynet::Expression i_src = dynet::concatenate_cols(source_embeddings);// ((num_units, Lx), batch_size)
-
-		i_src = i_src * _scale_emb;// scaled embeddings
-
-		// + postional encoding
-		if (_p_tfc->_position_encoding == 1){// learned positional embedding 
-			std::vector<dynet::Expression> pos_embeddings;  
-			std::vector<unsigned> positions(sents.size());
+			// first RNN (forward)
+			std::vector<Expression> src_fwd(max_len);
+			_v_p_src_rnns[0]->new_graph(cg);
+			_v_p_src_rnns[0]->start_new_sequence();
 			for (unsigned l = 0; l < max_len; l++){
 				for (unsigned bs = 0; bs < sents.size(); ++bs){
-					if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to (_p_tfc._max_length - 1).
-					else
-						positions[bs] = l;
+					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;		
+					if (l < sents[bs].size()){ 
+						words[bs] = (unsigned)sents[bs][l];
+						stats._words_src++; 
+						if (sents[bs][l] == _p_tfc->_sm._kSRC_UNK) stats._words_src_unk++;
+						v_seq_masks[bs].push_back(0.f);// padding position
+					}
+					else{
+						words[bs] = (unsigned)_p_tfc->_sm._kSRC_EOS;
+						v_seq_masks[bs].push_back(1.f);// padding position
+					}
+				}
+
+				src_fwd[l] = _v_p_src_rnns[0]->add_input(dynet::lookup(cg, _p_embed_s, words));
 			}
 
-				pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+			// second RNN (backward)
+			std::vector<Expression> src_bwd(max_len);
+			_v_p_src_rnns[1]->new_graph(cg);
+			_v_p_src_rnns[1]->start_new_sequence();
+			for (int l = max_len - 1; l >= 0; --l) { // int instead of unsigned for negative value of l
+				// offset by one position to the right, to catch </s> and generally
+				// not duplicate the w_t already captured in src_fwd[t]
+				for (unsigned bs = 0; bs < sents.size(); ++bs) 
+					words[bs] = ((unsigned)l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;
+				src_bwd[l] = _v_p_src_rnns[1]->add_input(dynet::lookup(cg, _p_embed_s, words));
 			}
-			dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// ((num_units, Lx), batch_size)
 
-			i_src = i_src + i_pos;
+			// third RNN (yet another forward)
+			_v_p_src_rnns[2]->new_graph(cg);
+			_v_p_src_rnns[2]->start_new_sequence();
+			for (unsigned l = 0; l < max_len; l++){
+				source_embeddings.push_back(_v_p_src_rnns[2]->add_input(dynet::concatenate(std::vector<dynet::Expression>({src_fwd[l], src_bwd[l]}))));
+			}
+			
+			i_src = dynet::concatenate_cols(source_embeddings);
 		}
-		else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
-			dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_src.dim());
+		else{
+			// source embeddings
+			for (unsigned l = 0; l < max_len; l++){
+				for (unsigned bs = 0; bs < sents.size(); ++bs){
+					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;		
+					if (l < sents[bs].size()){ 
+						words[bs] = (unsigned)sents[bs][l];
+						stats._words_src++; 
+						if (sents[bs][l] == _p_tfc->_sm._kSRC_UNK) stats._words_src_unk++;
+						v_seq_masks[bs].push_back(0.f);// padding position
+					}
+					else{
+						words[bs] = (unsigned)_p_tfc->_sm._kSRC_EOS;
+						v_seq_masks[bs].push_back(1.f);// padding position
+					}
+				}
 
-			i_src = i_src + i_pos;
-		}
-		else assert("Unknown positional encoding type!");	
+				source_embeddings.push_back(dynet::lookup(cg, _p_embed_s, words));
+			}
+			i_src = dynet::concatenate_cols(source_embeddings);// ((num_units, Lx), batch_size)
+
+			i_src = i_src * _scale_emb;// scaled embeddings
+
+			// + postional encoding
+			if (_p_tfc->_position_encoding == 1){// learned positional embedding 
+				std::vector<dynet::Expression> pos_embeddings;  
+				std::vector<unsigned> positions(sents.size());
+				for (unsigned l = 0; l < max_len; l++){
+					for (unsigned bs = 0; bs < sents.size(); ++bs){
+						if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to (_p_tfc._max_length - 1).
+						else
+							positions[bs] = l;
+				}
+
+					pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+				}
+				dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// ((num_units, Lx), batch_size)
+
+				i_src = i_src + i_pos;
+			}
+			else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
+				dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_src.dim());
+
+				i_src = i_src + i_pos;
+			}
+			else assert("Unknown positional encoding type!");
+		}	
 
 		// dropout to the sums of the embeddings and the positional encodings
 		if (_p_tfc->_use_dropout && _p_tfc->_encoder_emb_dropout_rate > 0.f)
@@ -806,11 +881,6 @@ struct Encoder{
 		for (auto enc : _v_enc_layers){
 			// stacking approach
 			i_enc_l_out = enc.build_graph(cg, i_enc_l_out, _self_mask);// each position in the encoder can attend to all positions in the previous layer of the encoder.
-			
-			// FIXME: should we have residual connection here?
-			// e.g., 
-			//dynet::Expression i_enc_l = enc.build_graph(cg, i_enc_l_out);
-			//i_enc_l_out = i_enc_l_out + i_enc_l;
 		}
 
 		return i_enc_l_out;// ((num_units, Lx), batch_size)
@@ -921,12 +991,16 @@ struct Decoder{
 	explicit Decoder(DyNetModel* mod, TransformerConfig& tfc, Encoder* p_encoder){
 		_p_embed_t = mod->add_lookup_parameters(tfc._tgt_vocab_size, {tfc._num_units});
 
-		if (tfc._position_encoding == 1){
+		if (!tfc._use_hybrid_model && tfc._position_encoding == 1){
 			_p_embed_pos = mod->add_lookup_parameters(tfc._max_length, {tfc._num_units});
 		}
 
 		for (unsigned l = 0; l < tfc._nlayers; l++){
 			_v_dec_layers.push_back(DecoderLayer(mod, tfc));
+		}
+
+		if (tfc._use_hybrid_model){
+			_p_tgt_rnn.reset(new dynet::LSTMBuilder(1/*shallow*/, tfc._num_units, tfc._num_units, *mod, true/*w/ layer norm*/));
 		}
 
 		_scale_emb = std::sqrt(tfc._num_units);
@@ -941,9 +1015,8 @@ struct Decoder{
 	dynet::LookupParameter _p_embed_t;// source embeddings
 	dynet::LookupParameter _p_embed_pos;// position embeddings
 
-	dynet::Parameter _p_ng_Q;
-	//dynet::Parameter _p_ng_P;
-	dynet::Parameter _p_ng_b;
+	// hybrid architecture: use LSTM-based RNN over word embeddings instead of word embeddings + positional encodings
+	std::shared_ptr<dynet::LSTMBuilder> _p_tgt_rnn;
 
 	std::vector<DecoderLayer> _v_dec_layers;// stack of identical decoder layers
 
@@ -974,54 +1047,79 @@ struct Decoder{
 		for(size_t i = 1; i < sents.size(); i++) max_len = std::max(max_len, sents[i].size());
 		_batch_tlen = max_len;
 
-		// target embeddings
 		std::vector<dynet::Expression> target_embeddings;   
 		std::vector<unsigned> words(sents.size());
 		std::vector<std::vector<float>> v_seq_masks(sents.size());
-		for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
-			for (unsigned bs = 0; bs < sents.size(); ++bs)
-			{
-				//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
-				if (l < sents[bs].size()){
-					words[bs] = (unsigned)sents[bs][l];
-					v_seq_masks[bs].push_back(0.f);// padding position
-				}
-				else{
-					words[bs] = (unsigned)_p_tfc->_sm._kTGT_EOS;
-					v_seq_masks[bs].push_back(1.f);// padding position
-				}
-			}
-
-			target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));
-		}
-		dynet::Expression i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
-
-		// scale
-		i_tgt = i_tgt * _scale_emb;// scaled embeddings
-
-		// + postional encoding
-		if (_p_tfc->_position_encoding == 1){// learned positional embedding 
-			std::vector<dynet::Expression> pos_embeddings;  
-			std::vector<unsigned> positions(sents.size());
+		dynet::Expression i_tgt;
+		if (_p_tfc->_use_hybrid_model){
+			// target embeddings via RNN
+			_p_tgt_rnn->new_graph(cg);
+			_p_tgt_rnn->start_new_sequence();
 			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
-				for (unsigned bs = 0; bs < sents.size(); ++bs){
-					if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
-					else
-						positions[bs] = l;
+				for (unsigned bs = 0; bs < sents.size(); ++bs)
+				{
+					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
+					if (l < sents[bs].size()){
+						words[bs] = (unsigned)sents[bs][l];
+						v_seq_masks[bs].push_back(0.f);// padding position
+					}
+					else{
+						words[bs] = (unsigned)_p_tfc->_sm._kTGT_EOS;
+						v_seq_masks[bs].push_back(1.f);// padding position
+					}
+				}
+
+				target_embeddings.push_back(_p_tgt_rnn->add_input(dynet::lookup(cg, _p_embed_t, words)));
 			}
+			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
+		}
+		else{
+			// target embeddings
+			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+				for (unsigned bs = 0; bs < sents.size(); ++bs)
+				{
+					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
+					if (l < sents[bs].size()){
+						words[bs] = (unsigned)sents[bs][l];
+						v_seq_masks[bs].push_back(0.f);// padding position
+					}
+					else{
+						words[bs] = (unsigned)_p_tfc->_sm._kTGT_EOS;
+						v_seq_masks[bs].push_back(1.f);// padding position
+					}
+				}
 
-				pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+				target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));
 			}
-			dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
+			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
 
-			i_tgt = i_tgt + i_pos;
-		}
-		else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
-			dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_tgt.dim());
+			// scale
+			i_tgt = i_tgt * _scale_emb;// scaled embeddings
 
-			i_tgt = i_tgt + i_pos;
+			// + postional encoding
+			if (_p_tfc->_position_encoding == 1){// learned positional embedding 
+				std::vector<dynet::Expression> pos_embeddings;  
+				std::vector<unsigned> positions(sents.size());
+				for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+					for (unsigned bs = 0; bs < sents.size(); ++bs){
+						if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
+						else
+							positions[bs] = l;
+				}
+
+					pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+				}
+				dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
+
+				i_tgt = i_tgt + i_pos;
+			}
+			else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
+				dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_tgt.dim());
+
+				i_tgt = i_tgt + i_pos;
+			}
+			else assert("Unknown positional encoding type!");
 		}
-		else assert("Unknown positional encoding type!");
 
 		// dropout to the sums of the embeddings and the positional encodings
 		if (_p_tfc->_use_dropout && _p_tfc->_decoder_emb_dropout_rate > 0.f)
@@ -1065,11 +1163,6 @@ struct Decoder{
 		for (auto dec : _v_dec_layers){
 			// stacking approach
 			i_dec_l_out = dec.build_graph(cg, i_src_rep, i_dec_l_out, _self_mask, _src_mask);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
-			
-			// FIXME: should we have residual connection here?
-			// e.g., 
-			//dynet::Expression i_dec_l = dec.build_graph(cg, i_src, i_dec_l_out);
-			//i_dec_l_out = i_dec_l_out + i_dec_l;
 		}
 	
 		return i_dec_l_out;// ((num_units, Ly), batch_size)
@@ -1211,7 +1304,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 
 // both of the followings work well!
-#if 0 
+#ifndef USE_LINEAR_TRANSFORMATION_BROADCASTING 
 	// Note: can be more efficient if using direct computing for i_tgt_ctx (e.g., use affine_transform)
 	std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;
@@ -1519,4 +1612,6 @@ TransformerConfig& TransformerModel::get_config(){
 //---
 
 }; // namespace transformer
+
+
 

@@ -113,6 +113,8 @@ int main(int argc, char** argv) {
 		("position-encoding", value<unsigned>()->default_value(1), "impose position encoding (0: none; 1: learned positional embedding; 2: sinusoid encoding); 1 by default")
 		("max-pos-seq-len", value<unsigned>()->default_value(300), "specify the maximum word-based sentence length (either source or target) for learned positional encoding; 300 by default")
 		//-----------------------------------------
+		("use-hybrid-model", "use hybrid model in which RNN encodings of source and target are used in place of word embeddings and positional encodings (a hybrid architecture between AM and Transformer?) partially adopted from GNMT style; no by default")
+		//-----------------------------------------
 		("attention-type", value<unsigned>()->default_value(1), "impose attention type (1: Luong attention type; 2: Bahdanau attention type); 1 by default")
 		//-----------------------------------------
 		("epochs,e", value<unsigned>()->default_value(20), "maximum number of training epochs")
@@ -213,7 +215,8 @@ int main(int argc, char** argv) {
 		, vm["max-pos-seq-len"].as<unsigned>()
 		, sm
 		, vm["attention-type"].as<unsigned>()
-		, vm["ff-activation-type"].as<unsigned>());
+		, vm["ff-activation-type"].as<unsigned>()
+		, vm.count("use-hybrid-model"));
 
 	// initialise transformer object
 	transformer::TransformerModel tf(tfc, sd, td);
