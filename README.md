@@ -1,5 +1,7 @@
 # An Implementation of [Transformer](http://papers.nips.cc/paper/7181-attention-is-all-you-need) in [DyNet](https://github.com/clab/dynet)
 
+This project aims to develop a simplified, easy-to-use implementation of Transformer architecture. However, it still has all necessary functionalities to build a complete sequence to sequence system. 
+
 ### Dependencies
 
 Before compiling dynet, you need:
@@ -154,16 +156,16 @@ Decoding with n-best list will be supported very soon!
 
 The decoding configuration file (e.g., --model-cfg experiments/models/iwslt-envi/model-small-dropout.cfg) has the following format:
 
-    <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <your-trained-model-path>
+    <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-hybrid-model> <your-trained-model-path>
 
 For example, 
 
-    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
     
 It's worth noting that we can have multiple models for ensemble decoding, i.e., 
 
-    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
-    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
 
 Finally, we can evaluate the translation result with BLEU:
 
@@ -171,7 +173,9 @@ Finally, we can evaluate the translation result with BLEU:
 
 ## Benchmarking
 
-### IWSLT English-Vietnamese 
+### Machine Translation
+
+#### IWSLT English-Vietnamese 
 
 	* Data for English --> Vietnamese (train: 133141; dev: 1553; test: 1268; vocab 17191 (en) & 7709 (vn) types), can be obtained from https://github.com/tensorflow/nmt. 
 
@@ -187,29 +191,40 @@ Finally, we can evaluate the translation result with BLEU:
 	(1 bi-LSTM encoder, 2 LSTM decoders, 512 hidden/embedding dim, 512 attention dim, SGD, beam5)
 		w/ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963
 	------------------------------------------------------------------------------------------------------------------
+	Sockeye (Transformer)					?			?			?
+	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, Adam, beam5)
+	------------------------------------------------------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
-	- Baseline 1 (small model)
+	- Baseline 1a (small model)
 	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			-			25.23			12.2025
-	- Baseline 2 (big model)
-	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		and label smoothing (0.1)			-			27.50			10.5622	
+	- Baseline 1b (small model)
+	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			24.39			27.00			10.0834
-		ensemble (3 different runs)			25.63			28.75			-
+		and label smoothing (0.1)			-			27.52			9.98913					
+	- Baseline 2 (medium model)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)			-			27.41			9.88427
+	- Ensemble (1 small and 1 medium models)		26.10			28.79			-
+	- Ensemble (2 small and 2 medium models)		26.91			29.53			-
 	******************************************************************************************************************
 
-### The Kyoto Free Translation Task (English-Japanese) (updating) 
+	Note/Comment: SOTA results on the task with either single or ensemble models.
+
+#### The Kyoto Free Translation Task (English-Japanese) (updating) 
 
 	* Data for English --> Japanese (train (clean version): 329882; dev&dev-tune: 2401; test: 1160; vocab (src & trg freq >=3) 51159 (en) & 51626 (ja) types), can be obtained from http://www.phontron.com/kftt/#dataonly. 
 
 							BLEU (tokenized + case-sensitive)
-								dev		test		PPLX(dev)		Comment
+								dev		test		PPLX(dev&dev-tune)		Comment
 	- NAIST's SMT system at KFTT 2012			21.08		23.15		-
 	(KyTea/GIZA++/Moses/Lader 1.0)
-	- Attentional Model (Arthur et al, 2016)		-		20.86		-			test set size reported: 1169?
+	- Attentional Model (Arthur et al, 2016)		-		20.86		-				test set size reported: 1169?
 	(https://arxiv.org/pdf/1606.02006.pdf)
 	(4 stacked LSTMs for decoders, hidden dim 800, BiLSTM encoder with input dim 1600, Adam, beam5)
 		w/ translation lexicon 	integration		-		23.20		-
@@ -219,41 +234,83 @@ Finally, we can evaluate the translation result with BLEU:
 	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			-		16.70		18.6736					
+		and label smoothing (0.1)			-		20.77		15.0154					
 	- Baseline 2 (medium model)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			-		20.06		15.5922
-			w/ BPE (joint, 25K)			-		21.77		12.4524	
-			w/ BPE (joint, 32K)			
-	- Baseline 3 (medium model)
-	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
-		w/ dropout (0.1)					
-		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			-		-		-	
+		and label smoothing (0.1)			-		23.53		13.2851	
+	- Baseline 2* (same config. with baseline 2)
+		w/ BPE (joint, 32K)				-		25.22		10.9057
+		ensemble (2 different runs)			-		-		-		
 	******************************************************************************************************************
 
-### WMT17 English-German (coming soon)
+	Note/Comment: Single transformer model (with medium network) can outperform the best SMT (with preordering in Japanese) as well as the NMT with translation lexicon integration. Also, just simply applying joint byte-pair encoding (BPE) on both English and Japanese, we can obtain much better SOTA result on the task (25.22 vs 23.53 vs. 23.20). 
+
+#### WMT14 and WMT17 English-German (coming soon)
+
+## Abstractive Summarisation (comming soon)
+
+## Sequence-to-Sequence based Dependency Parsing (English) (updating)
+
+	* Experiments with Penn Tree Bank WSJ corpus (train: sec2-21; dev: sec22; test: sec23)
+
+	Method							UAS		LAS		#<SHIFTs	#>SHIFTs	#ROOT_ERRORs		Note
+
+	-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	(Methods based on transition-based neural networks)
+
+	(Chen and Manning, 2014)				91.8		89.6		-		-		-
+
+	StackedLSTM (Dyer et al., 2016)				93.1		90.9		-		-		-
+
+	GloNorm (Andor et al., 2016)
+		- beam 1					93.17		91.18		-		-		-
+		- beam 32					94.61		92.79		-		-		-			SOTA (best reported results)
+	-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	(Methods based on neural sequence to sequence learning)
+
+	seq2seq (Wiseman et al., 2016)
+		- beam 5					88.53		84.16		-		-		-
+	seq2seq + BSO (Wiseman et al., 2016)
+		- beam 5					91.00		87.18		-		-		-
+	seq2seq + ConBSO (Wiseman et al., 2016)
+		- beam 5					91.25		86.92		-		-		-
+
+	*********
+	Mantidae (https://github.com/duyvuleo/Mantidae)
+	(Configuration: 1 LSTM encoder layer, 2 LSTM decoder layers, bidirectional, 512 input/hidden dims, 256 attention dim, source word frequency cutoff 2, case-sensitive in source, actions: SHIFT + LEFT_ARCs + RIGHT_ARCs with 79 types, w/ incremental training using decoder dropout 0.1 (Gal et al., 2016), SGD)
+		- beam 5					91.02		88.55		7		5		3
+
+	*********
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
+	- Baseline 1 (small model)
+	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)							
+	- Baseline 2 (medium model)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)			
+
+	-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 ## Limitation
 
 Currently, this impelementation supports single GPU only. It may be a bit slower than available toolkits (e.g., tensor2tensor, marian, sockeye). Using with multi-GPUs will be supported in the future. 
 
-Due to limited computational resources, I only have the results for low- and medium- resource data (IWSLT, KFTT). I will try my best to get some results for large-scale WMT data. 
+Due to limited computational resources, I only have the results for low- and medium- resource data (IWSLT, KFTT, ...). I will try my best to get some results for large-scale WMT data. 
 
 ## ToDo
 
 
 1. implementation for Bahdanau attention type?
 
-2. n-gram features?. To create a deep layer tanh(decoder output * W_o + n-gram embeddings * W_ng) before projection. (refers to https://arxiv.org/abs/1709.08907)
+2. deep FFN layers (https://arxiv.org/ftp/arxiv/papers/1712/1712.09662.pdf)
 
-3. embeddings->RNN instead of embeddings+pos (a hybrid architecture between AM and transformer?) With GNMT style?
-
-4. deep FFN layers (https://arxiv.org/ftp/arxiv/papers/1712/1712.09662.pdf)
-
-5. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf)
+3. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf)
 
 6. Other new ideas?
 
