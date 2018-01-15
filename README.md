@@ -241,8 +241,8 @@ Finally, we can evaluate the translation result with BLEU:
 		(source and target embeddings, sub-layers (attention + feedforward))
 		and label smoothing (0.1)			-		23.53		13.2851	
 	- Baseline 2* (same config. with baseline 2)
-		w/ BPE (joint, 32K)				-		25.22		10.9057
-		ensemble (2 different runs)			-		-		-		
+		w/ BPE (joint, 32K)				-		25.46		10.8828
+		ensemble (2 different runs)			-		26.55		-		
 	******************************************************************************************************************
 
 	Note/Comment: Single transformer model (with medium network) can outperform the best SMT (with preordering in Japanese) as well as the NMT with translation lexicon integration. Also, just simply applying joint byte-pair encoding (BPE) on both English and Japanese, we can obtain much better SOTA result on the task (25.22 vs 23.53 vs. 23.20). 
