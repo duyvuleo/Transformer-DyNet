@@ -218,9 +218,9 @@ Finally, we can evaluate the translation result with BLEU:
 
 #### The Kyoto Free Translation Task (English-Japanese) (updating) 
 
-	* Data for English --> Japanese (train (clean version): 329882; dev&dev-tune: 2401; test: 1160; vocab (src & trg freq >=3) 51159 (en) & 51626 (ja) types), can be obtained from http://www.phontron.com/kftt/#dataonly. 
+	* Data for English --> Japanese (train (clean version): 329882; dev&dev-tune: 2401; test: 1160; vocab (src & trg freq >=3, lowercased) 51159 (en) & 51626 (ja) types), can be obtained from http://www.phontron.com/kftt/#dataonly. 
 
-							BLEU (tokenized + case-sensitive)
+							BLEU (tokenized + case-insensitive)
 								dev		test		PPLX(dev&dev-tune)		Comment
 	- NAIST's SMT system at KFTT 2012			21.08		23.15		-
 	(KyTea/GIZA++/Moses/Lader 1.0)
@@ -299,7 +299,7 @@ Finally, we can evaluate the translation result with BLEU:
 
 ## Limitation
 
-Currently, this impelementation supports single GPU only. It may be a bit slower than available toolkits (e.g., tensor2tensor, marian, sockeye). Using with multi-GPUs will be supported in the future. 
+Currently, this implementation supports single GPU only. It may be a bit slower than available toolkits (e.g., tensor2tensor, marian, sockeye). Using with multi-GPUs will be supported in the future. 
 
 Due to limited computational resources, I only have the results for low- and medium- resource data (IWSLT, KFTT, ...). I will try my best to get some results for large-scale WMT data. 
 
