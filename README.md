@@ -156,16 +156,16 @@ Decoding with n-best list will be supported very soon!
 
 The decoding configuration file (e.g., --model-cfg experiments/models/iwslt-envi/model-small-dropout.cfg) has the following format:
 
-    <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-hybrid-model> <your-trained-model-path>
+    <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-shared-embeddings> <use-hybrid-model> <your-trained-model-path>
 
 For example, 
 
-    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
     
 It's worth noting that we can have multiple models for ensemble decoding, i.e., 
 
-    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
-    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
 
 Finally, we can evaluate the translation result with BLEU:
 

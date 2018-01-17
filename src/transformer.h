@@ -105,7 +105,9 @@ struct TransformerConfig{
 
 	unsigned _ffl_activation_type = FFL_ACTIVATION_TYPE::RELU;
 
-	bool _use_hybrid_model = false;
+	bool _use_hybrid_model = false;// RNN encoding over word embeddings instead of word embeddings + positional encoding
+
+	bool _shared_embeddings = false;// use shared word embeddings between source and target
 
 	bool _is_training = true;
 
@@ -130,6 +132,7 @@ struct TransformerConfig{
 		, SentinelMarkers sm
 		, unsigned attention_type
 		, unsigned ffl_activation_type
+		, bool shared_embeddings=false
 		, bool use_hybrid_model=false
 		, bool is_training=true)
 	{
@@ -152,6 +155,7 @@ struct TransformerConfig{
 		_sm = sm;
 		_attention_type = attention_type;
 		_ffl_activation_type = ffl_activation_type;
+		_shared_embeddings = shared_embeddings;
 		_use_hybrid_model = use_hybrid_model;
 		_is_training = is_training;
 		_use_dropout = _is_training;
@@ -177,6 +181,7 @@ struct TransformerConfig{
 		_sm = tfc._sm;
 		_attention_type = tfc._attention_type;
 		_ffl_activation_type = tfc._ffl_activation_type;
+		_shared_embeddings = tfc._shared_embeddings;
 		_use_hybrid_model = tfc._use_hybrid_model;
 		_is_training = tfc._is_training;
 		_use_dropout = _is_training;
@@ -259,23 +264,26 @@ struct LinearLayer{
 
 //--- Highway Network Layer
 /* Highway Network (cf. http://arxiv.org/abs/1505.00387).
-    t = sigmoid(Wy + b)
-    z = t * g(Wy + b) + (1 - t) * y
-    where g is nonlinearity, t is transform gate, and (1 - t) is carry gate.
+    t = sigmoid(Wx + b)
+    z = t * g(x) + (1 - t) * x
+    where g is nonlinearity over x (e.g., a block of feedforward networks), t is transform gate, and (1 - t) is carry gate.
 */
 struct HighwayNetworkLayer{
-	explicit HighwayNetworkLayer(DyNetModel* mod, unsigned input_dim, unsigned output_dim, bool have_bias=true)
+	explicit HighwayNetworkLayer(DyNetModel* mod, unsigned input_dim, bool have_bias=true)
 #ifdef USE_LECUN_DIST_PARAM_INIT
-		: _l_layer(mod, input_dim, output_dim, have_bias, true)
+		: _l_layer(mod, input_dim, input_dim, have_bias, true)
 #else
-		: _l_layer(mod, input_dim, output_dim, have_bias)
+		: _l_layer(mod, input_dim, input_dim, have_bias)
 #endif
 	{}
 
-	dynet::Expression apply(dynet::ComputationGraph& cg, const dynet::Expression& i_x, bool reconstruct_shape=true, bool time_distributed=false){
+	dynet::Expression apply(dynet::ComputationGraph& cg
+		, const dynet::Expression& i_x, const dynet::Expression& i_g_x
+		, bool reconstruct_shape=true, bool time_distributed=false)
+	{
 		dynet::Expression i_l = _l_layer.apply(cg, i_x, reconstruct_shape, time_distributed);
 		dynet::Expression i_t = dynet::logistic(i_l);
-		dynet::Expression i_z = dynet::cmult(i_t, dynet::rectify(i_l)) + dynet::cmult(1.f - i_t, i_x);
+		dynet::Expression i_z = dynet::cmult(i_t, i_g_x) + dynet::cmult(1.f - i_t, i_x);
 		return i_z;
 	}
 
@@ -426,7 +434,6 @@ struct MultiHeadAttentionLayer{
 	LinearLayer _l_W_Q;
 	LinearLayer _l_W_K;
 	LinearLayer _l_W_V;
-	//HighwayNetworkLayer _l_W_O;// finishing linear layer (probably use Highway Network instead)
 	LinearLayer _l_W_O;// finishing linear layer
 
 	// attention scale factor
@@ -988,8 +995,12 @@ struct DecoderLayer{
 };
 
 struct Decoder{
-	explicit Decoder(DyNetModel* mod, TransformerConfig& tfc, Encoder* p_encoder){
-		_p_embed_t = mod->add_lookup_parameters(tfc._tgt_vocab_size, {tfc._num_units});
+	explicit Decoder(DyNetModel* mod, TransformerConfig& tfc, Encoder* p_encoder)
+	{
+		if (tfc._shared_embeddings)
+			_p_embed_t = p_encoder->_p_embed_s;// use shared embeddings with source
+		else
+			_p_embed_t = mod->add_lookup_parameters(tfc._tgt_vocab_size, {tfc._num_units});
 
 		if (!tfc._use_hybrid_model && tfc._position_encoding == 1){
 			_p_embed_pos = mod->add_lookup_parameters(tfc._max_length, {tfc._num_units});

@@ -216,6 +216,7 @@ int main(int argc, char** argv) {
 		, sm
 		, vm["attention-type"].as<unsigned>()
 		, vm["ff-activation-type"].as<unsigned>()
+		, vm.count("shared-embeddings")
 		, vm.count("use-hybrid-model"));
 
 	// initialise transformer object
