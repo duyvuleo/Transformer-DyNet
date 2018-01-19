@@ -156,6 +156,7 @@ struct TransformerConfig{
 		_attention_type = attention_type;
 		_ffl_activation_type = ffl_activation_type;
 		_shared_embeddings = shared_embeddings;
+		if (_shared_embeddings) _tgt_vocab_size = _src_vocab_size;
 		_use_hybrid_model = use_hybrid_model;
 		_is_training = is_training;
 		_use_dropout = _is_training;
@@ -329,6 +330,7 @@ struct FeedForwardLayer{
 		dynet::Expression i_outer = _l_outer.apply(cg, i_inner, false, true);// relu(x * W1 + b1) * W2 + b2
 
 		// dropout for feed-forward layer
+		// Note: this dropout can be moved to after RELU activation and before outer linear transformation (e.g., refers to Sockeye?).
 		if (_p_tfc->_use_dropout && _p_tfc->_ff_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
 			i_outer = dynet::dropout_dim(i_outer, 1/*col-major*/, _p_tfc->_ff_dropout_rate);
@@ -436,6 +438,10 @@ struct MultiHeadAttentionLayer{
 	LinearLayer _l_W_V;
 	LinearLayer _l_W_O;// finishing linear layer
 
+	// multi-head soft alignments 
+	bool _use_soft_alignments = false;// will be necessary if soft alignments are used for visualisation or incorporation of additional regularisation techniques
+	std::vector<dynet::Expression> _v_aligns;
+
 	// attention scale factor
 	float _att_scale = 0.f;
 
@@ -443,6 +449,11 @@ struct MultiHeadAttentionLayer{
 
 	// transformer config pointer
 	TransformerConfig* _p_tfc = nullptr;
+
+	void get_alignments(const dynet::Expression& i_aligns){
+		_v_aligns.clear();
+		_v_aligns = split_batch(i_aligns, _p_tfc->_nheads);// _v_aligns will have nheads of ((Lx, Ly),  batch_size)) expressions
+	}
 
 	dynet::Expression build_graph(dynet::ComputationGraph& cg
 		, const dynet::Expression& i_y/*queries*/
@@ -473,12 +484,14 @@ struct MultiHeadAttentionLayer{
 				i_batch_alphas = dynet::softmax(i_batch_alphas + i_mask._i_mask_fb);// ((Lx, Ly),  batch_size*nheads)) (normalised, col-major)
 			else
 				i_batch_alphas = dynet::softmax(i_batch_alphas);// ((Lx, Ly),  batch_size*nheads)) (normalised, col-major)
-			// FIXME: save the soft alignment in i_batch_alphas if necessary!
 			
 #ifdef USE_KEY_QUERY_MASKINGS
 			// query masking
-			i_batch_alphas = dynet::cmult(i_batch_alphas, i_mask._i_mask_pp_q);
+			i_batch_alphas = dynet::cmult(i_batch_alphas, i_mask._i_mask_pp_q);// masked soft alignments
 #endif
+
+			// save the soft alignment in i_batch_alphas if necessary!
+			if (_use_soft_alignments) get_alignments(i_batch_alphas);
 					
 			// attention dropout (col-major or full?)
 			if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
@@ -532,6 +545,10 @@ struct MultiHeadAttentionLayer{
 	std::vector<dynet::Parameter> _p_WV;
 	dynet::Parameter _p_WO;
 
+	// multi-head soft alignments 
+	bool _use_soft_alignments = false;// will be necessary if soft alignments are used for visualisation or incorporation of additional regularisation techniques
+	std::vector<dynet::Expression> _v_aligns;
+
 	// attention scale factor
 	float _att_scale = 0.f;
 
@@ -545,6 +562,8 @@ struct MultiHeadAttentionLayer{
 		, const dynet::Expression& i_x/*keys and values. i_x is equal to i_y if using self_attention*/
 		, const MaskBase& i_mask)
 	{
+		_v_aligns.clear();
+		
 		// Note: this should be done in parallel for efficiency!
 		// e.g., utilising pseudo-batching?	
 		std::vector<dynet::Expression> v_atts(_p_tfc->_nheads);
@@ -567,12 +586,14 @@ struct MultiHeadAttentionLayer{
 					i_alpha = dynet::softmax(i_alpha_pre + i_mask._i_mask_fb);// ((Lx, Ly), batch_size) (normalised, col-major)
 				else
 					i_alpha = dynet::softmax(i_alpha_pre);// ((Lx, Ly), batch_size) (normalised, col-major)
-				// FIXME: save the soft alignment in i_alpha if necessary!
 
 #ifdef USE_KEY_QUERY_MASKINGS
 				// query masking
-				i_alpha = dynet::cmult(i_alpha, i_mask._i_mask_pp_q));
+				i_alpha = dynet::cmult(i_alpha, i_mask._i_mask_pp_q));// masked soft alignments
 #endif
+
+				// save the soft alignment in i_alpha if necessary!
+				if (_use_soft_alignments) _v_aligns.push_back(i_alpha);
 						
 				// attention dropout (col-major or full?)
 				if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)

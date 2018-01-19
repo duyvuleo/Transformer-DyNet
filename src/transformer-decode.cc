@@ -73,6 +73,9 @@ int main(int argc, char** argv) {
 		("src-vocab", value<string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
 		("tgt-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")	
 		//-----------------------------------------
+		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
+		//-----------------------------------------
+		//-----------------------------------------
 		("test,T", value<string>(), "file containing testing sentences.")
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")
 		//-----------------------------------------
@@ -158,8 +161,11 @@ bool load_data(const variables_map& vm
 	bool r2l_target = vm.count("r2l_target");
 
 	if (vm.count("train")){
-		cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";		
-		train_cor = read_corpus(vm["train"].as<string>(), &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+		cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";	
+		if (vm.count("shared-embeddings"))
+			train_cor = read_corpus(vm["train"].as<string>(), &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+		else 
+			train_cor = read_corpus(vm["train"].as<string>(), &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 		cerr << endl;
 	}
 
@@ -195,10 +201,12 @@ bool load_data(const variables_map& vm
 
 	if (swap) {
 		cerr << "Swapping role of source and target\n";
-		std::swap(sd, td);
-		std::swap(sm._kSRC_SOS, sm._kTGT_SOS);
-		std::swap(sm._kSRC_EOS, sm._kTGT_EOS);
-		std::swap(sm._kSRC_UNK, sm._kTGT_UNK);
+		if (!vm.count("shared-embeddings")){
+			std::swap(sd, td);
+			std::swap(sm._kSRC_SOS, sm._kTGT_SOS);
+			std::swap(sm._kSRC_EOS, sm._kTGT_EOS);
+			std::swap(sm._kSRC_UNK, sm._kTGT_UNK);
+		}
 
 		for (auto &sent: train_cor){
 			std::swap(get<0>(sent), get<1>(sent));

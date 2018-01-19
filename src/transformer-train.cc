@@ -58,7 +58,8 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	Trainer &sgd, 
 	string params_out_file, 
 	unsigned max_epochs, unsigned patience, 
-	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience);// support batching
+	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
+	unsigned average_checkpoints);// support batching
 // ---
 
 //************************************************************************************************************************************************************
@@ -81,7 +82,7 @@ int main(int argc, char** argv) {
 		("tgt-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		//-----------------------------------------
-		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default") // FIXME: not yet implemented!
+		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
 		//-----------------------------------------
 		("minibatch-size,b", value<unsigned>()->default_value(1), "impose the minibatch size for training (support both GPU and CPU); single batch by default")
 		("dynet-autobatch", value<unsigned>()->default_value(0), "impose the auto-batch mode (support both GPU and CPU); no by default")
@@ -127,6 +128,8 @@ int main(int argc, char** argv) {
 		("lr-patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved, e.g., for starting learning rate annealing (e.g., halving)") // learning rate scheduler 2
 		//-----------------------------------------
 		("sampling", "sample translation during training; default not")
+		//-----------------------------------------
+		("average-checkpoints", value<unsigned>()->default_value(1), "specify number of checkpoints for model averaging; default single best model") // average checkpointing
 		//-----------------------------------------
 		("r2l-target", "use right-to-left direction for target during training; default not")
 		//-----------------------------------------
@@ -236,7 +239,8 @@ int main(int argc, char** argv) {
 		, *p_sgd_trainer
 		, vm["parameters"].as<string>() /*best saved model parameter file*/
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
-		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/);
+		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
+		, vm["average-checkpoints"].as<unsigned>());
 
 	// clean up
 	cerr << "Cleaning up..." << endl;
@@ -259,7 +263,10 @@ bool load_data(const variables_map& vm
 	std::vector<string> train_paths = vm["train"].as<std::vector<string>>();// to handle multiple training data
 	if (train_paths.size() > 2) assert("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
-	train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+	if (vm.count("shared-embeddings"))
+		train_cor = read_corpus(train_paths[0], &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+	else
+		train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 	if ("" == vm["src-vocab"].as<string>() 
 		&& "" == vm["tgt-vocab"].as<string>()) // if not using external vocabularies
 	{
@@ -305,10 +312,12 @@ bool load_data(const variables_map& vm
 
 	if (swap) {
 		cerr << "Swapping role of source and target\n";
-		std::swap(sd, td);
-		std::swap(sm._kSRC_SOS, sm._kTGT_SOS);
-		std::swap(sm._kSRC_EOS, sm._kTGT_EOS);
-		std::swap(sm._kSRC_UNK, sm._kTGT_UNK);
+		if (!vm.count("shared-embeddings")){
+			std::swap(sd, td);
+			std::swap(sm._kSRC_SOS, sm._kTGT_SOS);
+			std::swap(sm._kSRC_EOS, sm._kTGT_EOS);
+			std::swap(sm._kSRC_UNK, sm._kTGT_UNK);
+		}
 
 		for (auto &sent: train_cor){
 			std::swap(get<0>(sent), get<1>(sent));
@@ -364,7 +373,8 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	Trainer &sgd, 
 	string params_out_file, 
 	unsigned max_epochs, unsigned patience, 
-	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience)
+	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
+	unsigned average_checkpoints)
 {
 	//transformer::TransformerConfig& tfc = tf.get_config();
 
@@ -503,7 +513,10 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		
 		if (dstats._losses[0] < best_loss) {
 			best_loss = dstats._losses[0];
-			tf.save_params_to_file(params_out_file);// FIXME: save params from last K runs?
+
+			// FIXME: consider average checkpointing?
+			tf.save_params_to_file(params_out_file);
+
 			cpt = 0;
 		}
 		else cpt++;
