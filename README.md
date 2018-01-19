@@ -255,9 +255,111 @@ Finally, we can evaluate the translation result with BLEU:
 
 	Note/Comment: Single transformer model (with medium network) can outperform the best SMT (with preordering in Japanese) as well as the NMT with translation lexicon integration. Also, just simply applying joint byte-pair encoding (BPE) on both English and Japanese, we can obtain much better SOTA result on the task (25.22 vs 23.53 vs. 23.20). 
 
-#### WMT14 and WMT17 English-German (coming soon)
+#### WMT17 English<->German (updating)
 
-## Abstractive Summarisation (coming soon)
+	* Data (http://www.statmt.org/wmt17/translation-task.html) (train: 5418174 after filtering jBPE-ed sentences with length >=60; dev: newstest2013), preprocessed data can be obtained from http://data.statmt.org/wmt17/translation-task/preprocessed/.
+
+	*********************************************************************************************************************************************
+	* DE-->EN (single system)
+	
+		                                		BLEU (tokenized + case-sensitive)
+		                                        newstest2014            	newstest2015            newstest2016               newstest2017
+	- Stanford NMT (Luong et al., 2015)                                     	24.9
+	(top50K, UNK post replacement, 8 stacking LSTM encoder/decoder layers, 1000 hidden/embedding dim, SGD, dropout 0.2)
+	------------------------------------------------------------------------------------------------------------------
+	- Edinburgh NMT (Sennrich et al., 2016a)                                	26.4                    28.5
+	(89500 shared BPE, ? GRU encoders, ? GRU decoders, 500 embedding dim, 1024 hidden dim, AdaDelta, beam12, pervasive dropout)
+	NMT + mono data (Sennrich et al., 2016b)        29.5                    	30.4
+	(89500 shared BPE, ? GRU encoders, ? GRU decoders, 620 embedding dim, 1000 hidden dim, AdaDelta, beam12)
+	------------------------------------------------------------------------------------------------------------------
+	- Google's NMT									29.9
+	(https://github.com/tensorflow/nmt)
+	(NMT + GNMT attention (beam=10), 4 LSTM encoders and decoders, 1024 units, jBPE 32K)
+	------------------------------------------------------------------------------------------------------------------
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
+	- Baseline 1 (medium model)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)			
+	*********************************************************************************************************************************************
+
+	*********************************************************************************************************************************************
+	* EN-->DE (single system)
+	
+		                                		BLEU (tokenized + case-sensitive)
+		                                        newstest2014            	newstest2015            newstest2016               newstest2017
+	- Google's NMT					23.7				26.5
+	(https://github.com/tensorflow/nmt)
+	(NMT + GNMT attention (beam=10), 4 LSTM encoders and decoders, 1024 units, jBPE 32K)
+	- WMT competition (SOTA)			20.6				24.9
+	(note: these BLEU scores may be with detokenisation)
+	- OpenNMT (Klein et al., 2017)			19.3				-
+	- tf-seq2seq (Britz et al., 2017)		22.2				25.2
+	- GNMT (Wu et al., 2016)			24.6
+	- Google's tensor2tensor			27.3 (SOTA)
+	(original Transformer paper, Vaswani et al, 2017)
+	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, adaptive Adam, modified beam search with width 10-12, average best model)
+	------------------------------------------------------------------------------------------------------------------
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
+	- Baseline 1 (medium model)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)		25.05 (8 epochs)	
+	*********************************************************************************************************************************************
+	
+
+## Abstractive Summarisation (updating)
+
+	* Data for English (train (Gigaword): 3803957; dev (Gigaword, random): 6000; 2 tests: 2000 Gigaword samples and DUC 2004 test set; vocab (src & trg freq >=5): 119506 (article) & 68886 (title)  types), can be obtained from https://github.com/harvardnlp/sent-summary. 
+
+	=========================================================================================================
+	2000 sampled sentences from Annotated Gigaword dataset provided by Prof. Rush
+		                			ROUGE-1(F1)     ROUGE-2(F1)     ROUGE-L(F1)
+	- ABS+                    			29.55           11.32           26.42
+	(Rush et al., 2015)
+	- Pointer Net             			35.19	        16.66           32.51
+	(Gulcehre et al., 2016)
+	- Noisy Channel
+	(Yu et al., 2017)       			34.41           16.86           31.83
+	- OpenNMT                 			33.13           16.09           31.00
+	(http://opennmt.net/Models/)
+	-------------------------------------------------------------------
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
+	- Baseline 1 (small model)
+	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)		
+			w/ BPE (40K)			34.743		16.825		32.557
+	- Baseline 2 (medium model)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)		
+			w/ BPE (40K)			
+	=========================================================================================================
+	DUC 2004 (licensed data from LDC which needs a purchase)
+	                        			ROUGE-1         ROUGE-2         ROUGE-L
+	ABS+                    			28.18           8.49		23.81
+	(Rush et al., 2015)
+	RAS-Elman (beam10)      			28.97		8.26            24.06
+	(Chopra et al., 2016) 
+	-------------------------------------------------------------------
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
+	- Baseline 1 (small model)
+	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)		
+			w/ BPE (40K)			27.269		9.308		24.584
+	- Baseline 2 (medium model)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward))
+		and label smoothing (0.1)		
+			w/ BPE (40K)
 
 ## Sequence-to-Sequence based Dependency Parsing (English) (updating)
 
