@@ -42,6 +42,14 @@ void decode(const string test_file
 	, unsigned int lc=0 /*line number to be continued*/
 	, bool remove_unk=false /*whether to include <unk> in the output*/
 	, bool r2l_target=false /*right-to-left decoding*/);
+void decode_nbest(const string test_file
+	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
+	, unsigned topk
+	, string nbest_style
+	, unsigned beam_size=5
+	, unsigned int lc=0 /*line number to be continued*/
+	, bool remove_unk=false /*whether to include <unk> in the output*/
+	, bool r2l_target=false /*right-to-left decoding*/);
 // ---
 
 //************************************************************************************************************************************************************
@@ -69,7 +77,8 @@ int main(int argc, char** argv) {
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")
 		//-----------------------------------------
 		("beam,b", value<unsigned>()->default_value(1), "size of beam in decoding; 1: greedy")
-		("topk,k", value<unsigned>()->default_value(100), "use <num> top kbest entries, used with --kbest")
+		("topk,k", value<unsigned>(), "use <num> top kbest entries; none by default")
+		("nbest-style", value<string>()->default_value("simple"), "style for nbest translation outputs (moses|simple); simple by default")
 		//-----------------------------------------
 		("model-cfg,m", value<string>(), "model configuration file (to support ensemble decoding)")
 		//-----------------------------------------
@@ -130,7 +139,10 @@ int main(int argc, char** argv) {
 		assert("Failed to load model(s)!");
 
 	// decode the input file
-	decode(vm["test"].as<std::string>(), v_tf_models, vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
+	if (vm.count("topk"))
+		decode_nbest(vm["test"].as<std::string>(), v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<string>(), vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
+	else
+		decode(vm["test"].as<std::string>(), v_tf_models, vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
 
 	return EXIT_SUCCESS;
 }
@@ -323,6 +335,119 @@ void decode(const string test_file
 			first = false;
 		}
 		cout << endl;
+
+		//break;//for debug only
+	}
+
+	double elapsed = timer_dec.elapsed();
+	cerr << "Decoding is finished!" << endl;
+	cerr << "Decoded " << (lno - lc) << " sentences, completed in " << elapsed/1000 << "(s)" << endl;
+}
+// ---
+
+// ---
+void decode_nbest(const string test_file
+	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
+	, unsigned topk
+	, string nbest_style
+	, unsigned beam_size
+	, unsigned int lc /*line number to be continued*/
+	, bool remove_unk /*whether to include <unk> in the output*/
+	, bool r2l_target /*right-to-left decoding*/)
+{
+	dynet::Dict& sd = v_models[0].get()->get_source_dict();
+	dynet::Dict& td = v_models[0].get()->get_target_dict();
+	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
+
+	if (topk < 1) assert("topk must be >= 1!");
+
+	if (beam_size <= 0) assert("Beam size must be >= 1!");
+
+	EnsembleDecoder ens(td);
+	ens.set_beam_size(beam_size);
+
+	cerr << "Reading test examples from " << test_file << endl;
+	ifstream in(test_file);
+	assert(in);
+
+	MyTimer timer_dec("completed in");
+	string line;
+	WordIdSentence source;
+	unsigned int lno = 0;
+	while (std::getline(in, line)) {
+		if (lno++ < lc) continue;// continued decoding
+
+		source = dynet::read_sentence(line, sd);
+
+		if (source.front() != sm._kSRC_SOS && source.back() != sm._kSRC_EOS) {
+			cerr << "Sentence in " << test_file << ":" << lno << " didn't start or end with <s>, </s>\n";
+			abort();
+		}
+
+		ComputationGraph cg;// dynamic computation graph
+		WordIdSentence target;//, aligns;
+		float score = 0.f;
+
+		std::vector<EnsembleDecoderHypPtr> v_trg_hyps = ens.generate_nbest(cg, source, v_models, topk);
+		for (auto& trg_hyp : v_trg_hyps){
+			if (trg_hyp.get() == nullptr) {
+				target.clear();
+				//aligns.clear();
+			} 
+			else {
+				target = trg_hyp->get_sentence();
+				score = trg_hyp->get_score();
+				//aligns = trg_hyp->get_alignment();
+			}
+
+			if (target.size() < 2) continue;// <=2, e.g., <s> ... </s>?
+		
+			if (r2l_target)
+		   		std::reverse(target.begin() + 1, target.end() - 1);
+
+			if (nbest_style == "moses"){
+				// n-best with Moses's format 
+				// <line_number1> ||| source ||| target1 ||| TransformerModelScore=score1 || score1
+				// <line_number2> ||| source ||| target2 ||| TransformerModelScore=score2 || score2
+				//...
+
+				// follows Moses's nbest file format
+				stringstream ss;
+
+				// source text
+				ss /*<< lno << " ||| "*/ << line << " ||| ";
+			   
+				// target text
+				bool first = true;
+				for (auto &w: target) {
+					if (!first) ss << " ";
+					ss << td.convert(w);
+					first = false;
+				}
+		
+				// score
+				ss << " ||| " << "TransformerModelScore=" << -score / (target.size() - 1) << " ||| " << -score / (target.size() - 1);//normalized by target length, following Moses's N-best format.
+		
+				ss << endl;
+
+				cout << ss.str();
+			}
+			else if (nbest_style == "simple"){
+				// simple format with target1 ||| target2 ||| ...
+				stringstream ss;
+				bool first = true;
+				for (auto &w: target) {
+					if (!first) ss << " ";
+					ss << td.convert(w);
+					first = false;
+				}
+				ss << " ||| ";
+				cout << ss.str();
+			}
+			else assert("Unknown style for nbest translation outputs!");
+		}
+
+		if (nbest_style == "simple") cout << endl;
 
 		//break;//for debug only
 	}

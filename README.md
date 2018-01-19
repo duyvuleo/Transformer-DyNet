@@ -152,8 +152,16 @@ For decoding/inference, we can use the integrated ensemble decoder, i.e.,
 
     ./build_gpu/transformer-decode --dynet-devices GPU:2 --max-seq-len 300 --src-vocab experiments/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi --beam 5 --model-cfg experiments/models/iwslt-envi/model-small-dropout.cfg -T experiments/data/iwslt-envi/tst2013.en.vcb.capped > experiments/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
 
-Decoding with n-best list will be supported very soon!
+Decoding with n-best list can be performed, e.g.,
 
+    ./build_gpu/transformer-decode --dynet-devices GPU:2 --max-seq-len 300 --src-vocab experiments/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi --beam 5 --topk 100 --nbest-style moses --model-cfg experiments/models/iwslt-envi/model-small-dropout.cfg -T experiments/data/iwslt-envi/tst2013.en.vcb.capped > experiments/models/iwslt-envi/100besttranslations-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
+
+resulting in the following format:
+
+    <line_number1> ||| source ||| target1 ||| TransformerModelScore=score1 || total_score1
+    <line_number2> ||| source ||| target2 ||| TransformerModelScore=score2 || total_score2
+    ...
+	
 The decoding configuration file (e.g., --model-cfg experiments/models/iwslt-envi/model-small-dropout.cfg) has the following format:
 
     <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-shared-embeddings> <use-hybrid-model> <your-trained-model-path>
@@ -249,7 +257,7 @@ Finally, we can evaluate the translation result with BLEU:
 
 #### WMT14 and WMT17 English-German (coming soon)
 
-## Abstractive Summarisation (comming soon)
+## Abstractive Summarisation (coming soon)
 
 ## Sequence-to-Sequence based Dependency Parsing (English) (updating)
 
@@ -305,12 +313,15 @@ Due to limited computational resources, I only have the results for low- and med
 
 ## ToDo
 
-
-1. implementation for Bahdanau attention type?
+1. implementation for Bahdanau attention type? (seem to be infeasible with current implementation)
 
 2. deep FFN layers (https://arxiv.org/ftp/arxiv/papers/1712/1712.09662.pdf)
 
 3. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf)
+
+4. average model around best checkpoints
+
+5. adaptive learning rate following original transformer's paper
 
 6. Other new ideas?
 
