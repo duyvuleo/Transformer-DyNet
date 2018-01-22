@@ -20,7 +20,7 @@ First, clone the repository
 
 As mentioned above, you'll need the latest [development] version of eigen
 
-    hg clone https://bitbucket.org/eigen/eigen/
+    hg clone https://bitbucket.org/eigen/eigen/ (or latest stable version 3.3.4)
 
 A modified version of latest [DyNet](https://github.com/clab/dynet) is already included (e.g., dynet folder).
 
@@ -35,23 +35,23 @@ Compiling to execute on a CPU is as follows
 
 MKL support. If you have Intel's MKL library installed on your machine, you can speed up the computation on the CPU by:
 
-    cmake .. -DEIGEN3_INCLUDE_DIR=EIGEN_PATH -DMKL=TRUE -DMKL_ROOT=MKL_PATH -DENABLE_BOOST=TRUE
+    cmake .. -DEIGEN3_INCLUDE_DIR=EIGEN_PATH -DMKL=TRUE -DMKL_ROOT=MKL_PATH -DENABLE_BOOST=TRUE [-DBoost_NO_BOOST_CMAKE=ON]
 
 substituting in different paths to EIGEN_PATH and MKL_PATH if you have placed them in different directories. 
 
-This will build the 3 binaries
+This will build the 2 binaries
     
     build_cpu/transformer-train
     build_cpu/transformer-decode
 
 #### GPU build
 
-Building on the GPU uses the Nvidia CUDA library, currently tested against version 7.5.
+Building on the GPU uses the Nvidia CUDA library, currently tested against version 7.5 and 8.0.
 The process is as follows
 
     mkdir build_gpu
     cd build_gpu
-    cmake .. -DBACKEND=cuda -DEIGEN3_INCLUDE_DIR=EIGEN_PATH -DCUDA_TOOLKIT_ROOT_DIR=CUDA_PATH -DCUDNN_ROOT=CUDA_PATH -DENABLE_BOOST=TRUE
+    cmake .. -DBACKEND=cuda -DEIGEN3_INCLUDE_DIR=EIGEN_PATH -DCUDA_TOOLKIT_ROOT_DIR=CUDA_PATH -DCUDNN_ROOT=CUDA_PATH -DENABLE_BOOST=TRUE [-DBoost_NO_BOOST_CMAKE=ON]
     make -j 2
 
 substituting in your EIGEN_PATH and CUDA_PATH folders, as appropriate.
@@ -257,7 +257,7 @@ Finally, we can evaluate the translation result with BLEU:
 
 #### WMT17 English<->German (updating)
 
-	* Data (http://www.statmt.org/wmt17/translation-task.html) (train: 5418174 after filtering jBPE-ed sentences with length >=60; dev: newstest2013), preprocessed data can be obtained from http://data.statmt.org/wmt17/translation-task/preprocessed/.
+	* Data (http://www.statmt.org/wmt17/translation-task.html) (train: 5418174 after filtering 30K_jBPE-ed sentences with length >=60; dev: newstest2013), preprocessed data can be obtained from http://data.statmt.org/wmt17/translation-task/preprocessed/.
 
 	*********************************************************************************************************************************************
 	* DE-->EN (single system)
@@ -269,8 +269,8 @@ Finally, we can evaluate the translation result with BLEU:
 	------------------------------------------------------------------------------------------------------------------
 	- Edinburgh NMT (Sennrich et al., 2016a)                                	26.4                    28.5
 	(89500 shared BPE, ? GRU encoders, ? GRU decoders, 500 embedding dim, 1024 hidden dim, AdaDelta, beam12, pervasive dropout)
-	NMT + mono data (Sennrich et al., 2016b)        29.5                    	30.4
-	(89500 shared BPE, ? GRU encoders, ? GRU decoders, 620 embedding dim, 1000 hidden dim, AdaDelta, beam12)
+	-  (Sennrich et al., 2016b)        		29.5                    	30.4
+	(back-translation with monolingual data, 89500 shared BPE, ? GRU encoders, ? GRU decoders, 620 embedding dim, 1000 hidden dim, AdaDelta, beam12)
 	------------------------------------------------------------------------------------------------------------------
 	- Google's NMT									29.9
 	(https://github.com/tensorflow/nmt)
@@ -281,8 +281,9 @@ Finally, we can evaluate the translation result with BLEU:
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			
+		and label smoothing (0.1)		29.93 (10 epochs)		29.73 (10 epochs)
 	*********************************************************************************************************************************************
+	Note/Comment: 
 
 	*********************************************************************************************************************************************
 	* EN-->DE (single system)
@@ -306,9 +307,9 @@ Finally, we can evaluate the translation result with BLEU:
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)		25.05 (8 epochs)	
+		and label smoothing (0.1)		26.18 (10 epochs)		27.82 (10 epochs)
 	*********************************************************************************************************************************************
-	
+	Note/Comment: 
 
 ## Abstractive Summarisation (updating)
 
