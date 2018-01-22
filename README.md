@@ -330,13 +330,13 @@ Finally, we can evaluate the translation result with BLEU:
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1 (small model)
 	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
-		w/ dropout (0.1)					
+		w/ dropout (0.1)			34.466		16.239		32.203
 		(source and target embeddings, sub-layers (attention + feedforward))
 		and label smoothing (0.1)		
 			w/ BPE (40K)			34.743		16.825		32.557
 	- Baseline 2 (medium model)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
-		w/ dropout (0.1)					
+		w/ dropout (0.1)			35.913		17.131		33.622
 		(source and target embeddings, sub-layers (attention + feedforward))
 		and label smoothing (0.1)		
 			w/ BPE (40K)			
