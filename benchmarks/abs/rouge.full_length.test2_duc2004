@@ -1,0 +1,48 @@
+---------------------------------------------
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-1 Average_R: 0.22752 (95%-conf.int. 0.21718 - 0.23860)
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-1 Average_P: 0.35689 (95%-conf.int. 0.34146 - 0.37290)
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-1 Average_F: 0.27310 (95%-conf.int. 0.26105 - 0.28561)
+---------------------------------------------
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-2 Average_R: 0.07627 (95%-conf.int. 0.06999 - 0.08301)
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-2 Average_P: 0.12677 (95%-conf.int. 0.11622 - 0.13799)
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-2 Average_F: 0.09324 (95%-conf.int. 0.08535 - 0.10140)
+---------------------------------------------
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-L Average_R: 0.20494 (95%-conf.int. 0.19554 - 0.21496)
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-L Average_P: 0.32263 (95%-conf.int. 0.30792 - 0.33741)
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-L Average_F: 0.24621 (95%-conf.int. 0.23531 - 0.25730)
+---------------------------------------------
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-W-1.2 Average_R: 0.12101 (95%-conf.int. 0.11559 - 0.12665)
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-W-1.2 Average_P: 0.30897 (95%-conf.int. 0.29596 - 0.32256)
+transformer_neusum_baseline1_h2_l2_u128_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-W-1.2 Average_F: 0.17121 (95%-conf.int. 0.16405 - 0.17854)
+---------------------------------------------
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-1 Average_R: 0.23184 (95%-conf.int. 0.22111 - 0.24268)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-1 Average_P: 0.36041 (95%-conf.int. 0.34378 - 0.37503)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-1 Average_F: 0.27805 (95%-conf.int. 0.26534 - 0.29002)
+---------------------------------------------
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-2 Average_R: 0.07545 (95%-conf.int. 0.06847 - 0.08280)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-2 Average_P: 0.12198 (95%-conf.int. 0.11125 - 0.13345)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-2 Average_F: 0.09164 (95%-conf.int. 0.08347 - 0.10013)
+---------------------------------------------
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-L Average_R: 0.20885 (95%-conf.int. 0.19870 - 0.21885)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-L Average_P: 0.32543 (95%-conf.int. 0.31047 - 0.33888)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-L Average_F: 0.25068 (95%-conf.int. 0.23907 - 0.26179)
+---------------------------------------------
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-W-1.2 Average_R: 0.12243 (95%-conf.int. 0.11699 - 0.12801)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-W-1.2 Average_P: 0.30916 (95%-conf.int. 0.29578 - 0.32116)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_beam5 ROUGE-W-1.2 Average_F: 0.17312 (95%-conf.int. 0.16540 - 0.18052)
+---------------------------------------------
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-1 Average_R: 0.23711 (95%-conf.int. 0.22635 - 0.24859)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-1 Average_P: 0.35926 (95%-conf.int. 0.34294 - 0.37510)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-1 Average_F: 0.28096 (95%-conf.int. 0.26842 - 0.29318)
+---------------------------------------------
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-2 Average_R: 0.08075 (95%-conf.int. 0.07339 - 0.08862)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-2 Average_P: 0.12558 (95%-conf.int. 0.11421 - 0.13635)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-2 Average_F: 0.09628 (95%-conf.int. 0.08782 - 0.10517)
+---------------------------------------------
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-L Average_R: 0.21373 (95%-conf.int. 0.20391 - 0.22412)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-L Average_P: 0.32457 (95%-conf.int. 0.30959 - 0.33899)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-L Average_F: 0.25340 (95%-conf.int. 0.24218 - 0.26443)
+---------------------------------------------
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-W-1.2 Average_R: 0.12571 (95%-conf.int. 0.12024 - 0.13151)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-W-1.2 Average_P: 0.30962 (95%-conf.int. 0.29581 - 0.32284)
+transformer_neusum_baseline1_h4_l4_u512_do010101010001_att1_ls01_pe2_ffrelu_jbpe40K_beam5 ROUGE-W-1.2 Average_F: 0.17616 (95%-conf.int. 0.16881 - 0.18381)
