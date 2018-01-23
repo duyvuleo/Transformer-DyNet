@@ -179,7 +179,7 @@ Finally, we can evaluate the translation result with BLEU:
 
     <your-moses-path>/mosesdecoder-RELEASE-3.0/scripts/generic/multi-bleu.perl <your-path>/data/iwslt15-envi/tst2013.vi < <your-path>/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu > <your-path>/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu.score-BLEU 
 
-## Benchmarking
+## Benchmarks on Sequence-to-Sequence Generation Tasks
 
 ### Machine Translation
 
@@ -236,7 +236,7 @@ Finally, we can evaluate the translation result with BLEU:
 	(https://arxiv.org/pdf/1606.02006.pdf)
 	(4 stacked LSTMs for decoders, hidden dim 800, BiLSTM encoder with input dim 1600, Adam, beam5)
 		w/ translation lexicon 	integration		-		23.20		-
-	------------------------------------------------------------------------------------------------------------------
+	--------------------------------------------------------------------------------------------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1 (small model)
 	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
@@ -251,7 +251,7 @@ Finally, we can evaluate the translation result with BLEU:
 	- Baseline 2* (same config. with baseline 2)
 		w/ BPE (joint, 32K)				-		25.46		10.8828
 		ensemble (2 different runs)			-		26.55		-		
-	******************************************************************************************************************
+	********************************************************************************************************************************************************
 
 	Note/Comment: Single transformer model (with medium network) can outperform the best SMT (with preordering in Japanese) as well as the NMT with translation lexicon integration. Also, just simply applying joint byte-pair encoding (BPE) on both English and Japanese, we can obtain much better SOTA result on the task (25.22 vs 23.53 vs. 23.20). 
 
@@ -311,9 +311,11 @@ Finally, we can evaluate the translation result with BLEU:
 	*********************************************************************************************************************************************
 	Note/Comment: 
 
+#### NIST English-Chinese (in plan)
+
 ## Abstractive Summarisation (updating)
 
-	* Data for English (train (Gigaword): 3803957; dev (Gigaword, random): 6000; 2 tests: 2000 Gigaword samples and DUC 2004 test set; vocab (src & trg freq >=5): 119506 (article) & 68886 (title)  types), can be obtained from https://github.com/harvardnlp/sent-summary. 
+	* Data for English (train (Gigaword): 3803957; dev (Gigaword, random): 6000; 2 tests: 2000 Gigaword samples and DUC 2004 test set; vocab (src & trg freq >=5): 119506 (article) & 68886 (title)  types), can be obtained from https://github.com/harvardnlp/sent-summary. Evaluation with ROUGE 1.5.5 (75-byte length limit).
 
 	=========================================================================================================
 	2000 sampled sentences from Annotated Gigaword dataset provided by Prof. Rush
@@ -327,6 +329,12 @@ Finally, we can evaluate the translation result with BLEU:
 	- OpenNMT                 			33.13           16.09           31.00
 	(http://opennmt.net/Models/)
 	-------------------------------------------------------------------
+	Mantidae (https://github.com/duyvuleo/Mantidae)
+	- Baseline (attentional model)			34.599          16.385          32.538 
+	(deep NMT, 2 source LSTM layers, 2 target LSTM layers with dropout 0.1, 512 embedding dim, 512 hidden dim, SGD, beam5)
+		w/ 100-best reranking			35.819          17.127          33.349
+		(bidirectional)
+	-------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1 (small model)
 	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
@@ -336,10 +344,10 @@ Finally, we can evaluate the translation result with BLEU:
 			w/ BPE (40K)			34.743		16.825		32.557
 	- Baseline 2 (medium model)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
-		w/ dropout (0.1)			35.913		17.131		33.622
+		w/ dropout (0.1)			36.130		17.482		33.846
 		(source and target embeddings, sub-layers (attention + feedforward))
 		and label smoothing (0.1)		
-			w/ BPE (40K)			
+			w/ BPE (40K)			35.739		17.552		33.360
 	=========================================================================================================
 	DUC 2004 (licensed data from LDC which needs a purchase)
 	                        			ROUGE-1         ROUGE-2         ROUGE-L
@@ -348,19 +356,27 @@ Finally, we can evaluate the translation result with BLEU:
 	RAS-Elman (beam10)      			28.97		8.26            24.06
 	(Chopra et al., 2016) 
 	-------------------------------------------------------------------
+	Mantidae (https://github.com/duyvuleo/Mantidae)
+	- Baseline (attentional model)			26.152          8.408           23.665
+	(deep NMT, 2 source LSTM layers, 2 target LSTM layers with dropout 0.1, 512 embedding dim, 512 hidden dim, SGD, beam5)
+		w/ relaxed opt				26.354          8.622           23.920
+		(bidirectional) (Hoang et al., 2017)
+	-------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1 (small model)
 	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)		
+		and label smoothing (0.1)		-		-		-
 			w/ BPE (40K)			27.269		9.308		24.584
 	- Baseline 2 (medium model)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
-		w/ dropout (0.1)					
+		w/ dropout (0.1)			27.793		9.168		25.070
 		(source and target embeddings, sub-layers (attention + feedforward))
 		and label smoothing (0.1)		
-			w/ BPE (40K)
+			w/ BPE (40K)			28.061		9.618		25.305
+
+## Word Ordering (coming soon)
 
 ## Sequence-to-Sequence based Dependency Parsing (English) (updating)
 
