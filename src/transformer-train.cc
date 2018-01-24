@@ -177,7 +177,8 @@ int main(int argc, char** argv) {
 	DREPORT = vm["dreport"].as<unsigned>(); 
 	SAMPLING_TRAINING = vm.count("sampling");
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
-	if (DREPORT % TREPORT != 0) assert("dreport must be divisible by treport.");// to ensure the reporting on development data
+	cerr << "Hey" << endl;
+	if (DREPORT % TREPORT != 0) TRANSFORMER_RUNTIME_ASSERT("dreport must be divisible by treport.");// to ensure the reporting on development data
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
 	// load fixed vocabularies from files if required
@@ -193,7 +194,7 @@ int main(int argc, char** argv) {
 	// load data files
 	WordIdCorpus train_cor, devel_cor;
 	if (!load_data(vm, train_cor, devel_cor, sd, td, sm))
-		assert("Failed to load data files!");
+		TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 	// learning rate scheduler
 	unsigned lr_epochs = vm["lr-epochs"].as<unsigned>(), lr_patience = vm["lr-patience"].as<unsigned>();
@@ -261,7 +262,7 @@ bool load_data(const variables_map& vm
 	bool r2l_target = vm.count("r2l_target");
 
 	std::vector<string> train_paths = vm["train"].as<std::vector<string>>();// to handle multiple training data
-	if (train_paths.size() > 2) assert("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
+	if (train_paths.size() > 2) TRANSFORMER_RUNTIME_ASSERT("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
 	if (vm.count("shared-embeddings"))
 		train_cor = read_corpus(train_paths[0], &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
@@ -358,7 +359,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 	else if (sgd_type == 0)//Vanilla SGD trainer
 		sgd = new SimpleSGDTrainer(model, vm["lr-eta"].as<float>());
 	else
-	   	assert("Unknown SGD trainer type! (0: vanilla SGD; 1: momentum SGD; 2: Adagrad; 3: AdaDelta; 4: Adam; 5: RMSProp)");
+	   	TRANSFORMER_RUNTIME_ASSERT("Unknown SGD trainer type! (0: vanilla SGD; 1: momentum SGD; 2: Adagrad; 3: AdaDelta; 4: Adam; 5: RMSProp)");
 	sgd->clip_threshold = vm["grad-clip-threshold"].as<float>();// * MINIBATCH_SIZE;// use larger gradient clipping threshold if training with mini-batching, correct?
 	sgd->sparse_updates_enabled = vm["sparse-updates"].as<bool>();
 	if (!sgd->sparse_updates_enabled)

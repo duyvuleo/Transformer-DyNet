@@ -134,12 +134,12 @@ int main(int argc, char** argv) {
 	// load training data for building vocabularies w/o vocabulary files
 	WordIdCorpus train_cor;
 	if (!load_data(vm, train_cor, sd, td, sm))
-		assert("Failed to load data files!");
+		TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 	// load models
 	std::vector<std::shared_ptr<transformer::TransformerModel>> v_tf_models;
 	if (!load_model_config(vm["model-cfg"].as<string>(), v_tf_models, sd, td, sm))
-		assert("Failed to load model(s)!");
+		TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
 
 	// decode the input file
 	if (vm.count("topk"))
@@ -293,7 +293,7 @@ void decode(const string test_file
 	dynet::Dict& td = v_models[0].get()->get_target_dict();
 	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
 
-	if (beam_size <= 0) assert("Beam size must be >= 1!");
+	if (beam_size <= 0) TRANSFORMER_RUNTIME_ASSERT("Beam size must be >= 1!");
 
 	EnsembleDecoder ens(td);
 	ens.set_beam_size(beam_size);
@@ -367,9 +367,9 @@ void decode_nbest(const string test_file
 	dynet::Dict& td = v_models[0].get()->get_target_dict();
 	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
 
-	if (topk < 1) assert("topk must be >= 1!");
+	if (topk < 1) TRANSFORMER_RUNTIME_ASSERT("topk must be >= 1!");
 
-	if (beam_size <= 0) assert("Beam size must be >= 1!");
+	if (beam_size <= 0) TRANSFORMER_RUNTIME_ASSERT("Beam size must be >= 1!");
 
 	EnsembleDecoder ens(td);
 	ens.set_beam_size(beam_size);
@@ -452,7 +452,7 @@ void decode_nbest(const string test_file
 				ss << " ||| ";
 				cout << ss.str();
 			}
-			else assert("Unknown style for nbest translation outputs!");
+			else TRANSFORMER_RUNTIME_ASSERT("Unknown style for nbest translation outputs!");
 		}
 
 		if (nbest_style == "simple") cout << endl;

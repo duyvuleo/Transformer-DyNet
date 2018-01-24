@@ -39,6 +39,12 @@ typedef std::shared_ptr<DyNetModel> DyNetModelPointer;
 
 namespace transformer {
 
+#define TRANSFORMER_RUNTIME_ASSERT(msg) do {        \
+	std::ostringstream oss;                     \
+	oss << "[Transformer] " << msg;             \
+	throw std::runtime_error(oss.str()); }      \
+	while (0);
+
 #define MULTI_HEAD_ATTENTION_PARALLEL // to use pseudo-batching for multi-head attention computing (faster)
 #define USE_COLWISE_DROPOUT // use col-wise dropout
 #define USE_LECUN_DIST_PARAM_INIT // use Le Cun's uniform distribution for LinearLayer params initialisation (arguably faster convergence)
@@ -323,9 +329,9 @@ struct FeedForwardLayer{
 		else if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH_LEARNABLE_BETA){
 			//dynet::Expression i_beta = dynet::parameter(cg, _p_beta);
 			// FIXME: requires this: i_inner = dynet::silu(i_inner, i_beta); ? Not supported in DyNet yet!
-			assert("Not implemented yet!");
+			TRANSFORMER_RUNTIME_ASSERT("Feed-forward activation using Swish with learnable beta not implemented yet!");
 		}
-		else assert("Unknown feed-forward activation type!");
+		else TRANSFORMER_RUNTIME_ASSERT("Unknown feed-forward activation type!");
 
 		dynet::Expression i_outer = _l_outer.apply(cg, i_inner, false, true);// relu(x * W1 + b1) * W2 + b2
 
@@ -506,10 +512,9 @@ struct MultiHeadAttentionLayer{
 			i_atts = dynet::concatenate(split_batch(i_batch_alphas, _p_tfc->_nheads));// ((num_units, Ly), batch_size)			
 		}
 		else if (_p_tfc->_attention_type == ATTENTION_TYPE::ADDITIVE_MLP){// Bahdanau attention type
-			// FIXME
-			assert("MultiHeadAttentionLayer: Bahdanau attention type not yet implemented!");
+			TRANSFORMER_RUNTIME_ASSERT("MultiHeadAttentionLayer: Bahdanau attention type not yet implemented!");
 		}
-		else assert("MultiHeadAttentionLayer: Unknown attention type!");
+		else TRANSFORMER_RUNTIME_ASSERT("MultiHeadAttentionLayer: Unknown attention type!");
 		
 		// linear projection
 		dynet::Expression i_proj_atts = _l_W_O.apply(cg, i_atts, false, true);// ((num_units, Ly), batch_size)
@@ -606,9 +611,9 @@ struct MultiHeadAttentionLayer{
 				i_att_h = i_V * i_alpha;// ((dk, Ly), batch_size)
 			}
 			else if (_p_tfc->_attention_type == ATTENTION_TYPE::ADDITIVE_MLP){// Bahdanau attention type
-				assert("MultiHeadAttentionLayer: Bahdanau attention type not yet implemented!");
+				TRANSFORMER_RUNTIME_ASSERT("MultiHeadAttentionLayer: Bahdanau attention type not yet implemented!");
 			}
-			else assert("MultiHeadAttentionLayer: Unknown attention type!");
+			else TRANSFORMER_RUNTIME_ASSERT("MultiHeadAttentionLayer: Unknown attention type!");
 
 			v_atts[h] = i_att_h;
 		}
@@ -878,7 +883,7 @@ struct Encoder{
 
 				i_src = i_src + i_pos;
 			}
-			else assert("Unknown positional encoding type!");
+			else if (_p_tfc->_position_encoding != 0) TRANSFORMER_RUNTIME_ASSERT("Unknown positional encoding type!");
 		}	
 
 		// dropout to the sums of the embeddings and the positional encodings
@@ -1150,7 +1155,7 @@ struct Decoder{
 
 				i_tgt = i_tgt + i_pos;
 			}
-			else assert("Unknown positional encoding type!");
+			else if (_p_tfc->_position_encoding != 0) TRANSFORMER_RUNTIME_ASSERT("Unknown positional encoding type!");
 		}
 
 		// dropout to the sums of the embeddings and the positional encodings
