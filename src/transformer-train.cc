@@ -45,6 +45,12 @@ bool load_data(const variables_map& vm
 	, SentinelMarkers& sm);
 // ---
 
+// ---
+void save_config(const string& config_out_file
+	, const string& params_out_file
+	, const TransformerConfig& tfc);
+// ---
+
 //---
 std::string get_sentence(const WordIdSentence& source, Dict& td);
 //---
@@ -56,7 +62,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordIdCorpus &devel_cor, 
 	Trainer &sgd, 
-	string params_out_file, 
+	const string& params_out_file, const string& config_out_file, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints);// support batching
@@ -93,6 +99,7 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("initialise,i", value<string>(), "load initial parameters from file")
 		("parameters,p", value<string>(), "save best parameters to this file")
+		("config-file", value<string>()->default_value("model.cfg"), "save model configuration (used for decoding/inference) to this file")
 		//-----------------------------------------
 		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers; 6 by default")
 		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units; 512 by default")
@@ -238,7 +245,7 @@ int main(int argc, char** argv) {
 	run_train(tf
 		, train_cor, devel_cor
 		, *p_sgd_trainer
-		, vm["parameters"].as<string>() /*best saved model parameter file*/
+		, vm["parameters"].as<string>() /*best saved model parameter file*/, vm["config-file"].as<string>() /*saved configuration file*/
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
 		, vm["average-checkpoints"].as<unsigned>());
@@ -372,14 +379,16 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordIdCorpus &devel_cor, 
 	Trainer &sgd, 
-	string params_out_file, 
+	const string& params_out_file, const string& config_out_file,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints)
 {
-	//transformer::TransformerConfig& tfc = tf.get_config();
+	// save configuration file (for decoding/inference)
+	const transformer::TransformerConfig& tfc = tf.get_config();
+	save_config(config_out_file, params_out_file, tfc);
 
-	// Create minibatches
+	// create minibatches
 	std::vector<std::vector<WordIdSentence> > train_src_minibatch;
 	std::vector<std::vector<WordIdSentence> > train_trg_minibatch;
 	std::vector<size_t> train_ids_minibatch, dev_ids_minibatch;
@@ -561,3 +570,28 @@ std::string get_sentence(const WordIdSentence& source, Dict& td){
 }
 //---
 
+//---
+void save_config(const string& config_out_file, const string& params_out_file, const TransformerConfig& tfc)
+{
+	// each line has the format: 
+	// <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-hybrid-model> <your-trained-model-path>
+	// e.g.,
+	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
+	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
+	stringstream ss;
+		
+	ss << tfc._num_units << " " << tfc._nheads << " " << tfc._nlayers << " " << tfc._n_ff_units_factor << " "
+		<< tfc._encoder_emb_dropout_rate << " " << tfc._encoder_sublayer_dropout_rate << " " << tfc._decoder_emb_dropout_rate << " " << tfc._decoder_sublayer_dropout_rate << " " << tfc._attention_dropout_rate << " " << tfc._ff_dropout_rate << " "
+		<< tfc._use_label_smoothing << " " << tfc._label_smoothing_weight << " "
+		<< tfc._position_encoding << " " << tfc._max_length << " "
+		<< tfc._attention_type << " "
+		<< tfc._ffl_activation_type << " "
+		<< tfc._shared_embeddings << " "
+		<< tfc._use_hybrid_model << " ";		
+	ss << params_out_file;
+
+	ofstream outf_cfg(config_out_file);
+	assert(outf_cfg);
+	outf_cfg << ss.str();
+}
+//---

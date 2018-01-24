@@ -45,7 +45,7 @@ void decode(const string test_file
 void decode_nbest(const string test_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned topk
-	, string nbest_style
+	, const string& nbest_style
 	, unsigned beam_size=5
 	, unsigned int lc=0 /*line number to be continued*/
 	, bool remove_unk=false /*whether to include <unk> in the output*/
@@ -357,7 +357,7 @@ void decode(const string test_file
 void decode_nbest(const string test_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned topk
-	, string nbest_style
+	, const string& nbest_style
 	, unsigned beam_size
 	, unsigned int lc /*line number to be continued*/
 	, bool remove_unk /*whether to include <unk> in the output*/
