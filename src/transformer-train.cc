@@ -184,7 +184,6 @@ int main(int argc, char** argv) {
 	DREPORT = vm["dreport"].as<unsigned>(); 
 	SAMPLING_TRAINING = vm.count("sampling");
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
-	cerr << "Hey" << endl;
 	if (DREPORT % TREPORT != 0) TRANSFORMER_RUNTIME_ASSERT("dreport must be divisible by treport.");// to ensure the reporting on development data
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
