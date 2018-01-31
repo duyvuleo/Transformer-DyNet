@@ -14,18 +14,18 @@ inline size_t create_minibatches(const WordIdCorpus& cor
 
 struct DoubleLength
 {
-  DoubleLength(const WordIdCorpus & cor_) : cor(cor_) { }
-  bool operator() (int i1, int i2);
-  const WordIdCorpus & cor;
+	DoubleLength(const WordIdCorpus & cor_) : cor(cor_) { }
+	bool operator() (int i1, int i2);
+	const WordIdCorpus & cor;
 };
 
 bool DoubleLength::operator() (int i1, int i2) {
-  if(std::get<0>(cor[i2]).size() != std::get<0>(cor[i1]).size()) return (std::get<0>(cor[i2]).size() < std::get<0>(cor[i1]).size());
-  return (std::get<1>(cor[i2]).size() < std::get<1>(cor[i1]).size());
+	if(std::get<0>(cor[i2]).size() != std::get<0>(cor[i1]).size()) return (std::get<0>(cor[i2]).size() < std::get<0>(cor[i1]).size());
+	return (std::get<1>(cor[i2]).size() < std::get<1>(cor[i1]).size());
 }
 
 inline size_t calc_size(const WordIdSentence & src, const WordIdSentence & trg) {
-  return src.size()+trg.size();
+	return src.size()+trg.size();
 }
 
 inline size_t create_minibatches(const WordIdCorpus& cor

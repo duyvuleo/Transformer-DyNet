@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("initialise,i", value<string>(), "load initial parameters from file")
 		("parameters,p", value<string>(), "save best parameters to this file")
-		("config-file", value<string>()->default_value("model.cfg"), "save model configuration (used for decoding/inference) to this file")
+		("config-file", value<string>()->default_value("/dev/null"), "save model configuration (used for decoding/inference) to this file")
 		//-----------------------------------------
 		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers; 6 by default")
 		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units; 512 by default")
