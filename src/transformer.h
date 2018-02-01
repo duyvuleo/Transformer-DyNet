@@ -103,6 +103,7 @@ struct TransformerConfig{
 	float _label_smoothing_weight = 0.1f;
 
 	unsigned _position_encoding = 1; // 1: learned positional embedding ; 2: sinusoidal positional encoding ; 0: none
+	unsigned _position_encoding_flag = 0; // 0: positional encoding applies to both encoder and decoder ; 1: for encoder only  ; 2: for decoder only
 	unsigned _max_length = 500;// for learned positional embedding
 
 	SentinelMarkers _sm;
@@ -134,6 +135,7 @@ struct TransformerConfig{
 		, bool use_label_smoothing
 		, float label_smoothing_weight
 		, unsigned position_encoding
+		, unsigned position_encoding_flag
 		, unsigned max_length
 		, SentinelMarkers sm
 		, unsigned attention_type
@@ -157,6 +159,7 @@ struct TransformerConfig{
 		_use_label_smoothing = use_label_smoothing;
 		_label_smoothing_weight = label_smoothing_weight;
 		_position_encoding = position_encoding;
+		_position_encoding_flag = position_encoding_flag;
 		_max_length = max_length;
 		_sm = sm;
 		_attention_type = attention_type;
@@ -184,6 +187,7 @@ struct TransformerConfig{
 		_use_label_smoothing = tfc._use_label_smoothing;
 		_label_smoothing_weight = tfc._label_smoothing_weight;
 		_position_encoding = tfc._position_encoding;
+		_position_encoding_flag = tfc._position_encoding_flag;
 		_max_length = tfc._max_length;
 		_sm = tfc._sm;
 		_attention_type = tfc._attention_type;
@@ -862,28 +866,30 @@ struct Encoder{
 			i_src = i_src * _scale_emb;// scaled embeddings
 
 			// + postional encoding
-			if (_p_tfc->_position_encoding == 1){// learned positional embedding 
-				std::vector<dynet::Expression> pos_embeddings;  
-				std::vector<unsigned> positions(sents.size());
-				for (unsigned l = 0; l < max_len; l++){
-					for (unsigned bs = 0; bs < sents.size(); ++bs){
-						if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to (_p_tfc._max_length - 1).
-						else
-							positions[bs] = l;
+			if (_p_tfc->_position_encoding_flag == 0 || _p_tfc->_position_encoding_flag == 1){
+				if (_p_tfc->_position_encoding == 1){// learned positional embedding 
+					std::vector<dynet::Expression> pos_embeddings;  
+					std::vector<unsigned> positions(sents.size());
+					for (unsigned l = 0; l < max_len; l++){
+						for (unsigned bs = 0; bs < sents.size(); ++bs){
+							if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to (_p_tfc._max_length - 1).
+							else
+								positions[bs] = l;
+					}
+
+						pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+					}
+					dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// ((num_units, Lx), batch_size)
+
+					i_src = i_src + i_pos;
 				}
+				else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
+					dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_src.dim());
 
-					pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+					i_src = i_src + i_pos;
 				}
-				dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// ((num_units, Lx), batch_size)
-
-				i_src = i_src + i_pos;
+				else if (_p_tfc->_position_encoding != 0) TRANSFORMER_RUNTIME_ASSERT("Unknown positional encoding type!");
 			}
-			else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
-				dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_src.dim());
-
-				i_src = i_src + i_pos;
-			}
-			else if (_p_tfc->_position_encoding != 0) TRANSFORMER_RUNTIME_ASSERT("Unknown positional encoding type!");
 		}	
 
 		// dropout to the sums of the embeddings and the positional encodings
@@ -1134,28 +1140,30 @@ struct Decoder{
 			i_tgt = i_tgt * _scale_emb;// scaled embeddings
 
 			// + postional encoding
-			if (_p_tfc->_position_encoding == 1){// learned positional embedding 
-				std::vector<dynet::Expression> pos_embeddings;  
-				std::vector<unsigned> positions(sents.size());
-				for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
-					for (unsigned bs = 0; bs < sents.size(); ++bs){
-						if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
-						else
-							positions[bs] = l;
+			if (_p_tfc->_position_encoding_flag == 0 || _p_tfc->_position_encoding_flag == 2){
+				if (_p_tfc->_position_encoding == 1){// learned positional embedding 
+					std::vector<dynet::Expression> pos_embeddings;  
+					std::vector<unsigned> positions(sents.size());
+					for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+						for (unsigned bs = 0; bs < sents.size(); ++bs){
+							if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
+							else
+								positions[bs] = l;
+					}
+
+						pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+					}
+					dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
+
+					i_tgt = i_tgt + i_pos;
 				}
+				else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
+					dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_tgt.dim());
 
-					pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+					i_tgt = i_tgt + i_pos;
 				}
-				dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
-
-				i_tgt = i_tgt + i_pos;
+				else if (_p_tfc->_position_encoding != 0) TRANSFORMER_RUNTIME_ASSERT("Unknown positional encoding type!");
 			}
-			else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
-				dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_tgt.dim());
-
-				i_tgt = i_tgt + i_pos;
-			}
-			else if (_p_tfc->_position_encoding != 0) TRANSFORMER_RUNTIME_ASSERT("Unknown positional encoding type!");
 		}
 
 		// dropout to the sums of the embeddings and the positional encodings

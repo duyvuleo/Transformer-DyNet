@@ -118,7 +118,8 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("ff-activation-type", value<unsigned>()->default_value(1), "impose feed-forward activation type (1: RELU, 2: SWISH, 3: SWISH with learnable beta); 1 by default")
 		//-----------------------------------------
-		("position-encoding", value<unsigned>()->default_value(1), "impose position encoding (0: none; 1: learned positional embedding; 2: sinusoid encoding); 1 by default")
+		("position-encoding", value<unsigned>()->default_value(2), "impose positional encoding (0: none; 1: learned positional embedding; 2: sinusoid encoding); 2 by default")
+		("position-encoding-flag", value<unsigned>()->default_value(0), "which both (0) / encoder only (1) / decoder only (2) will be applied positional encoding; both (0) by default") // FIXME
 		("max-pos-seq-len", value<unsigned>()->default_value(300), "specify the maximum word-based sentence length (either source or target) for learned positional encoding; 300 by default")
 		//-----------------------------------------
 		("use-hybrid-model", "use hybrid model in which RNN encodings of source and target are used in place of word embeddings and positional encodings (a hybrid architecture between AM and Transformer?) partially adopted from GNMT style; no by default")
@@ -222,6 +223,7 @@ int main(int argc, char** argv) {
 		, vm.count("use-label-smoothing")
 		, vm["label-smoothing-weight"].as<float>()
 		, vm["position-encoding"].as<unsigned>()
+		, vm["position-encoding-flag"].as<unsigned>()
 		, vm["max-pos-seq-len"].as<unsigned>()
 		, sm
 		, vm["attention-type"].as<unsigned>()
@@ -575,14 +577,14 @@ void save_config(const string& config_out_file, const string& params_out_file, c
 	// each line has the format: 
 	// <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-hybrid-model> <your-trained-model-path>
 	// e.g.,
-	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
-	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
+	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
+	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
 	stringstream ss;
 		
 	ss << tfc._num_units << " " << tfc._nheads << " " << tfc._nlayers << " " << tfc._n_ff_units_factor << " "
 		<< tfc._encoder_emb_dropout_rate << " " << tfc._encoder_sublayer_dropout_rate << " " << tfc._decoder_emb_dropout_rate << " " << tfc._decoder_sublayer_dropout_rate << " " << tfc._attention_dropout_rate << " " << tfc._ff_dropout_rate << " "
 		<< tfc._use_label_smoothing << " " << tfc._label_smoothing_weight << " "
-		<< tfc._position_encoding << " " << tfc._max_length << " "
+		<< tfc._position_encoding << " " << tfc._position_encoding_flag << " " << tfc._max_length << " "
 		<< tfc._attention_type << " "
 		<< tfc._ffl_activation_type << " "
 		<< tfc._shared_embeddings << " "
