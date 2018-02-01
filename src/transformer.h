@@ -733,7 +733,7 @@ struct Encoder{
 	{
 		_p_embed_s = mod->add_lookup_parameters(tfc._src_vocab_size, {tfc._num_units});
 
-		if (!tfc._use_hybrid_model && tfc._position_encoding == 1){
+		if (!tfc._use_hybrid_model && tfc._position_encoding == 1 && (tfc._position_encoding_flag == 0 || tfc._position_encoding_flag == 1)){
 			_p_embed_pos = mod->add_lookup_parameters(tfc._max_length, {tfc._num_units});
 		}
 
@@ -1034,7 +1034,7 @@ struct Decoder{
 		else
 			_p_embed_t = mod->add_lookup_parameters(tfc._tgt_vocab_size, {tfc._num_units});
 
-		if (!tfc._use_hybrid_model && tfc._position_encoding == 1){
+		if (!tfc._use_hybrid_model && tfc._position_encoding == 1 && (tfc._position_encoding_flag == 0 || tfc._position_encoding_flag == 2)){
 			_p_embed_pos = mod->add_lookup_parameters(tfc._max_length, {tfc._num_units});
 		}
 
