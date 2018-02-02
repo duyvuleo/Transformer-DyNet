@@ -265,13 +265,13 @@ Finally, we can evaluate the translation result with BLEU:
 
 #### WMT17 English<->German (updating)
 
-	* Data (http://www.statmt.org/wmt17/translation-task.html) (train: 5418174 after filtering 30K_jBPE-ed sentences with length >=60; dev: newstest2013), preprocessed data can be obtained from http://data.statmt.org/wmt17/translation-task/preprocessed/.
+	* Data (http://www.statmt.org/wmt17/translation-task.html) (train: 5777224 after filtering 40K_jBPE-ed sentences with length >=80; dev: newstest2013), preprocessed data can be obtained from http://data.statmt.org/wmt17/translation-task/preprocessed/.
 
 	*********************************************************************************************************************************************
 	* DE-->EN (single system)
 	
 		                                		BLEU (tokenized + case-sensitive)
-		                                        newstest2014            	newstest2015            newstest2016               newstest2017
+		                                        newstest2014            	newstest2015            newstest2016		newstest2017
 	- Stanford NMT (Luong et al., 2015)                                     	24.9
 	(top50K, UNK post replacement, 8 stacking LSTM encoder/decoder layers, 1000 hidden/embedding dim, SGD, dropout 0.2)
 	------------------------------------------------------------------------------------------------------------------
@@ -288,16 +288,16 @@ Finally, we can evaluate the translation result with BLEU:
 	- Baseline 1 (medium model)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
-		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)		29.93 (10 epochs)		29.73 (10 epochs)
+		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
+		and label smoothing (0.1)		(updating with better results)		
 	*********************************************************************************************************************************************
 	Note/Comment: 
 
 	*********************************************************************************************************************************************
 	* EN-->DE (single system)
 	
-		                                		BLEU (tokenized + case-sensitive)
-		                                        newstest2014            	newstest2015            newstest2016               newstest2017
+		                                		BLEU (tokenized + case-sensitive) (w/ multi-bleu.perl script)
+		                                        newstest2014            	newstest2015            newstest2016		newstest2017			Notes:
 	- Google's NMT					23.7				26.5
 	(https://github.com/tensorflow/nmt)
 	(NMT + GNMT attention (beam=10), 4 LSTM encoders and decoders, 1024 units, jBPE 32K)
@@ -314,10 +314,26 @@ Finally, we can evaluate the translation result with BLEU:
 	- Baseline 1 (medium model)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
-		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)		26.18 (10 epochs)		27.82 (10 epochs)
+		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
+		and label smoothing (0.1)		27.06 (12 epochs)		29.11 (12 epochs)				27.11 (12 epochs)		Training took 10 days
 	*********************************************************************************************************************************************
-	Note/Comment: 
+	* EN-->DE (single system)
+	
+		                                		BLEU (detokenized + case-sensitive) (w/ mteval-v13a.pl script, official evaluation)
+		                                       			newstest2017			#params			Notes:
+	- Google's tensor2tensor					26.34				60.7M
+	(Vaswani et al, 2017)
+	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, adaptive Adam, modified beam search with width 10-12, average best model)	
+	- Amazon's Sockeye						27.50				62.9M
+	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, adaptive Adam, modified beam search with width 10-12, average best model)	
+	------------------------------------------------------------------------------------------------------------------
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
+	- Baseline 1 (medium model, single best)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
+		and label smoothing (0.1)				26.26 				62.6M			Training took 7-10 days
+	Note/Comment: Transformer-DyNet without careful optimisation of hyperparameters and with smaller networks can produce robust models with competitive results to tensor2tensor and sockeye. 
 
 #### NIST English-Chinese (in plan)
 

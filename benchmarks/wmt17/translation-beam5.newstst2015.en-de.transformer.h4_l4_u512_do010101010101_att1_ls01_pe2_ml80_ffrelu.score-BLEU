@@ -1,0 +1,2 @@
+It is in-advisable to publish scores from multi-bleu.perl.  The scores depend on your tokenizer, which is unlikely to be reproducible from your paper or consistent across research groups.  Instead you should detokenize then use mteval-v14.pl, which has a standard tokenization.  Scores from multi-bleu.perl can still be used for internal purposes when you have a consistent tokenizer.
+BLEU = 29.11, 60.9/34.9/22.5/15.1 (BP=1.000, ratio=1.002, hyp_len=44969, ref_len=44869)
