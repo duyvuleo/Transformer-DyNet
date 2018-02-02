@@ -289,15 +289,31 @@ Finally, we can evaluate the translation result with BLEU:
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
-		and label smoothing (0.1)		30.63 (12 epochs)		30.91 (12 epochs)				31.77 (12 epochs)
+		and label smoothing (0.1)		30.63 (12 epochs)		30.91 (12 epochs)	36.84 (12 epochs)	31.77 (12 epochs)
 	*********************************************************************************************************************************************
-	Note/Comment: 
+	* DE-->EN (single system)
+	
+		                                		BLEU (detokenized + case-sensitive) (w/ mteval-v13a.pl script, official evaluation)
+		                                       		newstest2016			newstest2017			#params			Notes	
+	- WMT competition (SOTA)				38.6				35.1
+	(http://matrix.statmt.org)
+	(newstest2016: BPE neural MT system with monolingual training data (back-translated). ensemble of 4, reranked with right-to-left model.)
+	(newstest2017: BPE neural MT system with monolingual training data (back-translated). ensemble of 4 L2R and 4 R2L models.)
+	------------------------------------------------------------------------------------------------------------------
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
+	- Baseline 1 (medium model, single best)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+		w/ dropout (0.1)					
+		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
+		and label smoothing (0.1)			35.85				30.80				62.6M			12 epochs, training took 7-10 days
+	*********************************************************************************************************************************************
+	Note/Comment: Single transformer systems (without using back-translated data) are still far away from the WMT SOTAs.
 
 	*********************************************************************************************************************************************
 	* EN-->DE (single system)
 	
 		                                		BLEU (tokenized + case-sensitive) (w/ multi-bleu.perl script)
-		                                        newstest2014            	newstest2015            newstest2016		newstest2017			Notes
+		                                        newstest2014            	newstest2015            newstest2016		newstest2017		Notes
 	- Google's NMT					23.7				26.5
 	(https://github.com/tensorflow/nmt)
 	(NMT + GNMT attention (beam=10), 4 LSTM encoders and decoders, 1024 units, jBPE 32K)
@@ -315,26 +331,28 @@ Finally, we can evaluate the translation result with BLEU:
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
-		and label smoothing (0.1)		27.06 (12 epochs)		29.11 (12 epochs)				27.11 (12 epochs)		Training took 7-10 days
+		and label smoothing (0.1)		27.06				29.11			32.94 			27.11 			12 epochs, training took 7-10 days
 	*********************************************************************************************************************************************
 	* EN-->DE (single system)
 	
 		                                		BLEU (detokenized + case-sensitive) (w/ mteval-v13a.pl script, official evaluation)
-		                                       			newstest2017			#params			Notes
-	- Google's tensor2tensor					26.34				60.7M
+		                                       		newstest2016			newstest2017			#params			Notes
+	- Google's tensor2tensor								26.34				60.7M
 	(Vaswani et al, 2017)
 	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, adaptive Adam, modified beam search with width 10-12, average best model)	
-	- Amazon's Sockeye						27.50				62.9M
+	- Amazon's Sockeye									27.50				62.9M
 	(8 heads, 6 encoder/decoder layers, sinusoid positional encoding, 512 units, adaptive Adam, modified beam search with width 10-12, average best model)	
-	- WMT competition (SOTA)					28.3
-	(http://matrix.statmt.org/matrix/systems_list/1869, BPE neural MT system with monolingual training data (back-translated). ensemble of 4 L2R and 4 R2L models)
+	- WMT competition (SOTA)				34.2				28.3
+	(http://matrix.statmt.org)
+	(newstest2016: BPE neural MT system with monolingual training data (back-translated). ensemble of 4, reranked with right-to-left model)
+	(newstest2017: BPE neural MT system with monolingual training data (back-translated). ensemble of 4 L2R and 4 R2L models)
 	------------------------------------------------------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1 (medium model, single best)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
-		and label smoothing (0.1)				26.26 				62.6M			Training took 7-10 days
+		and label smoothing (0.1)			32.32				26.26 				62.6M			12 epochs, training took 7-10 days
 	Note/Comment: Transformer-DyNet without careful optimisation of hyperparameters and with smaller networks can produce robust models with competitive results to tensor2tensor and sockeye. 
 
 #### NIST English-Chinese (in plan)
