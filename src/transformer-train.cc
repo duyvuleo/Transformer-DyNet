@@ -46,8 +46,8 @@ bool load_data(const variables_map& vm
 // ---
 
 // ---
-void save_config(const string& config_out_file
-	, const string& params_out_file
+void save_config(const std::string& config_out_file
+	, const std::string& params_out_file
 	, const TransformerConfig& tfc);
 // ---
 
@@ -62,7 +62,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordIdCorpus &devel_cor, 
 	Trainer &sgd, 
-	const string& params_out_file, const string& config_out_file, 
+	const std::string& params_out_file, const std::string& config_out_file, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints);// support batching
@@ -79,13 +79,13 @@ int main(int argc, char** argv) {
 	options_description opts("Allowed options");
 	opts.add_options()
 		("help", "print help message")
-		("config,c", value<string>(), "config file specifying additional command line options")
+		("config,c", value<std::string>(), "config file specifying additional command line options")
 		//-----------------------------------------
-		("train,t", value<std::vector<string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
-		("devel,d", value<string>(), "file containing development sentences.")
+		("train,t", value<std::vector<std::string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
+		("devel,d", value<std::string>(), "file containing development sentences.")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
-		("src-vocab", value<string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
-		("tgt-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
+		("src-vocab", value<std::string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
+		("tgt-vocab", value<std::string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		//-----------------------------------------
 		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
@@ -97,9 +97,9 @@ int main(int argc, char** argv) {
 		("sparse-updates", value<bool>()->default_value(true), "enable/disable sparse update(s) for lookup parameter(s); true by default")
 		("grad-clip-threshold", value<float>()->default_value(5.f), "use specific gradient clipping threshold (https://arxiv.org/pdf/1211.5063.pdf); 5 by default")
 		//-----------------------------------------
-		("initialise,i", value<string>(), "load initial parameters from file")
-		("parameters,p", value<string>(), "save best parameters to this file")
-		("config-file", value<string>()->default_value("/dev/null"), "save model configuration (used for decoding/inference) to this file")
+		("initialise,i", value<std::string>(), "load initial parameters from file")
+		("parameters,p", value<std::string>(), "save best parameters to this file")
+		("config-file", value<std::string>()->default_value("/dev/null"), "save model configuration (used for decoding/inference) to this file")
 		//-----------------------------------------
 		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers; 6 by default")
 		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units; 512 by default")
@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
 	store(parse_command_line(argc, argv, opts), vm); 
 	if (vm.count("config") > 0)
 	{
-		ifstream config(vm["config"].as<string>().c_str());
+		ifstream config(vm["config"].as<std::string>().c_str());
 		store(parse_config_file(config, opts), vm); 
 	}
 	notify(vm);
@@ -185,12 +185,11 @@ int main(int argc, char** argv) {
 	DREPORT = vm["dreport"].as<unsigned>(); 
 	SAMPLING_TRAINING = vm.count("sampling");
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
-	if (DREPORT % TREPORT != 0) TRANSFORMER_RUNTIME_ASSERT("dreport must be divisible by treport.");// to ensure the reporting on development data
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
 	// load fixed vocabularies from files if required
 	dynet::Dict sd, td;
-	load_vocabs(vm["src-vocab"].as<string>(), vm["tgt-vocab"].as<string>(), sd, td);
+	load_vocabs(vm["src-vocab"].as<std::string>(), vm["tgt-vocab"].as<std::string>(), sd, td);
 
 	SentinelMarkers sm;
 	sm._kSRC_SOS = sd.convert("<s>");
@@ -234,8 +233,8 @@ int main(int argc, char** argv) {
 	// initialise transformer object
 	transformer::TransformerModel tf(tfc, sd, td);
 	if (vm.count("initialise")){
-		cerr << endl << "Loading model from file: " << vm["initialise"].as<string>() << "..." << endl;
-		tf.initialise_params_from_file(vm["initialise"].as<string>());// load pre-trained model (for incremental training)
+		cerr << endl << "Loading model from file: " << vm["initialise"].as<std::string>() << "..." << endl;
+		tf.initialise_params_from_file(vm["initialise"].as<std::string>());// load pre-trained model (for incremental training)
 	}
 	cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
 
@@ -246,7 +245,7 @@ int main(int argc, char** argv) {
 	run_train(tf
 		, train_cor, devel_cor
 		, *p_sgd_trainer
-		, vm["parameters"].as<string>() /*best saved model parameter file*/, vm["config-file"].as<string>() /*saved configuration file*/
+		, vm["parameters"].as<std::string>() /*best saved model parameter file*/, vm["config-file"].as<std::string>() /*saved configuration file*/
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
 		, vm["average-checkpoints"].as<unsigned>());
@@ -269,15 +268,15 @@ bool load_data(const variables_map& vm
 	bool swap = vm.count("swap");
 	bool r2l_target = vm.count("r2l_target");
 
-	std::vector<string> train_paths = vm["train"].as<std::vector<string>>();// to handle multiple training data
+	std::vector<std::string> train_paths = vm["train"].as<std::vector<std::string>>();// to handle multiple training data
 	if (train_paths.size() > 2) TRANSFORMER_RUNTIME_ASSERT("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
 	if (vm.count("shared-embeddings"))
 		train_cor = read_corpus(train_paths[0], &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 	else
 		train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
-	if ("" == vm["src-vocab"].as<string>() 
-		&& "" == vm["tgt-vocab"].as<string>()) // if not using external vocabularies
+	if ("" == vm["src-vocab"].as<std::string>() 
+		&& "" == vm["tgt-vocab"].as<std::string>()) // if not using external vocabularies
 	{
 		sd.freeze(); // no new word types allowed
 		td.freeze(); // no new word types allowed
@@ -315,8 +314,8 @@ bool load_data(const variables_map& vm
 	sm._kTGT_UNK = td.get_unk_id();
 
 	if (vm.count("devel")) {
-		cerr << "Reading dev data from " << vm["devel"].as<string>() << "...\n";
-		devel_cor = read_corpus(vm["devel"].as<string>(), &sd, &td, false/*for development*/, 0, r2l_target & !swap);
+		cerr << "Reading dev data from " << vm["devel"].as<std::string>() << "...\n";
+		devel_cor = read_corpus(vm["devel"].as<std::string>(), &sd, &td, false/*for development*/, 0, r2l_target & !swap);
 	}
 
 	if (swap) {
@@ -380,7 +379,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordIdCorpus &devel_cor, 
 	Trainer &sgd, 
-	const string& params_out_file, const string& config_out_file,
+	const std::string& params_out_file, const std::string& config_out_file,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints)
@@ -572,14 +571,14 @@ std::string get_sentence(const WordIdSentence& source, Dict& td){
 //---
 
 //---
-void save_config(const string& config_out_file, const string& params_out_file, const TransformerConfig& tfc)
+void save_config(const std::string& config_out_file, const std::string& params_out_file, const TransformerConfig& tfc)
 {
 	// each line has the format: 
 	// <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-hybrid-model> <your-trained-model-path>
 	// e.g.,
 	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
 	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
-	stringstream ss;
+	std::stringstream ss;
 		
 	ss << tfc._num_units << " " << tfc._nheads << " " << tfc._nlayers << " " << tfc._n_ff_units_factor << " "
 		<< tfc._encoder_emb_dropout_rate << " " << tfc._encoder_sublayer_dropout_rate << " " << tfc._decoder_emb_dropout_rate << " " << tfc._decoder_sublayer_dropout_rate << " " << tfc._attention_dropout_rate << " " << tfc._ff_dropout_rate << " "

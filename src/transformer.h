@@ -102,7 +102,7 @@ struct TransformerConfig{
 	bool _use_label_smoothing = false;
 	float _label_smoothing_weight = 0.1f;
 
-	unsigned _position_encoding = 1; // 1: learned positional embedding ; 2: sinusoidal positional encoding ; 0: none
+	unsigned _position_encoding = 2; // 1: learned positional embedding ; 2: sinusoidal positional encoding ; 0: none
 	unsigned _position_encoding_flag = 0; // 0: positional encoding applies to both encoder and decoder ; 1: for encoder only  ; 2: for decoder only
 	unsigned _max_length = 500;// for learned positional embedding
 
@@ -1245,8 +1245,8 @@ public:
 	std::string beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width);// beam search decoding
 
 	dynet::ParameterCollection& get_model_parameters();
-	void initialise_params_from_file(const string &params_file);
-	void save_params_to_file(const string &params_file);
+	void initialise_params_from_file(const std::string &params_file);
+	void save_params_to_file(const std::string &params_file);
 
 	void set_dropout(bool is_activated = true);
 
@@ -1627,12 +1627,12 @@ dynet::ParameterCollection& TransformerModel::get_model_parameters(){
 	return *_all_params.get();
 }
 
-void TransformerModel::initialise_params_from_file(const string &params_file)
+void TransformerModel::initialise_params_from_file(const std::string &params_file)
 {
 	dynet::load_dynet_model(params_file, _all_params.get());// FIXME: use binary streaming instead for saving disk spaces?
 }
 
-void TransformerModel::save_params_to_file(const string &params_file)
+void TransformerModel::save_params_to_file(const std::string &params_file)
 {
 	dynet::save_dynet_model(params_file, _all_params.get());// FIXME: use binary streaming instead for saving disk spaces?
 }

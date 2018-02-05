@@ -28,7 +28,7 @@ bool load_data(const variables_map& vm
 // ---
 
 // ---
-bool load_model_config(const string& model_cfg_file
+bool load_model_config(const std::string& model_cfg_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, dynet::Dict& sd
 	, dynet::Dict& td
@@ -36,16 +36,16 @@ bool load_model_config(const string& model_cfg_file
 // ---
 
 // ---
-void decode(const string test_file
+void decode(const std::string test_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned beam_size=5
 	, unsigned int lc=0 /*line number to be continued*/
 	, bool remove_unk=false /*whether to include <unk> in the output*/
 	, bool r2l_target=false /*right-to-left decoding*/);
-void decode_nbest(const string test_file
+void decode_nbest(const std::string test_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned topk
-	, const string& nbest_style
+	, const std::string& nbest_style
 	, unsigned beam_size=5
 	, unsigned int lc=0 /*line number to be continued*/
 	, bool remove_unk=false /*whether to include <unk> in the output*/
@@ -63,27 +63,27 @@ int main(int argc, char** argv) {
 	options_description opts("Allowed options");
 	opts.add_options()
 		("help", "print help message")
-		("config,c", value<string>(), "config file specifying additional command line options")
+		("config,c", value<std::string>(), "config file specifying additional command line options")
 		//-----------------------------------------
 		("dynet-autobatch", value<unsigned>()->default_value(0), "impose the auto-batch mode (support both GPU and CPU); no by default")
 		//-----------------------------------------
-		("train,t", value<string>(), "file containing training sentences, with each line consisting of source ||| target.")		
+		("train,t", value<std::string>(), "file containing training sentences, with each line consisting of source ||| target.")		
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
-		("src-vocab", value<string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
-		("tgt-vocab", value<string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")	
+		("src-vocab", value<std::string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
+		("tgt-vocab", value<std::string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")	
 		//-----------------------------------------
 		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
 		//-----------------------------------------
 		//-----------------------------------------
-		("test,T", value<string>(), "file containing testing sentences.")
+		("test,T", value<std::string>(), "file containing testing sentences.")
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")
 		//-----------------------------------------
 		("beam,b", value<unsigned>()->default_value(1), "size of beam in decoding; 1: greedy")
 		("topk,k", value<unsigned>(), "use <num> top kbest entries; none by default")
-		("nbest-style", value<string>()->default_value("simple"), "style for nbest translation outputs (moses|simple); simple by default")
+		("nbest-style", value<std::string>()->default_value("simple"), "style for nbest translation outputs (moses|simple); simple by default")
 		//-----------------------------------------
-		("model-cfg,m", value<string>(), "model configuration file (to support ensemble decoding)")
+		("model-cfg,m", value<std::string>(), "model configuration file (to support ensemble decoding)")
 		//-----------------------------------------
 		("remove-unk", "remove <unk> in the output; default not")
 		//-----------------------------------------
@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
 	store(parse_command_line(argc, argv, opts), vm); 
 	if (vm.count("config") > 0)
 	{
-		ifstream config(vm["config"].as<string>().c_str());
+		ifstream config(vm["config"].as<std::string>().c_str());
 		store(parse_config_file(config, opts), vm); 
 	}
 	notify(vm);
@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
 
 	// load fixed vocabularies from files if required
 	dynet::Dict sd, td;
-	load_vocabs(vm["src-vocab"].as<string>(), vm["tgt-vocab"].as<string>(), sd, td);
+	load_vocabs(vm["src-vocab"].as<std::string>(), vm["tgt-vocab"].as<std::string>(), sd, td);
 	cerr << endl;
 
 	transformer::SentinelMarkers sm;
@@ -138,12 +138,12 @@ int main(int argc, char** argv) {
 
 	// load models
 	std::vector<std::shared_ptr<transformer::TransformerModel>> v_tf_models;
-	if (!load_model_config(vm["model-cfg"].as<string>(), v_tf_models, sd, td, sm))
+	if (!load_model_config(vm["model-cfg"].as<std::string>(), v_tf_models, sd, td, sm))
 		TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
 
 	// decode the input file
 	if (vm.count("topk"))
-		decode_nbest(vm["test"].as<std::string>(), v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<string>(), vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
+		decode_nbest(vm["test"].as<std::string>(), v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<std::string>(), vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
 	else
 		decode(vm["test"].as<std::string>(), v_tf_models, vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
 
@@ -161,16 +161,16 @@ bool load_data(const variables_map& vm
 	bool r2l_target = vm.count("r2l_target");
 
 	if (vm.count("train")){
-		cerr << "Reading training data from " << vm["train"].as<string>() << "...\n";	
+		cerr << "Reading training data from " << vm["train"].as<std::string>() << "...\n";	
 		if (vm.count("shared-embeddings"))
-			train_cor = read_corpus(vm["train"].as<string>(), &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+			train_cor = read_corpus(vm["train"].as<std::string>(), &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 		else 
-			train_cor = read_corpus(vm["train"].as<string>(), &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+			train_cor = read_corpus(vm["train"].as<std::string>(), &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 		cerr << endl;
 	}
 
-	if ("" == vm["src-vocab"].as<string>() 
-		&& "" == vm["tgt-vocab"].as<string>()) // if not using external vocabularies
+	if ("" == vm["src-vocab"].as<std::string>() 
+		&& "" == vm["tgt-vocab"].as<std::string>()) // if not using external vocabularies
 	{
 		sd.freeze(); // no new word types allowed
 		td.freeze(); // no new word types allowed
@@ -222,7 +222,7 @@ bool load_data(const variables_map& vm
 // ---
 
 // ---
-bool load_model_config(const string& model_cfg_file
+bool load_model_config(const std::string& model_cfg_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, dynet::Dict& sd
 	, dynet::Dict& td
@@ -246,10 +246,10 @@ bool load_model_config(const string& model_cfg_file
 		// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
 		// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
 		cerr << "Loading model " << i+1 << "..." << endl;
-		stringstream ss(line);
+		std::stringstream ss(line);
 
 		transformer::TransformerConfig tfc;
-		string model_file;
+		std::string model_file;
 
 		tfc._src_vocab_size = sd.size();
 		tfc._tgt_vocab_size = td.size();
@@ -282,7 +282,7 @@ bool load_model_config(const string& model_cfg_file
 // ---
 
 // ---
-void decode(const string test_file
+void decode(const std::string test_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned beam_size
 	, unsigned int lc /*line number to be continued*/
@@ -303,7 +303,7 @@ void decode(const string test_file
 	assert(in);
 
 	MyTimer timer_dec("completed in");
-	string line;
+	std::string line;
 	WordIdSentence source;
 	unsigned int lno = 0;
 	while (std::getline(in, line)) {
@@ -354,10 +354,10 @@ void decode(const string test_file
 // ---
 
 // ---
-void decode_nbest(const string test_file
+void decode_nbest(const std::string test_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned topk
-	, const string& nbest_style
+	, const std::string& nbest_style
 	, unsigned beam_size
 	, unsigned int lc /*line number to be continued*/
 	, bool remove_unk /*whether to include <unk> in the output*/
@@ -379,7 +379,7 @@ void decode_nbest(const string test_file
 	assert(in);
 
 	MyTimer timer_dec("completed in");
-	string line;
+	std::string line;
 	WordIdSentence source;
 	unsigned int lno = 0;
 	while (std::getline(in, line)) {
@@ -420,7 +420,7 @@ void decode_nbest(const string test_file
 				//...
 
 				// follows Moses's nbest file format
-				stringstream ss;
+				std::stringstream ss;
 
 				// source text
 				ss /*<< lno << " ||| "*/ << line << " ||| ";
@@ -442,7 +442,7 @@ void decode_nbest(const string test_file
 			}
 			else if (nbest_style == "simple"){
 				// simple format with target1 ||| target2 ||| ...
-				stringstream ss;
+				std::stringstream ss;
 				bool first = true;
 				for (auto &w: target) {
 					if (!first) ss << " ";
