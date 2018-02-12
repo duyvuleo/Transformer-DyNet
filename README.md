@@ -290,6 +290,9 @@ Finally, we can evaluate the translation result with BLEU:
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
 		and label smoothing (0.1)		30.63 				30.91 			36.84 			31.77 
+	- Advance 1 (medium model)			31.96				32.49			40.22			34.25
+	(same configuration with Baseline 1)
+	(use back-translated data from http://data.statmt.org/rsennrich/wmt16_backtranslations/)
 	*********************************************************************************************************************************************
 	* DE-->EN (single system)
 	
@@ -306,8 +309,11 @@ Finally, we can evaluate the translation result with BLEU:
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
 		and label smoothing (0.1)			35.85				30.80				62.6M			12 epochs, training took 7-10 days
+	- Advance 1 (medium model, single best)			39.00 (new SOTA)		33.17				62.6M
+	(same configuration with Baseline 1)
+	(use back-translated data from http://data.statmt.org/rsennrich/wmt16_backtranslations/)
 	*********************************************************************************************************************************************
-	Note/Comment: Single transformer systems (without using back-translated data) are still far away from the WMT SOTAs.
+	Note/Comment: Single Transformer systems (without using back-translated data) are still far away from the WMT SOTAs. Unsuprisingly, the single Transformer system enhanced with back-translated data outperformed the ensemble systems from WMT on newstest2016. 
 
 	*********************************************************************************************************************************************
 	* EN-->DE (single system)
