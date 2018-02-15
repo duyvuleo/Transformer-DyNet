@@ -338,6 +338,9 @@ Finally, we can evaluate the translation result with BLEU:
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
 		and label smoothing (0.1)		27.06				29.11			32.94 			27.11 			12 epochs, training took 7-10 days
+	- Advance 1 (medium model)			28.88				30.05			34.81			28.37
+	(same configuration with Baseline 1)
+	(use back-translated data from http://data.statmt.org/rsennrich/wmt16_backtranslations/)
 	*********************************************************************************************************************************************
 	* EN-->DE (single system)
 	
@@ -359,6 +362,10 @@ Finally, we can evaluate the translation result with BLEU:
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
 		and label smoothing (0.1)			32.32				26.26 				62.6M			12 epochs, training took 7-10 days
+	- Advance 1 (medium model)				34.01				27.28				62.6M
+	(same configuration with Baseline 1)
+	(use back-translated data from http://data.statmt.org/rsennrich/wmt16_backtranslations/)
+	*********************************************************************************************************************************************
 	Note/Comment: Transformer-DyNet without careful optimisation of hyperparameters and with smaller networks can produce robust models with competitive results to tensor2tensor and sockeye. 
 
 #### NIST English-Chinese (in plan)

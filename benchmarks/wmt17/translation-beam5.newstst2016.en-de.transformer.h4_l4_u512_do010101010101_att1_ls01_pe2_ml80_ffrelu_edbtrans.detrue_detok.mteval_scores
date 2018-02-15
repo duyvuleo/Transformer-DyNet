@@ -1,0 +1,28 @@
+Use of 'Hyphen' in \p{} or \P{} is deprecated because: Supplanted by Line_Break property values; see www.unicode.org/reports/tr14; at /home/vhoang2/tools/mosesdecoder-RELEASE-3.0/scripts/generic/mteval-v13a.pl line 951.
+MT evaluation scorer began on 2018 Feb 15 at 13:45:18
+command line:  /home/vhoang2/tools/mosesdecoder-RELEASE-3.0/scripts/generic/mteval-v13a.pl -c -s experiments/data/wmt17/dev/newstest2016-ende-src.en.sgm -r experiments/data/wmt17/dev/newstest2016-ende-ref.de.sgm -t experiments/models/wmt17/translation-beam5.newstst2016.en-de.transformer.h4_l4_u512_do010101010101_att1_ls01_pe2_ml80_ffrelu_edbtrans.detrue_detok.sgm
+  Evaluation of any-to-de translation using:
+    src set "newstest2016" (155 docs, 2999 segs)
+    ref set "newstest2016" (1 refs)
+    tst set "newstest2016" (1 systems)
+
+length ratio: 0.966155515486126 (60548/62669), penalty (log): -0.0350300587963268
+NIST score = 8.5702  BLEU score = 0.3401 for system "Edinburgh"
+
+# ------------------------------------------------------------------------
+
+Individual N-gram scoring
+        1-gram   2-gram   3-gram   4-gram   5-gram   6-gram   7-gram   8-gram   9-gram
+        ------   ------   ------   ------   ------   ------   ------   ------   ------
+ NIST:  6.3775   1.8087   0.3251   0.0530   0.0058   0.0010   0.0001   0.0000   0.0000  "Edinburgh"
+
+ BLEU:  0.6660   0.4126   0.2821   0.1985   0.1431   0.1051   0.0776   0.0575   0.0430  "Edinburgh"
+
+# ------------------------------------------------------------------------
+Cumulative N-gram scoring
+        1-gram   2-gram   3-gram   4-gram   5-gram   6-gram   7-gram   8-gram   9-gram
+        ------   ------   ------   ------   ------   ------   ------   ------   ------
+ NIST:  6.3775   8.1862   8.5113   8.5643   8.5702   8.5712   8.5712   8.5712   8.5712  "Edinburgh"
+
+ BLEU:  0.6431   0.5062   0.4117   0.3401   0.2840   0.2393   0.2027   0.1724   0.1472  "Edinburgh"
+MT evaluation scorer ended on 2018 Feb 15 at 13:45:28
