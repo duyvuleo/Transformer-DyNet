@@ -917,7 +917,7 @@ struct Encoder{
 		
 		// compute stacked encoder layers
 		dynet::Expression i_enc_l_out = i_src_rep;
-		for (auto enc : _v_enc_layers){
+		for (auto& enc : _v_enc_layers){
 			// stacking approach
 			i_enc_l_out = enc.build_graph(cg, i_enc_l_out, _self_mask);// each position in the encoder can attend to all positions in the previous layer of the encoder.
 		}
@@ -1201,11 +1201,11 @@ struct Decoder{
 		, const WordIdSentences& tsents/*batch of sentences*/
 		, const dynet::Expression& i_src_rep)
 	{		
-		// compute source (+ postion) embeddings
+		// compute target (+ postion) embeddings
 		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, tsents);// ((num_units, Ly), batch_size)
 			
 		dynet::Expression i_dec_l_out = i_tgt_rep;
-		for (auto dec : _v_dec_layers){
+		for (auto& dec : _v_dec_layers){
 			// stacking approach
 			i_dec_l_out = dec.build_graph(cg, i_src_rep, i_dec_l_out, _self_mask, _src_mask);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
 		}
@@ -1286,7 +1286,7 @@ TransformerModel::TransformerModel(const TransformerConfig& tfc, dynet::Dict& sd
 	_decoder.reset(new Decoder(_all_params.get(), _tfc, _encoder.get()));// create new decoder object
 
 	// final output projection layer
-	_p_Wo_bias = _all_params.get()->add_parameters({tfc._tgt_vocab_size});// optional
+	_p_Wo_bias = _all_params.get()->add_parameters({_tfc._tgt_vocab_size});// optional
 
 	// dictionaries
 	_dicts.first = sd;
@@ -1573,7 +1573,7 @@ std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const Wor
 	for (unsigned steps = 0; completed.size() < beam_width && steps < 2*source.size(); ++steps) {
 		std::vector<Hypothesis> new_chart;
 
-		for (auto &hprev: chart) {
+		for (auto& hprev: chart) {
 			cg.checkpoint();
 		
 			dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, hprev.target, false, aligns);
