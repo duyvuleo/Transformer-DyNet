@@ -73,5 +73,53 @@ inline size_t create_minibatches(const WordIdCorpus& cor
 
 	return train_ids.size();
 }
+
+// for monolingual data
+inline void create_minibatches(const WordIdSentences& traincor,
+	size_t max_size, 
+	std::vector<WordIdSentences> & traincor_minibatch, 
+	std::vector<size_t>& train_ids_minibatch);
+
+struct SingleLength
+{
+	SingleLength(const WordIdSentences & v) : vec(v) { }
+	inline bool operator() (int i1, int i2)
+	{
+		return (vec[i2].size() < vec[i1].size());
+	}
+	const WordIdSentences & vec;
+};
+
+inline void create_minibatches(const WordIdSentences& traincor,
+	size_t max_size,
+	std::vector<WordIdSentences> & traincor_minibatch,
+	std::vector<size_t>& train_ids_minibatch)
+{
+	std::vector<size_t> train_ids(traincor.size());
+	std::iota(train_ids.begin(), train_ids.end(), 0);
+
+	if(max_size > 1)
+		std::sort(train_ids.begin(), train_ids.end(), SingleLength(traincor));
+
+	std::vector<WordIdSentence> traincor_next;
+	size_t first_size = 0;
+	for(size_t i = 0; i < train_ids.size(); i++) {
+		if (traincor_next.size() == 0)
+			first_size = traincor[train_ids[i]].size();
+
+		traincor_next.push_back(traincor[train_ids[i]]);
+
+		if ((traincor_next.size()+1) * first_size > max_size) {
+			traincor_minibatch.push_back(traincor_next);
+			traincor_next.clear();
+		}
+	}
+	
+	if (traincor_next.size()) traincor_minibatch.push_back(traincor_next);
+
+	// Create a sentence list for this minibatch
+	train_ids_minibatch.resize(traincor_minibatch.size());
+	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
+}
 // --------------------------------------------------------------------------------------------------------------------------------
 

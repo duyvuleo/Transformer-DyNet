@@ -14,6 +14,11 @@ WordIdCorpus read_corpus(const string &filename
 	, unsigned slen=0, bool r2l_target=false
 	, bool swap=false);
 
+WordIdSentences read_corpus(const string &filename
+	, dynet::Dict* d
+	, bool cid=true/*corpus id, 1:train;0:otherwise*/
+	, unsigned slen=0, bool r2l_target=false);
+
 WordIdCorpus read_corpus(const string &filename
 	, dynet::Dict* sd, dynet::Dict* td
 	, bool cid
@@ -42,7 +47,7 @@ WordIdCorpus read_corpus(const string &filename
 
 		// reverse the target if required
 		if (r2l_target) 
-			std::reverse(target.begin() + 1/*BOS*/,target.end() - 1/*EOS*/);
+			std::reverse(target.begin() + 1/*BOS*/, target.end() - 1/*EOS*/);
 
 		// constrain sentence length(s)
 		if (cid/*train only*/ && slen > 0/*length limit*/){
@@ -79,6 +84,65 @@ WordIdCorpus read_corpus(const string &filename
 		cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t), " << "max length (s & t): " << max_src_len << " & " << max_tgt_len << ", " << sd->size() << " & " << td->size() << " types" << endl;
 	else 
 		cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t), " << "max length (s & t): " << max_src_len << " & " << max_tgt_len << endl;
+
+	return corpus;
+}
+
+WordIdSentences read_corpus(const string &filename
+	, dynet::Dict* d
+	, bool cid
+	, unsigned slen, bool r2l)
+{
+	int SOS = d->convert("<s>");
+	int EOS = d->convert("</s>");
+
+	ifstream in(filename);
+	assert(in);
+
+	WordIdSentences corpus;
+
+	string line;
+	int lc = 0, toks = 0;
+	unsigned int max_len = 0;
+	while (getline(in, line)) {
+		WordIdSentence sent = read_sentence(line, *d);
+
+		// reverse the target if required
+		if (r2l) 
+			std::reverse(sent.begin() + 1/*BOS*/, sent.end() - 1/*EOS*/);
+
+		// constrain sentence length(s)
+		if (cid/*train only*/ && slen > 0/*length limit*/){
+			if (sent.size() > slen)
+				continue;// ignore this sentence
+		}
+
+		if (sent.front() != SOS && sent.back() != EOS) {
+			stringstream ss;
+			ss << "Sentence in " << filename << ":" << lc << " didn't start or end with <s>, </s>\n";
+			assert(ss.str().c_str());
+
+			abort();
+		}
+
+		if (sent.size() < 3){ // ignore empty sentences, e.g., <s> </s>
+			continue;
+		}
+
+		corpus.push_back(sent);
+
+		max_len = std::max(max_len, (unsigned int)sent.size());
+
+		toks += sent.size();
+
+		++lc;
+	}
+
+	// print stats
+	if (cid)
+		cerr << lc << " lines, " << toks << " tokens, " << "max length: " << max_len << ", " << d->size() << " types" << endl;
+	else 
+		cerr << lc << " lines, " << toks << " tokens, " << "max length: " << max_len << endl;
 
 	return corpus;
 }

@@ -3,7 +3,7 @@
 * Updated: 1 Nov 2017
 */
 
-#include "transformer.h"
+#include "transformer-lm.h"
 
 using namespace std;
 using namespace dynet;
@@ -40,9 +40,16 @@ bool VERBOSE = false;
 
 // ---
 bool load_data(const variables_map& vm
-	, WordIdCorpus& train_cor, WordIdCorpus& devel_cor
-	, dynet::Dict& sd, dynet::Dict& td
+	, WordIdSentences& train_cor, WordIdSentences& devel_cor
+	, dynet::Dict& d
 	, SentinelMarkers& sm);
+// ---
+
+// ---
+bool load_model_config(const std::string& model_cfg_file
+	, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_models
+	, dynet::Dict& d
+	, const transformer::SentinelMarkers& sm);
 // ---
 
 // ---
@@ -60,7 +67,11 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 
 // ---
-void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordIdCorpus &devel_cor, 
+void report_perplexity_score(std::vector<std::shared_ptr<transformer::TransformerLModel>> &v_tf_models, WordIdSentences &test_cor);
+// ---
+
+// ---
+void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, WordIdSentences &devel_cor, 
 	Trainer &sgd, 
 	const std::string& params_out_file, const std::string& config_out_file, 
 	unsigned max_epochs, unsigned patience, 
@@ -83,12 +94,10 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("train,t", value<std::vector<std::string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
 		("devel,d", value<std::string>(), "file containing development sentences.")
+		("test,T", value<std::string>(), "file containing testing sentences.")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
-		("src-vocab", value<std::string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
-		("tgt-vocab", value<std::string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
+		("vocab", value<std::string>()->default_value(""), "file containing vocabulary file; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
-		//-----------------------------------------
-		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
 		//-----------------------------------------
 		("minibatch-size,b", value<unsigned>()->default_value(1), "impose the minibatch size for training (support both GPU and CPU); single batch by default")
 		("dynet-autobatch", value<unsigned>()->default_value(0), "impose the auto-batch mode (support both GPU and CPU); no by default")
@@ -101,15 +110,13 @@ int main(int argc, char** argv) {
 		("parameters,p", value<std::string>(), "save best parameters to this file")
 		("config-file", value<std::string>()->default_value("/dev/null"), "save model configuration (used for decoding/inference) to this file")
 		//-----------------------------------------
-		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers; 6 by default")
+		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked decoder layers; 6 by default")
 		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units; 512 by default")
 		("num-heads,h", value<unsigned>()->default_value(8), "use <num> for number of heads in multi-head attention mechanism; 4 by default")
 		("n-ff-units-factor", value<unsigned>()->default_value(4), "use <num> times of input dim for output dim in feed-forward layer; 4 by default")
 		//-----------------------------------------
-		("encoder-emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for encoder embeddings; 0.1 by default")
-		("encoder-sublayer-dropout-p", value<float>()->default_value(0.1f), "use dropout for sub-layer's output in encoder; 0.1 by default")
-		("decoder-emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for decoding embeddings; 0.1 by default")
-		("decoder-sublayer-dropout-p", value<float>()->default_value(0.1f), "use dropout for sub-layer's output in decoder; 0.1 by default")
+		("emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for word embeddings; 0.1 by default")
+		("sublayer-dropout-p", value<float>()->default_value(0.1f), "use dropout for sub-layer's output in decoder; 0.1 by default")
 		("attention-dropout-p", value<float>()->default_value(0.1f), "use dropout for attention; 0.1 by default")
 		("ff-dropout-p", value<float>()->default_value(0.1f), "use dropout for feed-forward layer; 0.1 by default")
 		//-----------------------------------------
@@ -119,10 +126,9 @@ int main(int argc, char** argv) {
 		("ff-activation-type", value<unsigned>()->default_value(1), "impose feed-forward activation type (1: RELU, 2: SWISH, 3: SWISH with learnable beta); 1 by default")
 		//-----------------------------------------
 		("position-encoding", value<unsigned>()->default_value(2), "impose positional encoding (0: none; 1: learned positional embedding; 2: sinusoid encoding); 2 by default")
-		("position-encoding-flag", value<unsigned>()->default_value(0), "which both (0) / encoder only (1) / decoder only (2) will be applied positional encoding; both (0) by default")
 		("max-pos-seq-len", value<unsigned>()->default_value(300), "specify the maximum word-based sentence length (either source or target) for learned positional encoding; 300 by default")
 		//-----------------------------------------
-		("use-hybrid-model", "use hybrid model in which RNN encodings of source and target are used in place of word embeddings and positional encodings (a hybrid architecture between AM and Transformer?) partially adopted from GNMT style; no by default")
+		("use-hybrid-model", "use hybrid model in which RNN encodings are used in place of word embeddings and positional encodings (a hybrid architecture between AM and Transformer?) partially adopted from GNMT style; no by default")
 		//-----------------------------------------
 		("attention-type", value<unsigned>()->default_value(1), "impose attention type (1: Luong attention type; 2: Bahdanau attention type); 1 by default")
 		//-----------------------------------------
@@ -135,13 +141,11 @@ int main(int argc, char** argv) {
 		("lr-epochs", value<unsigned>()->default_value(0), "no. of epochs for starting learning rate annealing (e.g., halving)") // learning rate scheduler 1
 		("lr-patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved, e.g., for starting learning rate annealing (e.g., halving)") // learning rate scheduler 2
 		//-----------------------------------------
-		("sampling", "sample translation during training; default not")
+		("sampling", "sample during training; default not")
 		//-----------------------------------------
 		("average-checkpoints", value<unsigned>()->default_value(1), "specify number of checkpoints for model averaging; default single best model") // average checkpointing
 		//-----------------------------------------
 		("r2l-target", "use right-to-left direction for target during training; default not")
-		//-----------------------------------------
-		("swap", "swap roles of source and target, i.e., learn p(source|target)")
 		//-----------------------------------------
 		("treport", value<unsigned>()->default_value(50), "no. of training instances for reporting current model status on training data")
 		("dreport", value<unsigned>()->default_value(5000), "no. of training instances for reporting current model status on development data (dreport = N * treport)")
@@ -188,72 +192,80 @@ int main(int argc, char** argv) {
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
 	// load fixed vocabularies from files if required
-	dynet::Dict sd, td;
-	load_vocabs(vm["src-vocab"].as<std::string>(), vm["tgt-vocab"].as<std::string>(), sd, td);
+	dynet::Dict d;
+	load_vocab(vm["vocab"].as<std::string>(), d);
 
 	SentinelMarkers sm;
-	sm._kSRC_SOS = sd.convert("<s>");
-	sm._kSRC_EOS = sd.convert("</s>");
-	sm._kTGT_SOS = td.convert("<s>");
-	sm._kTGT_EOS = td.convert("</s>");
+	sm._SOS = d.convert("<s>");
+	sm._EOS = d.convert("</s>");
 
 	// load data files
-	WordIdCorpus train_cor, devel_cor;
-	if (!load_data(vm, train_cor, devel_cor, sd, td, sm))
+	WordIdSentences train_cor, devel_cor;
+	if (!load_data(vm, train_cor, devel_cor, d, sm))
 		TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
-	// learning rate scheduler
-	unsigned lr_epochs = vm["lr-epochs"].as<unsigned>(), lr_patience = vm["lr-patience"].as<unsigned>();
-	if (lr_epochs > 0 && lr_patience > 0)
-		cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;
+	bool is_training = !vm.count("test");
 
-	// transformer configuration
-	transformer::TransformerConfig tfc(sd.size(), td.size()
-		, vm["num-units"].as<unsigned>()
-		, vm["num-heads"].as<unsigned>()
-		, vm["nlayers"].as<unsigned>()
-		, vm["n-ff-units-factor"].as<unsigned>()
-		, vm["encoder-emb-dropout-p"].as<float>()
-		, vm["encoder-sublayer-dropout-p"].as<float>()
-		, vm["decoder-emb-dropout-p"].as<float>()
-		, vm["decoder-sublayer-dropout-p"].as<float>()
-		, vm["attention-dropout-p"].as<float>()
-		, vm["ff-dropout-p"].as<float>()
-		, vm.count("use-label-smoothing")
-		, vm["label-smoothing-weight"].as<float>()
-		, vm["position-encoding"].as<unsigned>()
-		, vm["position-encoding-flag"].as<unsigned>()
-		, vm["max-pos-seq-len"].as<unsigned>()
-		, sm
-		, vm["attention-type"].as<unsigned>()
-		, vm["ff-activation-type"].as<unsigned>()
-		, vm.count("shared-embeddings")
-		, vm.count("use-hybrid-model"));
+	if (is_training){
+		// learning rate scheduler
+		unsigned lr_epochs = vm["lr-epochs"].as<unsigned>(), lr_patience = vm["lr-patience"].as<unsigned>();
+		if (lr_epochs > 0 && lr_patience > 0)
+			cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;
 
-	// initialise transformer object
-	transformer::TransformerModel tf(tfc, sd, td);
-	if (vm.count("initialise")){
-		cerr << endl << "Loading model from file: " << vm["initialise"].as<std::string>() << "..." << endl;
-		tf.initialise_params_from_file(vm["initialise"].as<std::string>());// load pre-trained model (for incremental training)
+		// transformer configuration
+		transformer::TransformerConfig tfc(d.size()
+			, vm["num-units"].as<unsigned>()
+			, vm["num-heads"].as<unsigned>()
+			, vm["nlayers"].as<unsigned>()
+			, vm["n-ff-units-factor"].as<unsigned>()
+			, vm["emb-dropout-p"].as<float>()
+			, vm["sublayer-dropout-p"].as<float>()
+			, vm["attention-dropout-p"].as<float>()
+			, vm["ff-dropout-p"].as<float>()
+			, vm.count("use-label-smoothing")
+			, vm["label-smoothing-weight"].as<float>()
+			, vm["position-encoding"].as<unsigned>()
+			, vm["max-pos-seq-len"].as<unsigned>()
+			, sm
+			, vm["attention-type"].as<unsigned>()
+			, vm["ff-activation-type"].as<unsigned>()
+			, vm.count("use-hybrid-model"));
+
+		// initialise transformer object
+		transformer::TransformerLModel tf(tfc, d);
+		if (vm.count("initialise")){
+			cerr << endl << "Loading model from file: " << vm["initialise"].as<std::string>() << "..." << endl;
+			tf.initialise_params_from_file(vm["initialise"].as<std::string>());// load pre-trained model (for incremental training)
+		}
+		cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
+
+		// create SGD trainer
+		Trainer* p_sgd_trainer = create_sgd_trainer(vm, tf.get_model_parameters());
+
+		// train transformer model
+		run_train(tf
+			, train_cor, devel_cor
+			, *p_sgd_trainer
+			, vm["parameters"].as<std::string>() /*best saved model parameter file*/, vm["config-file"].as<std::string>() /*saved configuration file*/
+			, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
+			, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
+			, vm["average-checkpoints"].as<unsigned>());
+
+		// clean up
+		cerr << "Cleaning up..." << endl;
+		delete p_sgd_trainer;
+		// transformer object will be automatically cleaned, no action required!
 	}
-	cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
+	else{
+		// load models
+		std::vector<std::shared_ptr<transformer::TransformerLModel>> v_tf_models;// to support ensemble models
+		if (!load_model_config(vm["model-cfg"].as<std::string>(), v_tf_models, d, sm))
+			TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
+		
+		WordIdSentences test_cor = read_corpus(vm["test"].as<std::string>(), &d, false/*for development*/, 0, vm.count("r2l_target"));
 
-	// create SGD trainer
-	Trainer* p_sgd_trainer = create_sgd_trainer(vm, tf.get_model_parameters());
-
-	// train transformer model
-	run_train(tf
-		, train_cor, devel_cor
-		, *p_sgd_trainer
-		, vm["parameters"].as<std::string>() /*best saved model parameter file*/, vm["config-file"].as<std::string>() /*saved configuration file*/
-		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
-		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
-		, vm["average-checkpoints"].as<unsigned>());
-
-	// clean up
-	cerr << "Cleaning up..." << endl;
-	delete p_sgd_trainer;
-	// transformer object will be automatically cleaned, no action required!
+		report_perplexity_score(v_tf_models, test_cor);
+	}
 
 	return EXIT_SUCCESS;
 }
@@ -261,31 +273,27 @@ int main(int argc, char** argv) {
 
 // ---
 bool load_data(const variables_map& vm
-	, WordIdCorpus& train_cor, WordIdCorpus& devel_cor
-	, dynet::Dict& sd, dynet::Dict& td
+	, WordIdSentences& train_cor, WordIdSentences& devel_cor
+	, dynet::Dict& d
 	, SentinelMarkers& sm)
 {
-	bool swap = vm.count("swap");
 	bool r2l_target = vm.count("r2l_target");
 
 	std::vector<std::string> train_paths = vm["train"].as<std::vector<std::string>>();// to handle multiple training data
 	if (train_paths.size() > 2) TRANSFORMER_RUNTIME_ASSERT("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
 	if (vm.count("shared-embeddings"))
-		train_cor = read_corpus(train_paths[0], &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+		train_cor = read_corpus(train_paths[0], &d, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
 	else
-		train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
-	if ("" == vm["src-vocab"].as<std::string>() 
-		&& "" == vm["tgt-vocab"].as<std::string>()) // if not using external vocabularies
-	{
-		sd.freeze(); // no new word types allowed
-		td.freeze(); // no new word types allowed
-	}
+		train_cor = read_corpus(train_paths[0], &d, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
+	if ("" == vm["vocab"].as<std::string>()) // if not using external vocabularies
+		d.freeze(); // no new word types allowed
+	
 	if (train_paths.size() == 2)// incremental training
 	{
 		train_cor.clear();// use the next training corpus instead!	
 		cerr << "Reading extra training data from " << train_paths[1] << "...\n";
-		train_cor = read_corpus(train_paths[1], &sd, &td, true/*for training*/, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+		train_cor = read_corpus(train_paths[1], &d, true/*for training*/, vm["max-seq-len"].as<unsigned>(), r2l_target);
 		cerr << "Performing incremental training..." << endl;
 	}
 
@@ -308,40 +316,12 @@ bool load_data(const variables_map& vm
 		cerr << "WARNING: --dreport <num> (" << DREPORT << ")" << " is too large, <= training data size (" << train_cor.size() << ")" << endl;
 
 	// set up <unk> ids
-	sd.set_unk("<unk>");
-	sm._kSRC_UNK = sd.get_unk_id();
-	td.set_unk("<unk>");
-	sm._kTGT_UNK = td.get_unk_id();
+	d.set_unk("<unk>");
+	sm._UNK = d.get_unk_id();
 
 	if (vm.count("devel")) {
 		cerr << "Reading dev data from " << vm["devel"].as<std::string>() << "...\n";
-		devel_cor = read_corpus(vm["devel"].as<std::string>(), &sd, &td, false/*for development*/, 0, r2l_target & !swap);
-	}
-
-	if (swap) {
-		cerr << "Swapping role of source and target\n";
-		if (!vm.count("shared-embeddings")){
-			std::swap(sd, td);
-			std::swap(sm._kSRC_SOS, sm._kTGT_SOS);
-			std::swap(sm._kSRC_EOS, sm._kTGT_EOS);
-			std::swap(sm._kSRC_UNK, sm._kTGT_UNK);
-		}
-
-		for (auto &sent: train_cor){
-			std::swap(get<0>(sent), get<1>(sent));
-			if (r2l_target){
-				WordIdSentence &tsent = get<1>(sent);
-				std::reverse(tsent.begin() + 1, tsent.end() - 1);
-			}
-		}
-		
-		for (auto &sent: devel_cor){
-			std::swap(get<0>(sent), get<1>(sent));
-			if (r2l_target){
-				WordIdSentence &tsent = get<1>(sent);
-				std::reverse(tsent.begin() + 1, tsent.end() - 1);
-			}
-		}
+		devel_cor = read_corpus(vm["devel"].as<std::string>(), &d, false/*for development*/, 0, r2l_target);
 	}
 
 	return true;
@@ -377,7 +357,81 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 
 // ---
-void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordIdCorpus &devel_cor, 
+bool load_model_config(const std::string& model_cfg_file
+	, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_models
+	, dynet::Dict& d
+	, const transformer::SentinelMarkers& sm)
+{
+	cerr << "Loading model(s) from configuration file: " << model_cfg_file << "..." << endl;	
+
+	v_models.clear();
+
+	ifstream inpf(model_cfg_file);
+	assert(inpf);
+	
+	unsigned i = 0;
+	std::string line;
+	while (getline(inpf, line)){
+		if ("" == line) break;
+
+		// each line has the format: 
+		// <num-units> <num-heads> <nlayers> <ff-num-units-factor> <emb-dropout> <sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-hybrid-model> <your-trained-model-path>
+		// e.g.,
+		// 128 2 2 4 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.lm.transformer.h2_l2_u128_do01010101_att1_ls01_pe1_ml300_ffrelu_run1
+		// 128 2 2 4 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.lm.transformer.h2_l2_u128_do01010101_att1_ls01_pe1_ml300_ffrelu_run2
+		cerr << "Loading model " << i+1 << "..." << endl;
+		std::stringstream ss(line);
+
+		transformer::TransformerConfig tfc;
+		std::string model_file;
+
+		tfc._vocab_size = d.size();
+		tfc._sm = sm;
+		
+		ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+		   >> tfc._emb_dropout_rate >> tfc._sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+		   >> tfc._use_label_smoothing >> tfc._label_smoothing_weight
+		   >> tfc._position_encoding >> tfc._max_length
+		   >> tfc._attention_type
+		   >> tfc._ffl_activation_type
+		   >> tfc._use_hybrid_model;		
+		ss >> model_file;
+		tfc._is_training = false;
+		tfc._use_dropout = false;
+
+		v_models.push_back(std::shared_ptr<transformer::TransformerLModel>());
+		v_models[i].reset(new transformer::TransformerLModel(tfc, d));
+		v_models[i].get()->initialise_params_from_file(model_file);// load pre-trained model from file
+		cerr << "Count of model parameters: " << v_models[i].get()->get_model_parameters().parameter_count() << endl;
+
+		i++;
+	}
+
+	cerr << "Done!" << endl << endl;
+
+	return true;
+}
+// ---
+
+// ---
+void report_perplexity_score(std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_tf_models, WordIdSentences &test_cor){
+	transformer::ModelStats dstats;
+	for (unsigned i = 0; i < test_cor.size(); ++i) {
+		WordIdSentence tsent = test_cor[i];  
+
+		dynet::ComputationGraph cg;
+		// FIXME
+		auto i_xent = tf.build_graph(cg, WordIdSentences(1, tsent), dstats, true);
+		dstats._losses[0] += as_scalar(cg.forward(i_xent));
+	}
+		
+	cerr << "--------------------------------------------------------------------------------------------------------" << endl;
+	cerr << "***TEST: " << "sents=" << test_cor.size() << " unks=" << dstats._words_unk  << " E=" << (dstats._losses[0] / dstats._words) << " PPLX=" << exp(dstats._losses[0] / dstats._words) << ' ' << endl;
+}
+// ---
+
+// ---
+void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, WordIdSentences &devel_cor, 
 	Trainer &sgd, 
 	const std::string& params_out_file, const std::string& config_out_file,
 	unsigned max_epochs, unsigned patience, 
@@ -389,11 +443,10 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	save_config(config_out_file, params_out_file, tfc);
 
 	// create minibatches
-	std::vector<std::vector<WordIdSentence> > train_src_minibatch;
-	std::vector<std::vector<WordIdSentence> > train_trg_minibatch;
+	std::vector<WordIdSentences> train_cor_minibatch;
 	std::vector<size_t> train_ids_minibatch, dev_ids_minibatch;
 	size_t minibatch_size = MINIBATCH_SIZE;
-	create_minibatches(train_cor, minibatch_size, train_src_minibatch, train_trg_minibatch, train_ids_minibatch);
+	create_minibatches(train_cor, minibatch_size, train_cor_minibatch, train_ids_minibatch);
   
 	double best_loss = 9e+99;
 	
@@ -445,7 +498,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 			}
 	
 			transformer::ModelStats ctstats;
-			Expression i_xent = tf.build_graph(cg, train_src_minibatch[train_ids_minibatch[id]], train_trg_minibatch[train_ids_minibatch[id]], ctstats);
+			Expression i_xent = tf.build_graph(cg, train_cor_minibatch[train_ids_minibatch[id]], ctstats);
 	
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -467,16 +520,14 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 			}
 
 			tstats._losses[0] += loss;
-			tstats._words_src += ctstats._words_src;
-			tstats._words_src_unk += ctstats._words_src_unk;  
-			tstats._words_tgt += ctstats._words_tgt;
-			tstats._words_tgt_unk += ctstats._words_tgt_unk;  
+			tstats._words += ctstats._words;
+			tstats._words_unk += ctstats._words_unk;  
 
 			cg.backward(i_objective);
 			sgd.update();
 
-			sid += train_trg_minibatch[train_ids_minibatch[id]].size();
-			iter += train_trg_minibatch[train_ids_minibatch[id]].size();
+			sid += train_cor_minibatch[train_ids_minibatch[id]].size();
+			iter += train_cor_minibatch[train_ids_minibatch[id]].size();
 
 			if (sid / report_every_i != last_print 
 					|| iter >= dev_every_i_reports
@@ -487,8 +538,8 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 
 				sgd.status();
 				cerr << "sents=" << sid << " ";
-				cerr /*<< "loss=" << tstats._losses[0]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " E=" << (tstats._losses[0] / tstats._words_tgt) << " ppl=" << exp(tstats._losses[0] / tstats._words_tgt) << ' ';
-				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;  					
+				cerr /*<< "loss=" << tstats._losses[0]*/ << "unks=" << tstats._words_unk << " E=" << (tstats._losses[0] / tstats._words) << " ppl=" << exp(tstats._losses[0] / tstats._words) << ' ';
+				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words) * 1000.f / elapsed << " words/sec)" << endl;  					
 			}
 			   		 
 			++id;
@@ -502,22 +553,17 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		// sample a random sentence (for observing translations during training progress)
 		if (SAMPLING_TRAINING){// Note: this will slow down the training process, suitable for debugging only.
 			dynet::ComputationGraph cg;
-			WordIdSentence target;// raw translation (w/o scores)
-			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;
-			cerr << "***Source: " << get_sentence(train_src_minibatch[train_ids_minibatch[id]][0], tf.get_source_dict()) << endl;
-			cerr << "***Sampled translation: " << tf.sample(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
-			cg.clear();
-			cerr << "***Greedy translation: " << tf.greedy_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
-			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
+			WordIdSentence target;
+			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;			
+			cerr << "***Random sample: " << tf.sample(cg, target/*, prefix*/) << endl;// can do sampling with any prefix
 		}
 
 		transformer::ModelStats dstats;
 		for (unsigned i = 0; i < devel_cor.size(); ++i) {
-			WordIdSentence ssent, tsent;
-			tie(ssent, tsent) = devel_cor[i];  
+			WordIdSentence dsent = devel_cor[i];  
 
 			dynet::ComputationGraph cg;
-			auto i_xent = tf.build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), dstats, true);
+			auto i_xent = tf.build_graph(cg, WordIdSentences(1, dsent), dstats, true);
 			dstats._losses[0] += as_scalar(cg.forward(i_xent));
 		}
 		
@@ -532,8 +578,8 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		else cpt++;
 
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " E=" << (dstats._losses[0] / dstats._words_tgt) << " ppl=" << exp(dstats._losses[0] / dstats._words_tgt) << ' ';
-		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << exp(best_loss / dstats._words_tgt) << ") ";
+		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " unks=" << dstats._words_unk  << " E=" << (dstats._losses[0] / dstats._words) << " ppl=" << exp(dstats._losses[0] / dstats._words) << ' ';
+		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << exp(best_loss / dstats._words) << ") ";
 		timer_iteration.show();
 
 		// learning rate scheduler 2: if the model has not been improved for lr_patience times, decrease the learning rate by lr_eta_decay factor.
@@ -547,7 +593,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		{
 			cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
 			cerr << "No. of epochs so far: " << epoch << "." << endl;
-			cerr << "Best ppl on dev: " << exp(best_loss / dstats._words_tgt) << endl;
+			cerr << "Best ppl on dev: " << exp(best_loss / dstats._words) << endl;
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 			break;
 		}
@@ -560,33 +606,21 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 // ---
 
 //---
-std::string get_sentence(const WordIdSentence& source, Dict& td){
-	std::stringstream ss;
-	for (WordId w : source){
-		ss << td.convert(w) << " ";
-	}
-
-	return ss.str();
-}
-//---
-
-//---
 void save_config(const std::string& config_out_file, const std::string& params_out_file, const TransformerConfig& tfc)
 {
 	// each line has the format: 
-	// <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-hybrid-model> <your-trained-model-path>
+	// <num-units> <num-heads> <nlayers> <ff-num-units-factor> <emb-dropout> <sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <max-seq-len> <attention-type> <ff-activation-type> <use-hybrid-model> <your-trained-model-path>
 	// e.g.,
-	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010101_att1_ls01_pe1_ml300_ffrelu_run1
-	// 128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010101_att1_ls01_pe1_ml300_ffrelu_run2
+	// 128 2 2 4 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.lm.transformer.h2_l2_u128_do01010101_att1_ls01_pe1_ml300_ffrelu_run1
+	// 128 2 2 4 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.lm.transformer.h2_l2_u128_do01010101_att1_ls01_pe1_ml300_ffrelu_run2
 	std::stringstream ss;
 		
 	ss << tfc._num_units << " " << tfc._nheads << " " << tfc._nlayers << " " << tfc._n_ff_units_factor << " "
-		<< tfc._encoder_emb_dropout_rate << " " << tfc._encoder_sublayer_dropout_rate << " " << tfc._decoder_emb_dropout_rate << " " << tfc._decoder_sublayer_dropout_rate << " " << tfc._attention_dropout_rate << " " << tfc._ff_dropout_rate << " "
+		<< tfc._emb_dropout_rate << " " << tfc._sublayer_dropout_rate << " " << tfc._attention_dropout_rate << " " << tfc._ff_dropout_rate << " "
 		<< tfc._use_label_smoothing << " " << tfc._label_smoothing_weight << " "
-		<< tfc._position_encoding << " " << tfc._position_encoding_flag << " " << tfc._max_length << " "
+		<< tfc._position_encoding << " " << tfc._max_length << " "
 		<< tfc._attention_type << " "
 		<< tfc._ffl_activation_type << " "
-		<< tfc._shared_embeddings << " "
 		<< tfc._use_hybrid_model << " ";		
 	ss << params_out_file;
 
