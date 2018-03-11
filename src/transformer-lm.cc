@@ -175,8 +175,7 @@ int main(int argc, char** argv) {
 	cerr << endl;
 	
 	// print help
-	if (vm.count("help") 
-		|| !(vm.count("train") && vm.count("devel")))
+	if (vm.count("help"))
 	{
 		cout << opts << "\n";
 		return EXIT_FAILURE;
@@ -259,9 +258,10 @@ int main(int argc, char** argv) {
 	else{
 		// load models
 		std::vector<std::shared_ptr<transformer::TransformerLModel>> v_tf_models;// to support ensemble models
-		if (!load_model_config(vm["model-cfg"].as<std::string>(), v_tf_models, d, sm))
+		if (!load_model_config(vm["config-file"].as<std::string>(), v_tf_models, d, sm))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
 		
+		cerr << "Reading testing data from " << vm["test"].as<std::string>() << "..." << endl;
 		WordIdSentences test_cor = read_corpus(vm["test"].as<std::string>(), &d, false/*for development*/, 0, vm.count("r2l_target"));
 
 		report_perplexity_score(v_tf_models, test_cor);
@@ -414,15 +414,40 @@ bool load_model_config(const std::string& model_cfg_file
 // ---
 
 // ---
-void report_perplexity_score(std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_tf_models, WordIdSentences &test_cor){
+void report_perplexity_score(std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_tf_models, WordIdSentences &test_cor)// support ensemble models
+{
+	// Sentinel symbols
+	const transformer::SentinelMarkers& sm = v_tf_models[0].get()->get_config()._sm;
+
 	transformer::ModelStats dstats;
 	for (unsigned i = 0; i < test_cor.size(); ++i) {
+		cerr << "Processing sent " << i << "..." << endl;;
 		WordIdSentence tsent = test_cor[i];  
 
 		dynet::ComputationGraph cg;
-		// FIXME
-		auto i_xent = tf.build_graph(cg, WordIdSentences(1, tsent), dstats, true);
-		dstats._losses[0] += as_scalar(cg.forward(i_xent));
+		WordIdSentence partial_sent(1, sm._SOS);
+		for (unsigned i = 1; i < tsent.size(); i++){// shifted to the right
+			WordId wordid = tsent[i];
+			dstats._words++;
+			if (wordid == sm._UNK) dstats._words_unk++;
+
+			// Perform the forward step on all models
+			std::vector<Expression> i_softmaxes, i_aligns/*unused for now*/;
+			for(int j : boost::irange(0, (int)v_tf_models.size())){
+				i_softmaxes.push_back(v_tf_models[j].get()->step_forward(cg
+					, partial_sent
+					, false
+					, i_aligns));
+			}
+
+			dynet::Expression i_logprob = dynet::log({dynet::average(i_softmaxes)});
+			dynet::Expression i_loss = -dynet::pick(i_logprob, wordid);
+			dstats._losses[0] += dynet::as_scalar(cg.incremental_forward(i_loss));
+
+			partial_sent.push_back(wordid);
+
+			cg.clear();
+		}
 	}
 		
 	cerr << "--------------------------------------------------------------------------------------------------------" << endl;

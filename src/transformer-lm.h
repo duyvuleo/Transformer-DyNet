@@ -911,9 +911,7 @@ std::string TransformerLModel::sample(dynet::ComputationGraph& cg, WordIdSentenc
 	ss << "<s>";
 	unsigned t = 0;
 	while (target.back() != eos_sym) 
-	{
-		cg.checkpoint();
-				
+	{		
 		dynet::Expression ydist = this->step_forward(cg, target, false, aligns);
 
 		auto dist = dynet::as_vector(cg.incremental_forward(ydist));
@@ -933,7 +931,7 @@ std::string TransformerLModel::sample(dynet::ComputationGraph& cg, WordIdSentenc
 		t += 1;
 		if (_tfc._position_encoding == 1 && t >= _tfc._max_length) break;// to prevent over-length sample in learned positional encoding
 
-		cg.revert();
+		cg.clear();
 	}
 
 	_tfc._is_training = true;
