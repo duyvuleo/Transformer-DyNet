@@ -195,8 +195,8 @@ int main(int argc, char** argv) {
 	load_vocab(vm["vocab"].as<std::string>(), d);
 
 	SentinelMarkers sm;
-	sm._SOS = d.convert("<s>");
-	sm._EOS = d.convert("</s>");
+	sm._kTGT_SOS = d.convert("<s>");
+	sm._kTGT_EOS = d.convert("</s>");
 
 	// load data files
 	WordIdSentences train_cor, devel_cor;
@@ -212,11 +212,13 @@ int main(int argc, char** argv) {
 			cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;
 
 		// transformer configuration
-		transformer::TransformerConfig tfc(d.size()
+		transformer::TransformerConfig tfc(0, d.size()
 			, vm["num-units"].as<unsigned>()
 			, vm["num-heads"].as<unsigned>()
 			, vm["nlayers"].as<unsigned>()
 			, vm["n-ff-units-factor"].as<unsigned>()
+			, 0.0f
+			, 0.0f
 			, vm["emb-dropout-p"].as<float>()
 			, vm["sublayer-dropout-p"].as<float>()
 			, vm["attention-dropout-p"].as<float>()
@@ -224,10 +226,12 @@ int main(int argc, char** argv) {
 			, vm.count("use-label-smoothing")
 			, vm["label-smoothing-weight"].as<float>()
 			, vm["position-encoding"].as<unsigned>()
+			, 0
 			, vm["max-pos-seq-len"].as<unsigned>()
 			, sm
 			, vm["attention-type"].as<unsigned>()
 			, vm["ff-activation-type"].as<unsigned>()
+			, false
 			, vm.count("use-hybrid-model"));
 
 		// initialise transformer object
@@ -317,7 +321,7 @@ bool load_data(const variables_map& vm
 
 	// set up <unk> ids
 	d.set_unk("<unk>");
-	sm._UNK = d.get_unk_id();
+	sm._kTGT_UNK = d.get_unk_id();
 
 	if (vm.count("devel")) {
 		cerr << "Reading dev data from " << vm["devel"].as<std::string>() << "...\n";
@@ -385,11 +389,11 @@ bool load_model_config(const std::string& model_cfg_file
 		transformer::TransformerConfig tfc;
 		std::string model_file;
 
-		tfc._vocab_size = d.size();
+		tfc._tgt_vocab_size = d.size();
 		tfc._sm = sm;
 		
 		ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
-		   >> tfc._emb_dropout_rate >> tfc._sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+		   >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
 		   >> tfc._use_label_smoothing >> tfc._label_smoothing_weight
 		   >> tfc._position_encoding >> tfc._max_length
 		   >> tfc._attention_type
@@ -425,11 +429,11 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 		WordIdSentence tsent = test_cor[i];  
 
 		dynet::ComputationGraph cg;
-		WordIdSentence partial_sent(1, sm._SOS);
+		WordIdSentence partial_sent(1, sm._kTGT_SOS);
 		for (unsigned i = 1; i < tsent.size(); i++){// shifted to the right
 			WordId wordid = tsent[i];
-			dstats._words++;
-			if (wordid == sm._UNK) dstats._words_unk++;
+			dstats._words_tgt++;
+			if (wordid == sm._kTGT_UNK) dstats._words_tgt_unk++;
 
 			// Perform the forward step on all models
 			std::vector<Expression> i_softmaxes, i_aligns/*unused for now*/;
@@ -451,7 +455,7 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 	}
 		
 	cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-	cerr << "***TEST: " << "sents=" << test_cor.size() << " unks=" << dstats._words_unk  << " E=" << (dstats._losses[0] / dstats._words) << " PPLX=" << exp(dstats._losses[0] / dstats._words) << ' ' << endl;
+	cerr << "***TEST: " << "sents=" << test_cor.size() << " unks=" << dstats._words_tgt_unk  << " E=" << (dstats._losses[0] / dstats._words_tgt) << " PPLX=" << exp(dstats._losses[0] / dstats._words_tgt) << ' ' << endl;
 }
 // ---
 
@@ -545,8 +549,8 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			}
 
 			tstats._losses[0] += loss;
-			tstats._words += ctstats._words;
-			tstats._words_unk += ctstats._words_unk;  
+			tstats._words_tgt += ctstats._words_tgt;
+			tstats._words_tgt_unk += ctstats._words_tgt_unk;  
 
 			cg.backward(i_objective);
 			sgd.update();
@@ -563,8 +567,8 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 
 				sgd.status();
 				cerr << "sents=" << sid << " ";
-				cerr /*<< "loss=" << tstats._losses[0]*/ << "unks=" << tstats._words_unk << " E=" << (tstats._losses[0] / tstats._words) << " ppl=" << exp(tstats._losses[0] / tstats._words) << ' ';
-				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words) * 1000.f / elapsed << " words/sec)" << endl;  					
+				cerr /*<< "loss=" << tstats._losses[0]*/ << "unks=" << tstats._words_tgt_unk << " E=" << (tstats._losses[0] / tstats._words_tgt) << " ppl=" << exp(tstats._losses[0] / tstats._words_tgt) << ' ';
+				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;  					
 			}
 			   		 
 			++id;
@@ -603,8 +607,8 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		else cpt++;
 
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " unks=" << dstats._words_unk  << " E=" << (dstats._losses[0] / dstats._words) << " ppl=" << exp(dstats._losses[0] / dstats._words) << ' ';
-		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << exp(best_loss / dstats._words) << ") ";
+		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " unks=" << dstats._words_tgt_unk  << " E=" << (dstats._losses[0] / dstats._words_tgt) << " ppl=" << exp(dstats._losses[0] / dstats._words_tgt) << ' ';
+		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << exp(best_loss / dstats._words_tgt) << ") ";
 		timer_iteration.show();
 
 		// learning rate scheduler 2: if the model has not been improved for lr_patience times, decrease the learning rate by lr_eta_decay factor.
@@ -618,7 +622,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		{
 			cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
 			cerr << "No. of epochs so far: " << epoch << "." << endl;
-			cerr << "Best ppl on dev: " << exp(best_loss / dstats._words) << endl;
+			cerr << "Best ppl on dev: " << exp(best_loss / dstats._words_tgt) << endl;
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 			break;
 		}
@@ -641,7 +645,7 @@ void save_config(const std::string& config_out_file, const std::string& params_o
 	std::stringstream ss;
 		
 	ss << tfc._num_units << " " << tfc._nheads << " " << tfc._nlayers << " " << tfc._n_ff_units_factor << " "
-		<< tfc._emb_dropout_rate << " " << tfc._sublayer_dropout_rate << " " << tfc._attention_dropout_rate << " " << tfc._ff_dropout_rate << " "
+		<< tfc._decoder_emb_dropout_rate << " " << tfc._decoder_sublayer_dropout_rate << " " << tfc._attention_dropout_rate << " " << tfc._ff_dropout_rate << " "
 		<< tfc._use_label_smoothing << " " << tfc._label_smoothing_weight << " "
 		<< tfc._position_encoding << " " << tfc._max_length << " "
 		<< tfc._attention_type << " "

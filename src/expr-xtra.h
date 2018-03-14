@@ -152,3 +152,28 @@ dynet::Expression make_reverse_time_distributed(const dynet::Expression& x, unsi
 	return dynet::reshape(x, dynet::Dim({d[0], seq_len}, b_));
 }
 
+// --- Le Cun's uniform distribution
+/*
+ * Initialize parameters with samples from a Le Cun's uniform distribution
+ * Reference: LeCun 98, Efficient Backprop
+ * http://yann.lecun.com/exdb/publis/pdf/lecun-98b.pdf
+ * Code: https://github.com/neulab/xnmt/blob/TF_new/xnmt/initializer.py
+ */
+struct ParameterInitLeCunUniform : public ParameterInit {
+	ParameterInitLeCunUniform(float fan_in, float scale=1.f) 
+		: fan_in(fan_in), scale(scale) { 
+		if (scale == 0.0f) throw std::domain_error("Scale of the Le Cun uniform distribution cannot be 0 in ParameterInitLeCunUniform"); 
+	}
+
+	virtual void initialize_params(Tensor & values) const override;
+
+private:
+	float fan_in, scale;
+};
+
+void ParameterInitLeCunUniform::initialize_params(Tensor & values) const {
+	float s = scale * std::sqrt(3.f / fan_in);
+	TensorTools::randomize_uniform(values, -s, s);
+}
+// --- 
+
