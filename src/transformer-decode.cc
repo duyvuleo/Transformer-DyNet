@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")
 		//-----------------------------------------
 		("beam,b", value<unsigned>()->default_value(1), "size of beam in decoding; 1: greedy")
+		("alpha,a", value<float>()->default_value(0.6f), "length normalisation hyperparameter; 0.6f by default") // follow the GNMT paper!
 		("topk,k", value<unsigned>(), "use <num> top kbest entries; none by default")
 		("nbest-style", value<std::string>()->default_value("simple"), "style for nbest translation outputs (moses|simple); simple by default")
 		//-----------------------------------------
@@ -140,6 +141,8 @@ int main(int argc, char** argv) {
 	std::vector<std::shared_ptr<transformer::TransformerModel>> v_tf_models;
 	if (!load_model_config(vm["model-cfg"].as<std::string>(), v_tf_models, sd, td, sm))
 		TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
+
+	_len_norm_alpha = vm["alpha"].as<float>();
 
 	// decode the input file
 	if (vm.count("topk"))

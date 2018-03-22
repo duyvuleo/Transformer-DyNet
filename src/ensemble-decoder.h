@@ -16,7 +16,10 @@ using namespace std;
 using namespace dynet;
 using namespace transformer;
 
-#define USE_BEAM_SEARCH_LENGTH_NORMALISATION
+//#define USE_BEAM_SEARCH_LENGTH_NORMALISATION
+//#define USE_BEAM_SEARCH_LENGTH_NORMALISATION_NEMATUS
+#define USE_BEAM_SEARCH_LENGTH_NORMALISATION_GNMT
+float _len_norm_alpha = 0.6f;// global variable
 
 class EnsembleDecoderHyp {
 public:
@@ -37,13 +40,24 @@ protected:
 typedef std::shared_ptr<EnsembleDecoderHyp> EnsembleDecoderHypPtr;
 
 inline bool operator<(const EnsembleDecoderHypPtr & lhs, const EnsembleDecoderHypPtr & rhs) {
-#ifndef USE_BEAM_SEARCH_LENGTH_NORMALISATION
-	if(lhs->get_score() != rhs->get_score()) return lhs->get_score() > rhs->get_score();
-	return lhs->get_sentence() < rhs->get_sentence();
-#else
-	//score with word-based length normalization. better?
+#ifdef USE_BEAM_SEARCH_LENGTH_NORMALISATION
+	//score with word-based length normalization.
 	float score_l = lhs->get_score()/lhs->get_sentence().size(), score_r = rhs->get_score()/rhs->get_sentence().size();
 	if( score_l != score_r) return score_l > score_r;
+	return lhs->get_sentence() < rhs->get_sentence();
+#ifdef USE_BEAM_SEARCH_LENGTH_NORMALISATION_NEMATUS
+	//score with word-based length normalization using Nematus style (Ly^alpha) (https://arxiv.org/abs/1703.04357)
+	float score_l = lhs->get_score() / std::pow(lhs->get_sentence().size(), _len_norm_alpha), score_r = rhs->get_score() / std::pow(rhs->get_sentence().size(), _len_norm_alpha);
+	if( score_l != score_r) return score_l > score_r;
+	return lhs->get_sentence() < rhs->get_sentence();
+#ifdef USE_BEAM_SEARCH_LENGTH_NORMALISATION_GNMT
+	//score with word-based length normalization using GNMT style ((5 + L)^alpha / 6^alpha) (https://arxiv.org/pdf/1609.08144.pdf)
+	// ToDo (FIXME): add alignment score to include a coverage penalty to favor translations that fully cover the source sentence according to the attention matrix.
+	float score_l = lhs->get_score() / std::pow((5.f + lhs->get_sentence().size()) / 6.f, _len_norm_alpha), score_r = rhs->get_score() / std::pow((5.f + rhs->get_sentence().size()) / 6.f, _len_norm_alpha);
+	if( score_l != score_r) return score_l > score_r;
+	return lhs->get_sentence() < rhs->get_sentence();
+#else
+	if(lhs->get_score() != rhs->get_score()) return lhs->get_score() > rhs->get_score();
 	return lhs->get_sentence() < rhs->get_sentence();
 #endif
 }
@@ -132,7 +146,7 @@ EnsembleDecoderHypPtr EnsembleDecoder::generate(dynet::ComputationGraph& cg
 std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::ComputationGraph& cg
 	, const WordIdSentence & sent_src
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
-	, unsigned nbest_size/*FIXME: segmentation fault error with nbest_size <= 40?*/) 
+	, unsigned nbest_size) 
 { 
 	// Sentinel symbols
 	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
