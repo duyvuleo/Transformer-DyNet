@@ -45,21 +45,26 @@ inline bool operator<(const EnsembleDecoderHypPtr & lhs, const EnsembleDecoderHy
 	float score_l = lhs->get_score()/lhs->get_sentence().size(), score_r = rhs->get_score()/rhs->get_sentence().size();
 	if( score_l != score_r) return score_l > score_r;
 	return lhs->get_sentence() < rhs->get_sentence();
+#endif
+
 #ifdef USE_BEAM_SEARCH_LENGTH_NORMALISATION_NEMATUS
+	
 	//score with word-based length normalization using Nematus style (Ly^alpha) (https://arxiv.org/abs/1703.04357)
 	float score_l = lhs->get_score() / std::pow(lhs->get_sentence().size(), _len_norm_alpha), score_r = rhs->get_score() / std::pow(rhs->get_sentence().size(), _len_norm_alpha);
 	if( score_l != score_r) return score_l > score_r;
 	return lhs->get_sentence() < rhs->get_sentence();
+#endif
+
 #ifdef USE_BEAM_SEARCH_LENGTH_NORMALISATION_GNMT
 	//score with word-based length normalization using GNMT style ((5 + L)^alpha / 6^alpha) (https://arxiv.org/pdf/1609.08144.pdf)
 	// ToDo (FIXME): add alignment score to include a coverage penalty to favor translations that fully cover the source sentence according to the attention matrix.
 	float score_l = lhs->get_score() / std::pow((5.f + lhs->get_sentence().size()) / 6.f, _len_norm_alpha), score_r = rhs->get_score() / std::pow((5.f + rhs->get_sentence().size()) / 6.f, _len_norm_alpha);
 	if( score_l != score_r) return score_l > score_r;
 	return lhs->get_sentence() < rhs->get_sentence();
-#else
+#endif
+
 	if(lhs->get_score() != rhs->get_score()) return lhs->get_score() > rhs->get_score();
 	return lhs->get_sentence() < rhs->get_sentence();
-#endif
 }
 
 typedef tuple<float,int,int,int> Beam_Info;
