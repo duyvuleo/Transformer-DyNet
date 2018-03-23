@@ -27,6 +27,17 @@ public:
 		_score(score), _sent(sent), _align(align) { }
 
 	float get_score() const { return _score; }
+	float get_norm_score() const { 
+#if defined(USE_BEAM_SEARCH_LENGTH_NORMALISATION)
+		return _score / _sent.size(); 
+#elif defined(USE_BEAM_SEARCH_LENGTH_NORMALISATION_NEMATUS)
+		return _score / std::pow(_sent.size(), _len_norm_alpha); 
+#elif defined(USE_BEAM_SEARCH_LENGTH_NORMALISATION_GNMT)
+		return _score / std::pow((5.f + _sent.size()) / 6.f , _len_norm_alpha); 
+#else
+		return _score;
+#endif
+	}
 	const WordIdSentence & get_sentence() const { return _sent; }
 	const WordIdSentence & get_alignment() const { return _align; }
 
@@ -148,20 +159,19 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned nbest_size) 
 { 
-	// Sentinel symbols
+	// sentinel symbols
 	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
 	  
 	// compute source representation
-	//cerr << "GenerateNbest::(1)" << endl;
 	std::vector<dynet::Expression> v_src_reps;
 	for (auto & tf : v_models){
 		v_src_reps.push_back(tf.get()->compute_source_rep(cg, WordIdSentences(1, sent_src)/*pseudo batch (1)*/));
 	}
 
-	// The n-best hypotheses
+	// the n-best hypotheses
 	std::vector<EnsembleDecoderHypPtr> nbest;
 
-	// Create the initial hypothesis
+	// create the initial hypothesis
 	std::vector<EnsembleDecoderHypPtr> curr_beam(1, EnsembleDecoderHypPtr(new EnsembleDecoderHyp(0.0, WordIdSentence(1, sm._kTGT_SOS), WordIdSentence(1, 0))));
 
 	int bid;
@@ -170,13 +180,12 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 	// limit the output length
 	_size_limit = sent_src.size() * 3/*x*/;// not generating target with length "x times" the source length
 
-	// Perform decoding
+	// perform decoding
 	for (int sent_len = 0; sent_len <= _size_limit; sent_len++) {
-		// This vector will hold the best IDs
+		// this vector will hold the best IDs
 		std::vector<Beam_Info> next_beam_id(_beam_size+1, Beam_Info(-DBL_MAX,-1,-1,-1));
 
-		// Go through all the hypothesis IDs
-		//cerr << "GenerateNbest::(2)" << endl;
+		// go through all the hypothesis IDs
 		for (int hypid = 0; hypid < (int)curr_beam.size(); hypid++) {
 			EnsembleDecoderHypPtr curr_hyp = curr_beam[hypid];
 			const WordIdSentence& sent = curr_beam[hypid]->get_sentence();// partial generated sentence from current hypo in the beam
@@ -185,8 +194,7 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 
 			cg.checkpoint();
 
-			// Perform the forward step on all models
-			//cerr << "GenerateNbest::(2)::(a,Forward) ";
+			// perform the forward step on all models
 			std::vector<Expression> i_softmaxes, i_aligns;
 			for(int j : boost::irange(0, (int)v_models.size())){
 				i_softmaxes.push_back(v_models[j].get()->step_forward(cg, v_src_reps[j]
@@ -195,8 +203,7 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 					, i_aligns));
 			}
 
-			// Ensemble and calculate the likelihood
-			//cerr << "GenerateNbest::(2)::(b,Ensemble) ";
+			// ensemble and calculate the likelihood
 			Expression i_softmax, i_logprob;
 			if (_ensemble_operation == "sum") {
 				i_softmax = ensemble_probs(i_softmaxes, cg);
@@ -208,21 +215,18 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 			else
 				assert(string("Bad ensembling operation: " + _ensemble_operation).c_str());
 
-			// Get the (log) softmax predictions
-			//cerr << "GenerateNbest::(2)::(c,softmax) ";
+			// get the (log) softmax predictions
 			std::vector<float> softmaxes = dynet::as_vector(cg.incremental_forward(i_logprob));
 
-			// Add the word/unk penalties
-			//  - word penalty
+			// add the word/unk penalties
 			if (_word_pen != 0.f) {
 				for(size_t i = 0; i < softmaxes.size(); i++)
 					softmaxes[i] += _word_pen;
 			}
-			//  - unk penalty
+			// set up unk penalty
 			if (_unk_id >= 0) softmaxes[_unk_id] += _unk_pen * _unk_log_prob;
 
-			// Find the best aligned source, if any alignments exists
-			//cerr << "GenerateNbest::(2)::(d,Align) ";
+			// find the best aligned source, if any alignments exists
 			WordId best_align = -1;
 			if (i_aligns.size() != 0) {
 				dynet::Expression ens_align = dynet::sum(i_aligns);
@@ -233,8 +237,7 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 						best_align = aid;
 			}
 
-			// Find the best IDs in the beam
-			//cerr << "GenerateNbest::(2)::(e,ID) ";
+			// find the best IDs in the beam
 			for (int wid = 0; wid < (int)softmaxes.size(); wid++) {
 				float my_score = curr_hyp->get_score() + softmaxes[wid];
 				for (bid = _beam_size; bid > 0 && my_score > std::get<0>(next_beam_id[bid-1]); bid--)
@@ -245,8 +248,7 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 			cg.revert();
 		}
 
-		// Create the new hypotheses
-		//cerr << endl << "GenerateNbest::(3) " << endl;
+		// create the new hypotheses
 		std::vector<EnsembleDecoderHypPtr> next_beam;
 		for (int i = 0; i < _beam_size; i++) {
 			float score = std::get<0>(next_beam_id[i]);
@@ -275,17 +277,16 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 
 		curr_beam = next_beam;
 
-		// Check if we're done with search
-		//cerr << "GenerateNbest::(4) " << endl;
+		// check if we're done with search
 		if(nbest.size() != 0) {
-			sort(nbest.begin(), nbest.end());
+			std::sort(nbest.begin(), nbest.end());
 
 			if(nbest.size() > nbest_size) nbest.resize(nbest_size);
-			if(nbest.size() == nbest_size && (curr_beam.size() == 0 || (*nbest.rbegin())->get_score() >= next_beam[0]->get_score()))
+			if(nbest.size() == nbest_size && (curr_beam.size() == 0 || (*nbest.rbegin())->get_norm_score() >= next_beam[0]->get_norm_score()))
 				return nbest;
 		}
 
-		//if current beam size is 0, stop!
+		// if current beam size is 0, stop!
 		if(curr_beam.size() == 0) break;
 	}
 
@@ -293,4 +294,7 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 
 	return nbest;
 }
+
+// batch decoding
+// ToDo (FIXME): 
 
