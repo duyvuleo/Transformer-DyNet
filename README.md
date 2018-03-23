@@ -1,6 +1,6 @@
 # An Implementation of [Transformer](http://papers.nips.cc/paper/7181-attention-is-all-you-need) in [DyNet](https://github.com/clab/dynet)
 
-This project aims to develop a simplified, easy-to-use implementation of Transformer architecture. However, it still has all necessary functionalities to build a complete sequence to sequence system. 
+This project aims to develop a simplified, easy-to-use implementation of Transformer architecture. However, it still has all necessary functionalities to build a complete sequence to sequence system. Currently, Transformer-DyNet supports to build: 1) NMT models (or other sequence-to-sequence models); 2) purely-attentive LM. 
 
 ### Dependencies
 
@@ -43,6 +43,7 @@ This will build the 2 binaries
     
     build_cpu/transformer-train
     build_cpu/transformer-decode
+    build_cpu/transformer-lm
 
 #### GPU build
 
@@ -60,6 +61,7 @@ This will result in the 2 binaries
 
     build_gpu/transformer-train
     build_gpu/transformer-decode
+    build_gpu/transformer-lm
 
 In general, the programs built on GPU will run much faster than on CPU (even enhanced with MKL). However, GPU is limited to the memory (8-16Gb) whereas CPU is almost unlimited. 
 
@@ -483,23 +485,21 @@ Finally, we can evaluate the translation result with BLEU:
 
 ## Limitation
 
-Currently, this implementation supports single GPU only. It may be a bit slower than available toolkits (e.g., tensor2tensor, marian, sockeye). Using with multi-GPUs will be supported in the future. 
-
-Due to limited computational resources, I only have the results for low- and medium- resource data (IWSLT, KFTT, ...). I will try my best to get some results for large-scale WMT data. 
+Currently, this implementation supports single GPU only since DyNet has not fully supported multi-GPU yet. Transformer-DyNet may be a bit slower than available toolkits (e.g., tensor2tensor, marian, sockeye, OpenNMT-tf); however, it can produce very consistent translation performance without much hyperparameter tunning even with medium networks (e.g., 4 heads and 4 encoder/decoder layers, check my results above). Supporting multi-GPUs will be my major work in the future. 
 
 ## ToDo
 
 1. implementation for Bahdanau attention type? (seem to be infeasible with current implementation)
 
-2. deep FFN layers (https://arxiv.org/ftp/arxiv/papers/1712/1712.09662.pdf)
+2. speed up the decoding process of Transformer by caching technique (like in tensor2tensor) or other?
 
-3. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf)
+3. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf
 
-4. average model around best checkpoints
+4. average model around last N best checkpoints (DyNet model parameters may be not trivial to do this!)
 
-5. adaptive learning rate following original transformer's paper
+5. adaptive learning rate following original transformer's paper (need this?)
 
-6. Other new ideas?
+6. other new ideas?
 
 ## Contacts
 
