@@ -39,7 +39,7 @@ MKL support. If you have Intel's MKL library installed on your machine, you can 
 
 substituting in different paths to EIGEN_PATH and MKL_PATH if you have placed them in different directories. 
 
-This will build the 2 binaries
+This will build the 3 binaries
     
     build_cpu/transformer-train
     build_cpu/transformer-decode
@@ -47,7 +47,7 @@ This will build the 2 binaries
 
 #### GPU build
 
-Building on the GPU uses the Nvidia CUDA library, currently tested against version 7.5 and 8.0.
+Building on the GPU uses the Nvidia CUDA library, currently tested against version 7.5, 8.0, and 9.0.
 The process is as follows
 
     mkdir build_gpu
@@ -57,7 +57,7 @@ The process is as follows
 
 substituting in your EIGEN_PATH and CUDA_PATH folders, as appropriate.
 
-This will result in the 2 binaries
+This will result in the 3 binaries
 
     build_gpu/transformer-train
     build_gpu/transformer-decode
@@ -89,6 +89,7 @@ First, print command line's help of transformer-train and transformer-decode,
 
     ./build_gpu/transformer-train --help
     ./build_gpu/transformer-decode --help
+    ./build_gpu/transformer-lm --help
 
 The model can be run as follows:
 
@@ -493,7 +494,7 @@ Currently, this implementation supports single GPU only since DyNet has not full
 
 2. speed up the decoding process of Transformer by caching technique (like in tensor2tensor) or other?
 
-3. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf
+3. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf, ICLR'18 rejected)
 
 4. average model around last N best checkpoints (DyNet model parameters may be not trivial to do this!)
 
@@ -506,4 +507,4 @@ Currently, this implementation supports single GPU only since DyNet has not full
 Hoang Cong Duy Vu (vhoang2@student.unimelb.edu.au; duyvuleo@gmail.com)
 
 ---
-Updated Nov 2017
+Updated Mar 2018
