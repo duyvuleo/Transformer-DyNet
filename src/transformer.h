@@ -684,6 +684,7 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 
 	// FIXME: get the alignments for visualisation
+	// ToDo
 
 	// compute softmax prediction
 	if (log_prob)
@@ -821,6 +822,9 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 		// this shouldn't happen
 		if (w == (WordId)dist.size()) w = eos_sym;
 
+		if (t > 2 * source.size())
+			w = eos_sym;
+
 		target.push_back(w);
 
 		t += 1;
@@ -828,6 +832,8 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 
 		cg.revert();
 	}
+
+	cg.clear();
 
 	_tfc._is_training = true;
 }
@@ -880,6 +886,8 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 		cg.revert();
 	}
 
+	cg.clear();
+
 	_tfc._is_training = true;
 }
 
@@ -900,6 +908,7 @@ struct Hypothesis {
 	std::vector<Expression> aligns;
 };
 
+// A simplified version of beam search decoding (transformer-decode will use integrated ensemble decoding instead!)
 void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width)// FIXME: to be tested?
 {
 	_tfc._is_training = false;
@@ -964,6 +973,8 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 	assert(best != completed.end());
 
 	target = best->target;
+
+	cg.clear();
 
 	_tfc._is_training = true;
 }

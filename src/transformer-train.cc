@@ -431,15 +431,15 @@ void eval_on_dev(transformer::TransformerModel &tf,
 			// inference
 			dynet::ComputationGraph cg;
 			WordIdSentence thyp;// raw translation (w/o scores)
-			if (dev_eval_infer_algo == 0)// sampling
-				tf.sample(cg, ssent, thyp);// fastest way but bad translations
-			else if (dev_eval_infer_algo == 1)
-				tf.greedy_decode(cg, ssent, thyp);
-			else
-				tf.beam_decode(cg, ssent, thyp, dev_eval_infer_algo/*N>1: beam decoding with N size of beam*/);
+			if (dev_eval_infer_algo == 0)// random sampling
+				tf.sample(cg, ssent, thyp);// fastest with bad translations
+			else if (dev_eval_infer_algo == 1)// greedy decoding
+				tf.greedy_decode(cg, ssent, thyp);// faster with relatively good translations
+			else// beam search decoding
+				tf.beam_decode(cg, ssent, thyp, dev_eval_infer_algo/*N>1: beam decoding with N size of beam*/);// slow with better translations
 					
-			// collect statistics
-			v_samples.push_back(MTEval::Sample({thyp, {tsent}}));// multiple references are supported!
+			// collect statistics for mteval
+			v_samples.push_back(MTEval::Sample({thyp, {tsent/*, tsent2, tsent3, tsent4*/}}));// multiple references are supported as well!
       			evaluator->prepare(v_samples[v_samples.size() - 1]);
 		}
 		
@@ -592,7 +592,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
 		}
 
-		transformer::ModelStats dstats(dev_eval_mea);
+		transformer::ModelStats dstats(dev_eval_mea);// FIXME: bug here, best score must be global!
 		eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);
 		dstats.update_best_score(cpt);
 		if (cpt == 0){
@@ -603,7 +603,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
 
-		if (cpt > 0) cerr << "(not improved, best score on dev so far = " << dstats.get_score_string(false) << ") ";//<< exp(best_loss / dstats._words_tgt) << ") ";
+		if (cpt > 0) cerr << "(not improved, best score on dev so far = " << dstats.get_score_string(false) << ") ";
 		timer_iteration.show();
 
 		// learning rate scheduler 2: if the model has not been improved for lr_patience times, decrease the learning rate by lr_eta_decay factor.
@@ -617,7 +617,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		{
 			cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
 			cerr << "No. of epochs so far: " << epoch << "." << endl;
-			cerr << "Best score on dev: " << dstats.get_score_string(false) << endl;// << exp(best_loss / dstats._words_tgt) << endl;
+			cerr << "Best score on dev: " << dstats.get_score_string(false) << endl;
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 			break;
 		}

@@ -128,7 +128,7 @@ struct ModelStats {
 		}
 		else
 		{
-			if (_score_type == 1) ss << "approxBLEU=";// approximate because it also counts for tokenization and word segmentation (e.g., BPE, WP).
+			if (_score_type == 1) ss << "approxBLEU=";// approximate because it also counts for tokenization and sub-word segmentation (e.g., BPE, WP).
 			else if (_score_type == 2) ss << "approxNIST=";
 			else if (_score_type == 3) ss << "approxWER=";
 			else if (_score_type == 4) ss << "approxRIBES=";
