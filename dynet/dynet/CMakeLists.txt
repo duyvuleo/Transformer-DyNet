@@ -244,7 +244,7 @@ if(WITH_CUDA_BACKEND)
         file(REMOVE ${MERGEFILE})        # Start with an empty file
         list(APPEND dynet_gpu_SRCS ${MERGEFILE})
       endif()
-      file(APPEND ${MERGEFILE} "#include \"${PROJECT_SOURCE_DIR}/dynet/${FILENAME}.cc\"\n")
+      file(APPEND ${MERGEFILE} "#include \"${PROJECT_SOURCE_DIR}/dynet/dynet/${FILENAME}.cc\"\n")
       math(EXPR COUNTER ${COUNTER}+1)
     endforeach()
   endif()
