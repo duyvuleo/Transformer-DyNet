@@ -3,10 +3,17 @@
 #include <initializer_list>
 
 #include "dynet/nodes.h"
+#include "dynet/devices.h"
 
 namespace dynet {
 
 using std::vector;
+
+std::string Expression::get_device_name() const {
+  if (pg->nodes[i]->device == nullptr)
+    throw std::runtime_error("Unknown device for node:" + std::to_string(i));
+  return pg->nodes[i]->device->name;
+}
 
 Expression input(ComputationGraph& g, real s, Device *device) { return Expression(&g, g.add_input(s, device)); }
 Expression input(ComputationGraph& g, const real *ps, Device *device) { return Expression(&g, g.add_input(ps, device)); }
@@ -29,15 +36,16 @@ Expression zeros(ComputationGraph& g, const Dim& d) { return Expression(&g, g.ad
 // Expression zeroes(ComputationGraph& g, const Dim& d) {return zeros(g, d);}
 Expression ones(ComputationGraph& g, const Dim& d) { return Expression(&g, g.add_function<Constant>(d, 1.f)); }
 Expression constant(ComputationGraph& g, const Dim& d, float val) { return Expression(&g, g.add_function<Constant>(d, val)); }
-Expression random_normal(ComputationGraph& g, const Dim& d) { return Expression(&g, g.add_function<RandomNormal>(d)); }
+Expression random_normal(ComputationGraph& g, const Dim& d, float mean, float stddev) { return Expression(&g, g.add_function<RandomNormal>(d, mean, stddev)); }
 Expression random_bernoulli(ComputationGraph& g, const Dim& d, real p, real scale) { return Expression(&g, g.add_function<RandomBernoulli>({}, d, p, scale)); }
 Expression random_uniform(ComputationGraph& g, const Dim& d, real left, real right) { return Expression(&g, g.add_function<RandomUniform>({}, d, left, right)); }
 Expression random_gumbel(ComputationGraph& g, const Dim& d, real mu, real beta) { return Expression(&g, g.add_function<RandomGumbel>({}, d, mu, beta)); }
 
-// identity function, but derivative is not propagated through it
 Expression nobackprop(const Expression& x) { return Expression(x.pg, x.pg->add_function<NoBackprop>({x.i})); }
-// identity function, but derivative is propagated as negative
-Expression flip_gradient(const Expression& x) { return Expression(x.pg, x.pg->add_function<FlipGradient>({x.i})); }
+Expression flip_gradient(const Expression& x) { return Expression(x.pg, x.pg->add_function<ScaleGradient>({x.i}, -1.f)); }
+Expression scale_gradient(const Expression& x, float lambd) { return Expression(x.pg, x.pg->add_function<ScaleGradient>({x.i}, lambd)); }
+
+Expression argmax(const Expression& x, ArgmaxGradient gradient_mode) { return Expression(x.pg, x.pg->add_function<Argmax>({x.i}, 0, (gradient_mode==straight_through_gradient))); }
 
 Expression operator-(const Expression& x) { return Expression(x.pg, x.pg->add_function<Negate>({x.i})); }
 Expression operator+(const Expression& x, const Expression& y) { return Expression(x.pg, x.pg->add_function<CwiseSum>({x.i, y.i}));}
@@ -72,6 +80,7 @@ Expression tanh(const Expression& x) { return Expression(x.pg, x.pg->add_functio
 Expression asinh(const Expression& x) { return Expression(x.pg, x.pg->add_function<Asinh>({x.i})); }
 Expression acosh(const Expression& x) { return Expression(x.pg, x.pg->add_function<Acosh>({x.i})); }
 Expression atanh(const Expression& x) { return Expression(x.pg, x.pg->add_function<Atanh>({x.i})); }
+Expression log_sigmoid(const Expression& x) { return Expression(x.pg, x.pg->add_function<LogSigmoid>({x.i})); }
 Expression lgamma(const Expression& x) { return Expression(x.pg, x.pg->add_function<LogGamma>({x.i})); }
 Expression log(const Expression& x) { return Expression(x.pg, x.pg->add_function<Log>({x.i})); }
 Expression exp(const Expression& x) { return Expression(x.pg, x.pg->add_function<Exp>({x.i})); }
@@ -176,6 +185,8 @@ Expression sum_dim(const Expression& x, const vector<unsigned>& dims, bool b) { 
 Expression sum_rows(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, vector<unsigned>({0}), false)); }
 Expression sum_cols(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, vector<unsigned>({1}), false)); }
 Expression sum_elems(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumElements>({x.i})); }
+
+Expression cumsum(const Expression& x, unsigned d) { return Expression(x.pg, x.pg->add_function<CumulativeSum>({x.i}, d)); }
 
 Expression sum_batches(const Expression& x) { return Expression(x.pg, x.pg->add_function<SumDimension>({x.i}, vector<unsigned>(), true)); }
 

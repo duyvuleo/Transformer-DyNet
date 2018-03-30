@@ -1,8 +1,12 @@
+<div align="center">
+  <img alt="DyNet" src="doc/source/images/dynet_logo.png"><br><br>
+</div>
+
 ---
 
-[![Build Status](https://travis-ci.org/clab/dynet.svg?branch=master)](https://travis-ci.org/clab/dynet)
-[![Build Status](https://ci.appveyor.com/api/projects/status/github/clab/dynet?svg=true)](https://ci.appveyor.com/project/danielh/dynet-c3iuq)
-[![Doc build Status](https://readthedocs.org/projects/dynet/badge/?version=latest)](http://dynet.readthedocs.io/en/latest/)
+[![Build Status (Travis CI)](https://travis-ci.org/clab/dynet.svg?branch=master)](https://travis-ci.org/clab/dynet)
+[![Build Status (AppVeyor)](https://ci.appveyor.com/api/projects/status/github/clab/dynet?svg=true)](https://ci.appveyor.com/project/danielh/dynet-c3iuq)
+[![Build Status (Docs)](https://readthedocs.org/projects/dynet/badge/?version=latest)](http://dynet.readthedocs.io/en/latest/)
 [![PyPI version](https://badge.fury.io/py/dyNET.svg)](https://badge.fury.io/py/dyNET)
 
 The Dynamic Neural Network Toolkit
@@ -60,7 +64,7 @@ released versions, you may get assertion failures or compile errors.**
 If you don't have Eigen already, you can get it easily using the
 following command:
 
-    hg clone https://bitbucket.org/eigen/eigen/ -r 699b659
+    hg clone https://bitbucket.org/eigen/eigen/ -r 2355b22
 
 The `-r NUM` specified a revision number that is known to work.  Adventurous
 users can remove it and use the very latest version, at the risk of the code

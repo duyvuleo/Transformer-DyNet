@@ -8,10 +8,12 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+#include <curand.h>
 #if HAVE_CUDNN
 #include <cudnn.h>
 #endif
 #include "dynet/except.h"
+#include "dynet/devices.h"
 
 #define MAX_GPUS 256
 
@@ -21,6 +23,7 @@
       std::cerr << "CUDA failure in " << #stmt << std::endl\
                 << cudaGetErrorString(err) << std::endl;   \
       if (err == cudaErrorMemoryAllocation) {              \
+        show_pool_mem_info();                              \
         size_t free_bytes=0, total_bytes=0;                \
         cudaMemGetInfo(&free_bytes, &total_bytes);         \
         int devid=-1;                                      \
@@ -43,6 +46,15 @@
     cublasStatus_t stat = stmt;                            \
     if (stat != CUBLAS_STATUS_SUCCESS) {                   \
       std::cerr << "CUBLAS failure in " << #stmt           \
+                << std::endl << stat << std::endl;         \
+      throw dynet::cuda_exception(#stmt);                  \
+    }                                                      \
+  } while(0)
+
+#define CURAND_CHECK(stmt) do {                            \
+    curandStatus_t stat = stmt;                            \
+    if (stat != CURAND_STATUS_SUCCESS) {                   \
+      std::cerr << "CURAND failure in " << #stmt           \
                 << std::endl << stat << std::endl;         \
       throw dynet::cuda_exception(#stmt);                  \
     }                                                      \

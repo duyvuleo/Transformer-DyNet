@@ -31,7 +31,7 @@
 #include "dynet/nodes-moments.h"
 #include "dynet/nodes-contract.h"
 
-#include "dynet/devices.h"
+// #include "dynet/devices.h"
 
 #include <stdexcept>
 
@@ -59,11 +59,7 @@ struct Expression {
   Expression(ComputationGraph *pg, VariableIndex i) : pg(pg),
     i(i), graph_id(pg->get_id()) {}
 
-  inline std::string get_device_name() const {
-    if (pg->nodes[i]->device == nullptr)
-      throw std::runtime_error("Unknown device for node:" + std::to_string(i));
-    return pg->nodes[i]->device->name;
-  }
+  std::string get_device_name() const;
 
   const bool is_stale() const {
     return (get_number_of_active_graphs() != 1 || graph_id != get_current_graph_id());
@@ -438,15 +434,16 @@ Expression constant(ComputationGraph& g, const Dim& d, float val);
 /**
  * \ingroup inputoperations
  * \brief Create a random normal vector
- * \details Create a vector distributed according to normal distribution with mean
- *          0, variance 1.
+ * \details Create a vector distributed according to normal distribution with specified mean and standard deviation.
  *
  * \param g Computation graph
  * \param d The dimensions of the input
+ * \param mean The mean of the distribution (default: 0.0)
+ * \param stddev The standard deviation of the distribution (default: 1.0)
  *
  * \return A "d" dimensioned normally distributed vector
  */
-Expression random_normal(ComputationGraph& g, const Dim& d);
+Expression random_normal(ComputationGraph& g, const Dim& d, float mean=0.f, float stddev=1.0);
 
 /**
  * \ingroup inputoperations
@@ -767,6 +764,17 @@ Expression sum_dim(const Expression& x, const std::vector<unsigned>& dims, bool 
 // These are deprecated but kept for backward compatibility
 Expression sum_rows(const Expression& x);
 Expression sum_cols(const Expression& x);
+/**
+ * \ingroup arithmeticoperations
+ * \brief Compute cumulative sum along a specific dimension
+ * \details Compute the cumulative sum along a specific dimension: \f$y_i=\sum_{j\leq i}x_j\f$
+ *
+ * \param x The input mini-batched expression
+ * \param d Dimensions along which to compute the cumulative sum
+ *
+ * \return An expression of the same shape as the input
+ */
+Expression cumsum(const Expression& x, unsigned d);
 
 /**
  * \ingroup arithmeticoperations
@@ -1022,6 +1030,18 @@ Expression square(const Expression& x);
  * \return An expression where the ith element is equal to x_i^3
  */
 Expression cube(const Expression& x);
+
+/**
+ * \ingroup arithmeticoperations
+ * \brief Log sigmoid
+ * \details Calculate elementwise \f$y_i = \ln(\frac{1}{1+e^{-x_i}})\f$
+ * This is more numerically stable than `log(logistic(x))`
+ *
+ * \param x The input expression
+ *
+ * \return An expression where the ith element is equal to \f$y_i = \ln(\frac{1}{1+e^{-x_i}})\f$
+ */
+Expression log_sigmoid(const Expression& x);
 
 /**
  * \ingroup arithmeticoperations
@@ -1721,15 +1741,62 @@ Expression nobackprop(const Expression& x);
 
 /**
  * \ingroup flowoperations
- * \brief Negative backprop
- * \details This node has no effect on the forward pass, but takes negative on backprop process.
+ * \brief Flip gradient
+ * \details This node has no effect on the forward pass, but inverts the gradient on backprop.
  *          This operation is widely used in adversarial networks.
  *
  * \param x The input expression
  *
- * \return An output expression containing the same as input (only effects on backprop process)
+ * \return An output expression containing the same as input (only effects the backprop process)
  */
 Expression flip_gradient(const Expression& x);
+
+/**
+ * \ingroup flowoperations
+ * \brief Scale gradient by constant
+ * \details This node has no effect on the forward pass, but scales the gradient by lambda
+ *          on backprop
+ *
+ * \param x The input expression
+ *
+ * \return An output expression containing the same as input (only effects the backprop process)
+ */
+Expression scale_gradient(const Expression& x, float lambd = 1.0f);
+
+/**
+ * \ingroup flowoperations
+ * \brief Gradient modes for the argmax operation
+ */
+enum ArgmaxGradient {
+    zero_gradient,              /* Standard gradient (=no gradient) */
+    straight_through_gradient   /* Straight-through estimator (=gradient of the identity)*/
+};
+
+/**
+ * \ingroup flowoperations
+ * \brief Argmax
+ * \details This node takes an input vector \f$x\f$ and returns a one hot vector \f$y\f$ such that \f$y_{\text{argmax} x}=1\f$
+ * 
+ * There are two gradient modes for this operation:
+ *
+ *     argmax(x, zero_gradient)
+ * 
+ * is the standard argmax operation. Note that this almost everywhere differentiable and its gradient is 0. **It will stop your gradient**
+ *
+ *     argmax(x, straight_through_gradient)
+ *
+ * This gradient mode implements the straight-through estimator [(Bengio et al., 2013)](https://arxiv.org/abs/1308.3432).
+ * Its forward pass is the same as the argmax operation, but its gradient is the same as the identity function.
+ * Note that this does not technically correspond to a differentiable function (hence the name "estimator").
+ *
+ * Tensors of order \f$>1\f$ are not supported yet
+ *  
+ * \param x The input vector (can be batched)
+ * \param gradient_mode Specify the gradient type (zero or straight-through)
+ *
+ * \return The one hot argmax vector
+ */
+Expression argmax(const Expression& x, ArgmaxGradient gradient_mode);
 
 /**
  * \ingroup flowoperations
@@ -1762,6 +1829,7 @@ Expression flip_gradient(const Expression& x);
  *
  * \return The reshaped expression
  */
+
 Expression reshape(const Expression& x, const Dim& d);
 
 /**

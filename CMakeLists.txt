@@ -37,15 +37,7 @@ function(find_mkl)
     get_filename_component(MKL_COMPILER_LIB_FILE ${MKL_COMPILER_LIB} NAME)
     message(STATUS "Found MKL\n   * include: ${MKL_INCLUDE_DIR},\n   * core library dir: ${MKL_CORE_LIB_DIR},\n   * compiler library: ${MKL_COMPILER_LIB}")
 
-    # Due to a conflict with /MT and /MD, MSVC needs mkl_intel_lp64 linked last, or we can change individual
-    # projects to use /MT (mkl_intel_lp64 linked with /MT, default MSVC projects use /MD), or we can instead
-    # link to the DLL versions. For now I'm opting for this solution which seems to work with projects still
-    # at their default /MD. Linux build requires the mkl_intel_lp64 to be linked first. So...:
-    if(MSVC)
-      set(LIBS ${LIBS} mkl_intel_thread mkl_core mkl_intel_lp64 ${MKL_COMPILER_LIB_FILE} PARENT_SCOPE)
-    else()
-      set(LIBS ${LIBS} mkl_intel_lp64 mkl_intel_thread mkl_core ${MKL_COMPILER_LIB_FILE} PARENT_SCOPE)
-    endif()
+    set(LIBS ${LIBS} mkl_rt ${MKL_COMPILER_LIB_FILE} PARENT_SCOPE)
     include_directories(${MKL_INCLUDE_DIR})
     link_directories(${MKL_CORE_LIB_DIR} ${MKL_COMPILER_LIB_DIR})
     set(MKL_LINK_DIRS ${MKL_CORE_LIB_DIR} ${MKL_COMPILER_LIB_DIR} PARENT_SCOPE) # Keeping this for python build
@@ -53,6 +45,10 @@ function(find_mkl)
     message(FATAL_ERROR "Failed to find MKL in path: ${MKL_ROOT} (Did you set MKL_ROOT properly?)")
   endif()
 endfunction()
+
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release")
+endif()
 
 ######## Cross-compiler, cross-platform options
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEIGEN_FAST_MATH")
@@ -92,7 +88,12 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}
 		    ${PROJECT_SOURCE_DIR}/third_party)
 
 function(find_cudnn)
-  set(CUDNN_ROOT /usr/local/cuda CACHE PATH "CUDNN root path")
+  if (DEFINED ENV{CUDNN_ROOT} AND NOT DEFINED CUDNN_ROOT)  # use env variable if not defined
+    set(CUDNN_ROOT $ENV{CUDNN_ROOT})
+  elseif (DEFINED CUDA_TOOLKIT_ROOT_DIR AND NOT DEFINED CUDNN_ROOT)  # use env variable if not defined
+    set(CUDNN_ROOT ${CUDA_TOOLKIT_ROOT_DIR})
+  endif()
+#  set(CUDNN_ROOT /usr/local/cuda CACHE PATH "CUDNN root path")
   find_path(CUDNN_INCLUDE_DIRS cudnn.h
     HINTS ${CUDNN_ROOT}
           ${CUDNN_ROOT}/include
@@ -153,10 +154,11 @@ if (WITH_CUDA_BACKEND)
   set(CUDA_TOOLKIT_ROOT_DIR ${CUDA_ROOT})
   include_directories(SYSTEM ${CUDA_INCLUDE_DIRS})
   #list(APPEND CUDA_LIBRARIES /usr/lib64/libpthread.so)
+  list(APPEND CUDA_LIBRARIES ${CUDA_curand_LIBRARY})
   MESSAGE("CUDA_LIBRARIES: ${CUDA_LIBRARIES}")
   list(REMOVE_ITEM CUDA_LIBRARIES -lpthread)
   set(LIBS ${LIBS} ${CUDA_LIBRARIES})
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEIGEN_HAS_CUDA_FP16 -DEIGEN_USE_GPU")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEIGEN_USE_GPU")
   find_cudnn()
   if(CUDNN_FOUND)
     include_directories(SYSTEM ${CUDNN_INCLUDE_DIRS})
@@ -172,6 +174,7 @@ if (DEFINED ENV{EIGEN3_INCLUDE_DIR} AND NOT DEFINED EIGEN3_INCLUDE_DIR) # use en
   set(EIGEN3_INCLUDE_DIR $ENV{EIGEN3_INCLUDE_DIR})
 endif()
 get_filename_component(EIGEN3_INCLUDE_DIR "${EIGEN3_INCLUDE_DIR}" REALPATH BASE_DIR "${CMAKE_BINARY_DIR}")
+set(EIGEN3_INCLUDE_DIR ${EIGEN3_INCLUDE_DIR} CACHE STRING "" FORCE)
 message("-- Eigen dir is " ${EIGEN3_INCLUDE_DIR})
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})

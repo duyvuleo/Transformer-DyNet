@@ -23,6 +23,7 @@ set(dynet_library_SRCS
     model.cc
     nodes-activations.cc
     nodes-affinetransform.cc
+    nodes-argmax.cc
     nodes-arith-const.cc
     nodes-arith-cwise.cc
     nodes-arith-sum.cc
@@ -43,6 +44,7 @@ set(dynet_library_SRCS
     nodes-maxpooling2d.cc
     nodes-minmax.cc
     nodes-moments.cc
+    nodes-cumulative.cc
     nodes-normalization.cc
     nodes-norms.cc
     nodes-pickneglogsoftmax.cc
@@ -101,6 +103,7 @@ set(dynet_library_HDRS
     model.h
     nodes-activations.h
     nodes-affinetransform.h
+    nodes-argmax.h
     nodes-arith-const.h
     nodes-arith-cwise.h
     nodes-arith-sum.h
@@ -117,11 +120,13 @@ set(dynet_library_HDRS
     nodes-logsumexp.h
     nodes-losses.h
     nodes-lstm.h
-    nodes-macros.h
+    nodes-def-macros.h
+    nodes-impl-macros.h
     nodes-matrixmultiply.h
     nodes-maxpooling2d.h
     nodes-minmax.h
     nodes-moments.h
+    nodes-cumulative.h
     nodes-normalization.h
     nodes-norms.h
     nodes-pickneglogsoftmax.h
@@ -156,6 +161,7 @@ endif()
 set(dynet_gpu_mergeable_SRCS
     nodes-activations
     nodes-affinetransform
+    nodes-argmax
     nodes-arith-const
     nodes-arith-cwise
     nodes-arith-sum
@@ -176,6 +182,7 @@ set(dynet_gpu_mergeable_SRCS
     nodes-maxpooling2d
     nodes-minmax
     nodes-moments
+    nodes-cumulative
     nodes-normalization
     nodes-norms
     nodes-pickneglogsoftmax
@@ -220,10 +227,6 @@ endif()
 #     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests.bin/${testName} )
 #endforeach(test_src)
 
-# Build cpu library
-add_library(dynet ${dynet_library_SRCS} ${dynet_library_HDRS})
-target_link_libraries(dynet ${LIBS})
-
 if(WITH_CUDA_BACKEND)
   if(${GPU_NUMFILES} EQUAL 0)
     foreach(FILENAME ${dynet_gpu_mergeable_SRCS})
@@ -241,14 +244,19 @@ if(WITH_CUDA_BACKEND)
         file(REMOVE ${MERGEFILE})        # Start with an empty file
         list(APPEND dynet_gpu_SRCS ${MERGEFILE})
       endif()
-      file(APPEND ${MERGEFILE} "#include \"${PROJECT_SOURCE_DIR}/dynet/dynet/${FILENAME}.cc\"\n")
+      file(APPEND ${MERGEFILE} "#include \"${PROJECT_SOURCE_DIR}/dynet/${FILENAME}.cc\"\n")
       math(EXPR COUNTER ${COUNTER}+1)
     endforeach()
   endif()
 
   # cuda flags
   set(CUDA_SEPARABLE_COMPILATION ON)
-  list(APPEND CUDA_NVCC_FLAGS "-gencode;arch=compute_30,code=sm_30;-gencode;arch=compute_35,code=sm_35;-gencode;arch=compute_37,code=sm_37;-gencode;arch=compute_50,code=sm_50;-gencode;arch=compute_52,code=sm_52;-gencode;arch=compute_52,code=compute_52;-std=c++11;-DVERBOSE;-DEIGEN_USE_GPU;-DHAVE_CUDA;")
+
+  if(CUDA_ARCH)
+    list(APPEND CUDA_NVCC_FLAGS "-arch=sm_${CUDA_ARCH};-std=c++11;-DVERBOSE;-DEIGEN_USE_GPU;-DHAVE_CUDA;-D_FORCE_INLINES")
+  else()
+    list(APPEND CUDA_NVCC_FLAGS "-gencode;arch=compute_30,code=sm_30;-gencode;arch=compute_35,code=sm_35;-gencode;arch=compute_37,code=sm_37;-gencode;arch=compute_50,code=sm_50;-gencode;arch=compute_52,code=sm_52;-gencode;arch=compute_52,code=compute_52;-std=c++11;-DVERBOSE;-DEIGEN_USE_GPU;-DHAVE_CUDA;-D_FORCE_INLINES")
+  endif()
   if(CUDNN_FOUND)
     list(APPEND CUDA_NVCC_FLAGS "-DHAVE_CUDNN")
   endif()
@@ -269,25 +277,28 @@ if(WITH_CUDA_BACKEND)
     list(APPEND CUDA_NVCC_FLAGS_DEBUG "--compiler-options \"/MDd\"")
     list(APPEND CUDA_NVCC_FLAGS_RELEASE "--compiler-options \"/MD\"")
     SET(CUDA_PROPAGATE_HOST_FLAGS OFF)
-    cuda_add_library(gdynet ${dynet_library_SRCS} ${dynet_library_HDRS} ${dynet_gpu_SRCS})
+    cuda_add_library(dynet ${dynet_library_SRCS} ${dynet_library_HDRS} ${dynet_gpu_SRCS})
   else()
     SET(CUDA_PROPAGATE_HOST_FLAGS OFF)
-    cuda_add_library(gdynet ${dynet_library_SRCS} ${dynet_library_HDRS} ${dynet_gpu_SRCS} OPTIONS --compiler-options "-fPIC")
+    cuda_add_library(dynet ${dynet_library_SRCS} ${dynet_library_HDRS} ${dynet_gpu_SRCS} OPTIONS --compiler-options "-fPIC")
   endif()
-  set_target_properties(gdynet PROPERTIES
+  set_target_properties(dynet PROPERTIES
                         COMPILE_DEFINITIONS HAVE_CUDA)
   if(CUDNN_FOUND)
-    target_compile_definitions(gdynet PRIVATE HAVE_CUDNN)
+    target_compile_definitions(dynet PRIVATE HAVE_CUDNN)
   endif()
-  cuda_add_cublas_to_target(gdynet)
-  target_link_libraries(gdynet ${LIBS})
-
+  cuda_add_cublas_to_target(dynet)
+  target_link_libraries(dynet ${LIBS})
+else()
+  # Build cpu library
+  add_library(dynet ${dynet_library_SRCS} ${dynet_library_HDRS})
+  target_link_libraries(dynet ${LIBS})
 endif(WITH_CUDA_BACKEND)
 
 install(FILES ${dynet_library_HDRS} DESTINATION include/dynet)
 install(TARGETS dynet DESTINATION lib)
 if(WITH_CUDA_BACKEND)
-  install(TARGETS gdynet DESTINATION lib)
+  install(TARGETS dynet DESTINATION lib)
 endif(WITH_CUDA_BACKEND)
 
 # target_compile_features(dynet PRIVATE cxx_range_for)

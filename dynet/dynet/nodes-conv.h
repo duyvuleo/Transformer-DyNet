@@ -2,7 +2,7 @@
 #define DYNET_NODES_CONV_H_
 
 #include "dynet/dynet.h"
-#include "dynet/nodes-macros.h"
+#include "dynet/nodes-def-macros.h"
 
 namespace dynet {
 
@@ -64,12 +64,14 @@ struct MaxPooling1D : public Node {
 struct CircularConvolution : public Node {
   CircularConvolution(const std::initializer_list<VariableIndex>& a)
       : Node(a) {}
+  size_t aux_storage_size() const override;
   DYNET_NODE_DEFINE_DEV_IMPL()
 };
 
 struct CircularCorrelation : public Node {
   CircularCorrelation(const std::initializer_list<VariableIndex>& a)
       : Node(a) {}
+  size_t aux_storage_size() const override;
   DYNET_NODE_DEFINE_DEV_IMPL()
 };
 
