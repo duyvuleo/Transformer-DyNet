@@ -22,7 +22,7 @@ As mentioned above, you'll need the latest [development] version of eigen
 
     hg clone https://bitbucket.org/eigen/eigen/ (or latest stable version 3.3.4)
 
-A modified version of latest [DyNet](https://github.com/clab/dynet) is already included (e.g., dynet folder).
+A modified version of latest [DyNet](https://github.com/clab/dynet) is already included (e.g., dynet folder). Current DyNet version: [v.2.0.3](https://github.com/clab/dynet/releases/tag/2.0.3). 
 
 #### CPU build
 
@@ -47,7 +47,7 @@ This will build the 3 binaries
 
 #### GPU build
 
-Building on the GPU uses the Nvidia CUDA library, currently tested against version 7.5, 8.0, and 9.0.
+Building on the GPU uses the Nvidia CUDA library, currently tested against version 7.5, 8.0, and 9.x.
 The process is as follows
 
     mkdir build_gpu
@@ -56,6 +56,14 @@ The process is as follows
     make -j 2
 
 substituting in your EIGEN_PATH and CUDA_PATH folders, as appropriate.
+
+For CUDA 9.x, you may encounter the following compiling error:
+
+    Eigen/Core:44:34: error: math_functions.hpp: No such file or directory
+
+This may be a bug from Eigen. To resolve it, creating a symlink from cuda/include/math_functions.hpp to cuda/include/crt/math_functions.hpp:
+
+    ln -s /usr/local/cuda/include/crt/math_functions.hpp /usr/local/cuda/include/math_functions.hpp
 
 This will result in the 3 binaries
 

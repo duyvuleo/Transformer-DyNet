@@ -188,21 +188,4 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 add_subdirectory(dynet)
 
-if(ENABLE_CPP_EXAMPLES)
-  add_subdirectory(tutorial)
-  add_subdirectory(examples)
-endif(ENABLE_CPP_EXAMPLES)
 
-if(PYTHON)
-  add_subdirectory(python)
-endif(PYTHON)
-
-if(ENABLE_SWIG)
-  message("-- Enabling SWIG")
-  add_subdirectory(contrib/swig)
-endif(ENABLE_SWIG)
-
-if(ENABLE_BOOST)
-  add_subdirectory(tests)
-  enable_testing()
-endif()
