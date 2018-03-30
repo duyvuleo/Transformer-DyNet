@@ -301,7 +301,7 @@ public:
 		, const WordIdSentence &partial_sent
 		, bool log_prob
 		, std::vector<dynet::Expression> &aligns);
-	std::string sample(dynet::ComputationGraph& cg, WordIdSentence &sampled_sent, const std::string &prefix=""/*e.g., <s>*/);// sampling
+	void sample(dynet::ComputationGraph& cg, WordIdSentence &sampled_sent, const std::string &prefix=""/*e.g., <s>*/);// sampling
 
 	dynet::ParameterCollection& get_model_parameters();
 	void initialise_params_from_file(const std::string &params_file);
@@ -425,7 +425,7 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	return i_tloss;
 }
 
-std::string TransformerLModel::sample(dynet::ComputationGraph& cg, WordIdSentence &target, const std::string& prefix)
+void TransformerLModel::sample(dynet::ComputationGraph& cg, WordIdSentence &target, const std::string& prefix)
 {
 	_tfc._is_training = false;
 	
@@ -458,7 +458,6 @@ std::string TransformerLModel::sample(dynet::ComputationGraph& cg, WordIdSentenc
 		// this shouldn't happen
 		if (w == (WordId)dist.size()) w = eos_sym;
 
-		ss << " " << _dict.convert(w) << " [p=" << dist[w] << "]";
 		target.push_back(w);
 
 		t += 1;
@@ -468,8 +467,6 @@ std::string TransformerLModel::sample(dynet::ComputationGraph& cg, WordIdSentenc
 	}
 
 	_tfc._is_training = true;
-
-	return ss.str();
 }
 
 dynet::ParameterCollection& TransformerLModel::get_model_parameters(){

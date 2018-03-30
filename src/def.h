@@ -83,13 +83,60 @@ struct SentinelMarkers{
 
 //--- 
 struct ModelStats {
-	double _losses[2] = {0.f, 0.f};// If having additional loss, resize this array!
+	unsigned _score_type = 0;// default perplexity
+	double _scores[2] = {9e+99/*best so far*/, 0.f/*current*/};// If having additional score, resize this array!
 	unsigned int _words_src = 0;
 	unsigned int _words_tgt = 0;
 	unsigned int _words_src_unk = 0;
 	unsigned int _words_tgt_unk = 0;
 
 	ModelStats(){}
+
+	ModelStats(unsigned score_type){
+		_score_type = score_type;
+		if (_score_type != 0 && _score_type != 3)// BLEU/NIST/RIBES (higher is better)
+		{
+			_scores[0] = 0.f;
+		}// else perplexity or WER (lower is better)
+	}
+
+	void update_best_score(unsigned& cpt){
+		if (_score_type == 0 || _score_type == 3)// perplexity or WER (lower is better)
+		{
+			if (_scores[0] > _scores[1]){
+				_scores[0] = _scores[1];
+				cpt = 0;
+			}
+			else cpt++;
+		}
+		else{
+			if (_scores[0] < _scores[1]){
+				_scores[0] = _scores[1];
+				cpt = 0;
+			}
+			else cpt++;
+		}
+	}
+
+	std::string get_score_string(bool cur_or_best=true/*current*/){
+		double score = cur_or_best?_scores[1]:_scores[0];
+		
+		std::stringstream ss;
+		if (_score_type == 0){ // perplexity
+			score /= _words_tgt;
+			ss << "E=" << score << " PPLX=" << std::exp(score);
+		}
+		else
+		{
+			if (_score_type == 1) ss << "approxBLEU=";// approximate because it also counts for tokenization and word segmentation (e.g., BPE, WP).
+			else if (_score_type == 2) ss << "approxNIST=";
+			else if (_score_type == 3) ss << "approxWER=";
+			else if (_score_type == 4) ss << "approxRIBES=";
+
+			ss << score;
+		}
+		return ss.str(); 	
+	}
 };
 //--- 
 

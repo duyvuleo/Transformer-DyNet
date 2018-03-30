@@ -88,7 +88,8 @@ else()
 endif()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}
-                    ${PROJECT_SOURCE_DIR}/dynet)
+                    ${PROJECT_SOURCE_DIR}/dynet
+		    ${PROJECT_SOURCE_DIR}/third_party)
 
 function(find_cudnn)
   set(CUDNN_ROOT /usr/local/cuda CACHE PATH "CUDNN root path")
@@ -182,5 +183,6 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/dynet/config.h.cmake ${CMAKE_CURRENT_
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 add_subdirectory(dynet/dynet)
+add_subdirectory(third_party/mteval)
 add_subdirectory(src)
 enable_testing()

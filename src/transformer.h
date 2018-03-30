@@ -600,9 +600,9 @@ public:
 		, const WordIdSentence &partial_sent
 		, bool log_prob
 		, std::vector<dynet::Expression> &aligns);// forward step to get softmax scores
-	std::string sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// sampling
-	std::string greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// greedy decoding
-	std::string beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width);// beam search decoding
+	void sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// sampling
+	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// greedy decoding
+	void beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width);// beam search decoding
 
 	dynet::ParameterCollection& get_model_parameters();
 	void initialise_params_from_file(const std::string &params_file);
@@ -787,13 +787,12 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	return i_tloss;
 }
 
-std::string TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target)
+void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target)
 {
 	_tfc._is_training = false;
 	
 	const int& sos_sym = _tfc._sm._kTGT_SOS;
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
-	Dict& tdict = _dicts.second;
 
 	// start of sentence
 	target.clear();
@@ -822,7 +821,6 @@ std::string TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSe
 		// this shouldn't happen
 		if (w == (WordId)dist.size()) w = eos_sym;
 
-		ss << " " << tdict.convert(w) << " [p=" << dist[w] << "]";
 		target.push_back(w);
 
 		t += 1;
@@ -832,17 +830,14 @@ std::string TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSe
 	}
 
 	_tfc._is_training = true;
-
-	return ss.str();
 }
 
-std::string TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target)
+void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target)
 {
 	_tfc._is_training = false;
 	
 	const int& sos_sym = _tfc._sm._kTGT_SOS;
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
-	Dict& tdict = _dicts.second;
 
 	// start of sentence
 	target.clear();
@@ -877,7 +872,6 @@ std::string TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const W
 			pr_w = ydist[w];
 		}
 
-		ss << " " << tdict.convert(w) << " [p=" << pr_w << "]";// translation with individual scores
 		target.push_back(w);
 
 		t += 1;
@@ -887,8 +881,6 @@ std::string TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const W
 	}
 
 	_tfc._is_training = true;
-	
-	return ss.str();
 }
 
 struct Hypothesis {
@@ -908,13 +900,13 @@ struct Hypothesis {
 	std::vector<Expression> aligns;
 };
 
-std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width)// FIXME: to be tested?
+void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width)// FIXME: to be tested?
 {
 	_tfc._is_training = false;
 	
 	const int& sos_sym = _tfc._sm._kTGT_SOS;
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
-	Dict& tdict = _dicts.second;
+	unsigned int vocab_size = _dicts.second.size();
 
 	// start of sentence
 	target.clear();
@@ -927,7 +919,7 @@ std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const Wor
 	std::vector<Hypothesis> chart;
 	chart.push_back(Hypothesis(sos_sym, 0.0f, aligns));
 
-	std::vector<unsigned> vocab(boost::copy_range<std::vector<unsigned>>(boost::irange(0u, tdict.size())));
+	std::vector<unsigned> vocab(boost::copy_range<std::vector<unsigned>>(boost::irange(0u, vocab_size)));
 	std::vector<Hypothesis> completed;
 
 	for (unsigned steps = 0; completed.size() < beam_width && steps < 2*source.size(); ++steps) {
@@ -945,13 +937,13 @@ std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const Wor
 
 			// add to chart
 			for (auto vi = vocab.begin(); vi < vocab.begin() + beam_width; ++vi) {
-				//if (new_chart.size() < beam_width) {
+				if (new_chart.size() < beam_width) {
 					Hypothesis hnew(*vi, ydist[*vi]/*hprev.cost - std::log(ydist[*vi])*/, hprev, aligns);
 					if (*vi == (unsigned int)eos_sym)
 						completed.push_back(hnew);
 					else
 						new_chart.push_back(hnew);
-				//} 
+				} 
 			}
 	
 			cg.revert();
@@ -972,15 +964,8 @@ std::string TransformerModel::beam_decode(dynet::ComputationGraph& cg, const Wor
 	assert(best != completed.end());
 
 	target = best->target;
-	std::stringstream ss;
-	ss << "<s>";
-	for (unsigned i = 1; i < target.size(); i++){
-		ss << " " << tdict.convert(target[i]) << " [p=" << best->costs[i] << "]";// translation with individual scores
-	}
 
 	_tfc._is_training = true;
-
-	return ss.str();
 }
 
 dynet::ParameterCollection& TransformerModel::get_model_parameters(){

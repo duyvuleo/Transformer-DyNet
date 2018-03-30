@@ -58,6 +58,10 @@ void save_config(const std::string& config_out_file
 	, const TransformerConfig& tfc);
 // ---
 
+// ---
+std::string get_sentence(const WordIdSentence& source, Dict& dd);
+// ---
+
 //---
 std::string get_sentence(const WordIdSentence& source, Dict& td);
 //---
@@ -446,7 +450,7 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 
 			dynet::Expression i_logprob = dynet::log({dynet::average(i_softmaxes)});
 			dynet::Expression i_loss = -dynet::pick(i_logprob, wordid);
-			dstats._losses[0] += dynet::as_scalar(cg.incremental_forward(i_loss));
+			dstats._scores[0] += dynet::as_scalar(cg.incremental_forward(i_loss));
 
 			partial_sent.push_back(wordid);
 
@@ -455,7 +459,7 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 	}
 		
 	cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-	cerr << "***TEST: " << "sents=" << test_cor.size() << " unks=" << dstats._words_tgt_unk  << " E=" << (dstats._losses[0] / dstats._words_tgt) << " PPLX=" << exp(dstats._losses[0] / dstats._words_tgt) << ' ' << endl;
+	cerr << "***TEST: " << "sents=" << test_cor.size() << " unks=" << dstats._words_tgt_unk  << " E=" << (dstats._scores[0] / dstats._words_tgt) << " PPLX=" << exp(dstats._scores[0] / dstats._words_tgt) << ' ' << endl;
 }
 // ---
 
@@ -471,13 +475,16 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	const transformer::TransformerConfig& tfc = tf.get_config();
 	save_config(config_out_file, params_out_file, tfc);
 
+	// get current dict
+	dynet::Dict& dict = tf.get_dict();
+
 	// create minibatches
 	std::vector<WordIdSentences> train_cor_minibatch;
 	std::vector<size_t> train_ids_minibatch, dev_ids_minibatch;
 	size_t minibatch_size = MINIBATCH_SIZE;
 	create_minibatches(train_cor, minibatch_size, train_cor_minibatch, train_ids_minibatch);
   
-	double best_loss = 9e+99;
+	//double best_loss = 9e+99;
 	
 	unsigned report_every_i = TREPORT;
 	unsigned dev_every_i_reports = DREPORT;
@@ -548,7 +555,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 				continue;
 			}
 
-			tstats._losses[0] += loss;
+			tstats._scores[1] += loss;
 			tstats._words_tgt += ctstats._words_tgt;
 			tstats._words_tgt_unk += ctstats._words_tgt_unk;  
 
@@ -567,7 +574,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 
 				sgd.status();
 				cerr << "sents=" << sid << " ";
-				cerr /*<< "loss=" << tstats._losses[0]*/ << "unks=" << tstats._words_tgt_unk << " E=" << (tstats._losses[0] / tstats._words_tgt) << " ppl=" << exp(tstats._losses[0] / tstats._words_tgt) << ' ';
+				cerr /*<< "loss=" << tstats._scores[1]*/ << "words=" << tstats._words_tgt << " unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';//<< " E=" << (tstats._scores[1] / tstats._words_tgt) << " ppl=" << exp(tstats._scores[1] / tstats._words_tgt) << ' ';
 				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;  					
 			}
 			   		 
@@ -583,8 +590,9 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		if (SAMPLING_TRAINING){// Note: this will slow down the training process, suitable for debugging only.
 			dynet::ComputationGraph cg;
 			WordIdSentence target;
-			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;			
-			cerr << "***Random sample: " << tf.sample(cg, target/*, prefix*/) << endl;// can do sampling with any prefix
+			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;	
+			tf.sample(cg, target/*, prefix if possible*/);		
+			cerr << "***Random sample: " << get_sentence(target, dict) << endl;// can do sampling with any prefix
 		}
 
 		transformer::ModelStats dstats;
@@ -593,22 +601,18 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 
 			dynet::ComputationGraph cg;
 			auto i_xent = tf.build_graph(cg, WordIdSentences(1, dsent), dstats, true);
-			dstats._losses[0] += as_scalar(cg.forward(i_xent));
+			dstats._scores[1] += as_scalar(cg.forward(i_xent));
 		}
 		
-		if (dstats._losses[0] < best_loss) {
-			best_loss = dstats._losses[0];
-
+		dstats.update_best_score(cpt);
+		if (cpt == 0){
 			// FIXME: consider average checkpointing?
 			tf.save_params_to_file(params_out_file);
-
-			cpt = 0;
 		}
-		else cpt++;
-
+		
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " unks=" << dstats._words_tgt_unk  << " E=" << (dstats._losses[0] / dstats._words_tgt) << " ppl=" << exp(dstats._losses[0] / dstats._words_tgt) << ' ';
-		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << exp(best_loss / dstats._words_tgt) << ") ";
+		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ' ;//<< " E=" << (dstats._scores[0] / dstats._words_tgt) << " ppl=" << exp(dstats._scores[0] / dstats._words_tgt) << ' ';
+		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << dstats.get_score_string(false)  << ") ";
 		timer_iteration.show();
 
 		// learning rate scheduler 2: if the model has not been improved for lr_patience times, decrease the learning rate by lr_eta_decay factor.
@@ -622,7 +626,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		{
 			cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
 			cerr << "No. of epochs so far: " << epoch << "." << endl;
-			cerr << "Best ppl on dev: " << exp(best_loss / dstats._words_tgt) << endl;
+			cerr << "Best ppl on dev: " << dstats.get_score_string(false) << endl;
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 			break;
 		}
@@ -658,3 +662,15 @@ void save_config(const std::string& config_out_file, const std::string& params_o
 	outf_cfg << ss.str();
 }
 //---
+
+//---
+std::string get_sentence(const WordIdSentence& source, Dict& d){
+	std::stringstream ss;
+	for (WordId w : source){
+		ss << d.convert(w) << " ";
+	}
+
+	return ss.str();
+}
+//---
+

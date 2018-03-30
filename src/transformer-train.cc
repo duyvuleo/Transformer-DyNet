@@ -5,23 +5,28 @@
 
 #include "transformer.h"
 
-using namespace std;
-using namespace dynet;
-using namespace transformer;
-
+// STL
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <limits>
 
+// Boost
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/program_options/parsers.hpp>
 #include <boost/program_options/variables_map.hpp>
 
+// MTEval
+#include <mteval/utils.h>
+#include <mteval/Evaluator.h>
+#include <mteval/EvaluatorFactory.h>
+#include <mteval/Statistics.h>
+
 using namespace std;
 using namespace dynet;
 using namespace transformer;
+using namespace MTEval;
 using namespace boost::program_options;
 
 // hyper-paramaters for training
@@ -65,7 +70,15 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	const std::string& params_out_file, const std::string& config_out_file, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
-	unsigned average_checkpoints);// support batching
+	unsigned average_checkpoints, 
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo);// support batching
+// ---
+
+// ---
+void eval_on_dev(transformer::TransformerModel &tf, 
+	WordIdCorpus &devel_cor, 
+	transformer::ModelStats& dstats, 
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo);
 // ---
 
 //************************************************************************************************************************************************************
@@ -136,6 +149,9 @@ int main(int argc, char** argv) {
 		("lr-patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved, e.g., for starting learning rate annealing (e.g., halving)") // learning rate scheduler 2
 		//-----------------------------------------
 		("sampling", "sample translation during training; default not")
+		//-----------------------------------------
+		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES); default 0 (perplexity)") // note that MT scores here are approximate (e.g., evaluating with <unk> markers, and tokenized text or with subword segmentation if using BPE), not necessarily equivalent to real BLEU/NIST/WER/RIBES scores.
+		("dev-eval-infer-algo", value<unsigned>()->default_value(1), "specify the algorithm for inference on dev (0: sampling; 1: greedy; N>=2: beam search with N size of beam); default 0 (sampling)") // using sampling/greedy will be faster. 
 		//-----------------------------------------
 		("average-checkpoints", value<unsigned>()->default_value(1), "specify number of checkpoints for model averaging; default single best model") // average checkpointing
 		//-----------------------------------------
@@ -241,6 +257,8 @@ int main(int argc, char** argv) {
 	// create SGD trainer
 	Trainer* p_sgd_trainer = create_sgd_trainer(vm, tf.get_model_parameters());
 
+	if (vm["dev-eval-measure"].as<unsigned>() > 4) TRANSFORMER_RUNTIME_ASSERT("Unknown dev-eval-measure type (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES)!");
+
 	// train transformer model
 	run_train(tf
 		, train_cor, devel_cor
@@ -248,7 +266,8 @@ int main(int argc, char** argv) {
 		, vm["parameters"].as<std::string>() /*best saved model parameter file*/, vm["config-file"].as<std::string>() /*saved configuration file*/
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
-		, vm["average-checkpoints"].as<unsigned>());
+		, vm["average-checkpoints"].as<unsigned>()
+		, vm["dev-eval-measure"].as<unsigned>(), vm["dev-eval-infer-algo"].as<unsigned>());
 
 	// clean up
 	cerr << "Cleaning up..." << endl;
@@ -377,12 +396,72 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 
 // ---
+void eval_on_dev(transformer::TransformerModel &tf, 
+	WordIdCorpus &devel_cor, 
+	transformer::ModelStats& dstats, 
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
+{
+	if (dev_eval_mea == 0) // perplexity
+	{
+		double losses = 0.f;
+		for (unsigned i = 0; i < devel_cor.size(); ++i) {
+			WordIdSentence ssent, tsent;
+			tie(ssent, tsent) = devel_cor[i];  
+
+			dynet::ComputationGraph cg;
+			auto i_xent = tf.build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), dstats, true);
+			losses += as_scalar(cg.forward(i_xent));
+		}
+
+		dstats._scores[1] = losses;
+	}
+	else{
+		// create evaluators
+		std::string spec;
+		if (dev_eval_mea == 1) spec = "BLEU";
+		else if (dev_eval_mea == 2) spec = "NIST";
+		else if (dev_eval_mea == 3) spec = "WER";
+		else if (dev_eval_mea == 4) spec = "RIBES";
+		std::shared_ptr<MTEval::Evaluator> evaluator(MTEval::EvaluatorFactory::create(spec));
+		std::vector<MTEval::Sample> v_samples;
+		for (unsigned i = 0; i < devel_cor.size(); ++i) {
+			WordIdSentence ssent, tsent;
+			tie(ssent, tsent) = devel_cor[i];  
+
+			// inference
+			dynet::ComputationGraph cg;
+			WordIdSentence thyp;// raw translation (w/o scores)
+			if (dev_eval_infer_algo == 0)// sampling
+				tf.sample(cg, ssent, thyp);// fastest way but bad translations
+			else if (dev_eval_infer_algo == 1)
+				tf.greedy_decode(cg, ssent, thyp);
+			else
+				tf.beam_decode(cg, ssent, thyp, dev_eval_infer_algo/*N>1: beam decoding with N size of beam*/);
+					
+			// collect statistics
+			v_samples.push_back(MTEval::Sample({thyp, {tsent}}));// multiple references are supported!
+      			evaluator->prepare(v_samples[v_samples.size() - 1]);
+		}
+		
+		// analyze the evaluation score
+		MTEval::Statistics eval_stats;
+    		for (unsigned i = 0; i < v_samples.size(); ++i) {			
+      			eval_stats += evaluator->map(v_samples[i]);
+    		}
+
+		dstats._scores[1] = evaluator->integrate(eval_stats);
+	}
+}
+// ---
+
+// ---
 void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordIdCorpus &devel_cor, 
 	Trainer &sgd, 
 	const std::string& params_out_file, const std::string& config_out_file,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
-	unsigned average_checkpoints)
+	unsigned average_checkpoints,
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
 {
 	// save configuration file (for decoding/inference)
 	const transformer::TransformerConfig& tfc = tf.get_config();
@@ -395,7 +474,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	size_t minibatch_size = MINIBATCH_SIZE;
 	create_minibatches(train_cor, minibatch_size, train_src_minibatch, train_trg_minibatch, train_ids_minibatch);
   
-	double best_loss = 9e+99;
+	//double best_loss = 9e+99;
 	
 	unsigned report_every_i = TREPORT;
 	unsigned dev_every_i_reports = DREPORT;
@@ -466,7 +545,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 				continue;
 			}
 
-			tstats._losses[0] += loss;
+			tstats._scores[1] += loss;
 			tstats._words_src += ctstats._words_src;
 			tstats._words_src_unk += ctstats._words_src_unk;  
 			tstats._words_tgt += ctstats._words_tgt;
@@ -487,8 +566,8 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 
 				sgd.status();
 				cerr << "sents=" << sid << " ";
-				cerr /*<< "loss=" << tstats._losses[0]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " E=" << (tstats._losses[0] / tstats._words_tgt) << " ppl=" << exp(tstats._losses[0] / tstats._words_tgt) << ' ';
-				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;  					
+				cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';// << " E=" << (tstats._scores[1] / tstats._words_tgt) << " ppl=" << exp(tstats._scores[1] / tstats._words_tgt) << ' ';
+				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl; 	
 			}
 			   		 
 			++id;
@@ -505,35 +584,26 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 			WordIdSentence target;// raw translation (w/o scores)
 			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;
 			cerr << "***Source: " << get_sentence(train_src_minibatch[train_ids_minibatch[id]][0], tf.get_source_dict()) << endl;
-			cerr << "***Sampled translation: " << tf.sample(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
+			tf.sample(cg, train_src_minibatch[train_ids_minibatch[id]][0], target);
+			cerr << "***Sampled translation: " << get_sentence(target, tf.get_target_dict()) << endl;
 			cg.clear();
-			cerr << "***Greedy translation: " << tf.greedy_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], target) << endl;
+			tf.greedy_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], target);
+			cerr << "***Greedy translation: " << get_sentence(target, tf.get_target_dict()) << endl;
 			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
 		}
 
-		transformer::ModelStats dstats;
-		for (unsigned i = 0; i < devel_cor.size(); ++i) {
-			WordIdSentence ssent, tsent;
-			tie(ssent, tsent) = devel_cor[i];  
-
-			dynet::ComputationGraph cg;
-			auto i_xent = tf.build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), dstats, true);
-			dstats._losses[0] += as_scalar(cg.forward(i_xent));
-		}
-		
-		if (dstats._losses[0] < best_loss) {
-			best_loss = dstats._losses[0];
-
+		transformer::ModelStats dstats(dev_eval_mea);
+		eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);
+		dstats.update_best_score(cpt);
+		if (cpt == 0){
 			// FIXME: consider average checkpointing?
 			tf.save_params_to_file(params_out_file);
-
-			cpt = 0;
 		}
-		else cpt++;
 
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " E=" << (dstats._losses[0] / dstats._words_tgt) << " ppl=" << exp(dstats._losses[0] / dstats._words_tgt) << ' ';
-		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << exp(best_loss / dstats._words_tgt) << ") ";
+		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
+
+		if (cpt > 0) cerr << "(not improved, best score on dev so far = " << dstats.get_score_string(false) << ") ";//<< exp(best_loss / dstats._words_tgt) << ") ";
 		timer_iteration.show();
 
 		// learning rate scheduler 2: if the model has not been improved for lr_patience times, decrease the learning rate by lr_eta_decay factor.
@@ -547,7 +617,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 		{
 			cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
 			cerr << "No. of epochs so far: " << epoch << "." << endl;
-			cerr << "Best ppl on dev: " << exp(best_loss / dstats._words_tgt) << endl;
+			cerr << "Best score on dev: " << dstats.get_score_string(false) << endl;// << exp(best_loss / dstats._words_tgt) << endl;
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 			break;
 		}
