@@ -295,7 +295,7 @@ public:
 	// for training
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& sents/*batched*/
-		, ModelStats &stats
+		, ModelStats* pstats=nullptr
 		, bool is_eval_on_dev=false);
 	dynet::Expression step_forward(dynet::ComputationGraph &cg
 		, const WordIdSentence &partial_sent
@@ -375,7 +375,7 @@ dynet::Expression TransformerLModel::step_forward(dynet::ComputationGraph &cg
 
 dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	, const WordIdSentences& tsents
-	, ModelStats &stats
+	, ModelStats* pstats
 	, bool is_eval_on_dev)
 {	
 	// decode target
@@ -394,9 +394,9 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
 		for(size_t bs = 0; bs < tsents.size(); bs++){
 			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
-			if (tsents[bs].size() > t) {
-				stats._words_tgt++;
-				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) stats._words_tgt_unk++;
+			if (tsents[bs].size() > t && pstats) {
+				pstats->_words_tgt++;
+				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) pstats->_words_tgt_unk++;
 			}
 		}
 

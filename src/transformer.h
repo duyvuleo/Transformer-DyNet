@@ -139,7 +139,7 @@ struct Encoder{
 
 	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
 		, const WordIdSentences& sents/*batch of sentences*/
-		, ModelStats &stats)
+		, ModelStats* pstats=nullptr)
 	{
 		// compute embeddings
 		// get max length within a batch
@@ -168,8 +168,12 @@ struct Encoder{
 					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;		
 					if (l < sents[bs].size()){ 
 						words[bs] = (unsigned)sents[bs][l];
-						stats._words_src++; 
-						if (sents[bs][l] == _p_tfc->_sm._kSRC_UNK) stats._words_src_unk++;
+
+						if (pstats){
+							pstats->_words_src++; 
+							if (sents[bs][l] == _p_tfc->_sm._kSRC_UNK) pstats->_words_src_unk++;
+						}
+
 						v_seq_masks[bs].push_back(0.f);// padding position
 					}
 					else{
@@ -209,8 +213,12 @@ struct Encoder{
 					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;		
 					if (l < sents[bs].size()){ 
 						words[bs] = (unsigned)sents[bs][l];
-						stats._words_src++; 
-						if (sents[bs][l] == _p_tfc->_sm._kSRC_UNK) stats._words_src_unk++;
+
+						if (pstats){
+							pstats->_words_src++; 
+							if (sents[bs][l] == _p_tfc->_sm._kSRC_UNK) pstats->_words_src_unk++;
+						}
+
 						v_seq_masks[bs].push_back(0.f);// padding position
 					}
 					else{
@@ -271,9 +279,9 @@ struct Encoder{
 		return i_src;
 	}
 
-	dynet::Expression build_graph(dynet::ComputationGraph &cg, const WordIdSentences& ssents/*batch of sentences*/, ModelStats &stats){
+	dynet::Expression build_graph(dynet::ComputationGraph &cg, const WordIdSentences& ssents/*batch of sentences*/, ModelStats* pstats=nullptr){
 		// compute source (+ postion) embeddings
-		dynet::Expression i_src_rep = compute_embeddings_and_masks(cg, ssents, stats);// ((num_units, Lx), batch_size)
+		dynet::Expression i_src_rep = compute_embeddings_and_masks(cg, ssents, pstats);// ((num_units, Lx), batch_size)
 		
 		// compute stacked encoder layers
 		dynet::Expression i_enc_l_out = i_src_rep;
@@ -590,7 +598,7 @@ public:
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents/*batched*/
 		, const WordIdSentences& tsents/*batched*/
-		, ModelStats &stats
+		, ModelStats* pstats=nullptr
 		, bool is_eval_on_dev=false);
 	// for decoding
 	dynet::Expression compute_source_rep(dynet::ComputationGraph &cg
@@ -657,10 +665,7 @@ dynet::Expression TransformerModel::compute_source_rep(dynet::ComputationGraph &
 	, const WordIdSentences& ssents)// for decoding only
 {
 	// encode source
-	ModelStats stats;// unused
-	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, stats);// ((num_units, Lx), batch_size)
-
-	return i_src_ctx;
+	return _encoder.get()->build_graph(cg, ssents);// ((num_units, Lx), batch_size)
 }
 
 dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
@@ -696,11 +701,11 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	, const WordIdSentences& ssents
 	, const WordIdSentences& tsents
-	, ModelStats &stats
+	, ModelStats* pstats
 	, bool is_eval_on_dev)
 {
 	// encode source
-	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, stats);// ((num_units, Lx), batch_size)
+	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, pstats);// ((num_units, Lx), batch_size)
 	
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// ((num_units, Ly), batch_size)
@@ -718,9 +723,9 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
 		for(size_t bs = 0; bs < tsents.size(); bs++){
 			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
-			if (tsents[bs].size() > t) {
-				stats._words_tgt++;
-				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) stats._words_tgt_unk++;
+			if (tsents[bs].size() > t && pstats)
+				pstats->_words_tgt++;
+				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) pstats->_words_tgt_unk++;
 			}
 		}
 
@@ -756,9 +761,9 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
 		for(size_t bs = 0; bs < tsents.size(); bs++){
 			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
-			if (tsents[bs].size() > t) {
-				stats._words_tgt++;
-				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) stats._words_tgt_unk++;
+			if (tsents[bs].size() > t && pstats) {
+				pstats->_words_tgt++;
+				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) pstats->_words_tgt_unk++;
 			}
 		}
 
@@ -799,7 +804,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 	target.clear();
 	target.push_back(sos_sym); 
 
-	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);
+	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
 
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	std::stringstream ss;
@@ -849,7 +854,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 	target.clear();
 	target.push_back(sos_sym); 
 
-	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);
+	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	std::stringstream ss;
@@ -921,7 +926,7 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 	target.clear();
 	target.push_back(sos_sym); 
 
-	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);
+	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 

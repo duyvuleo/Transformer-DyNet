@@ -65,7 +65,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 
 // ---
-void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordIdCorpus &devel_cor, 
+void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
 	Trainer &sgd, 
 	const std::string& params_out_file, const std::string& config_out_file, 
 	unsigned max_epochs, unsigned patience, 
@@ -75,8 +75,11 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 // ---
 
 // ---
+void get_dev_stats(const WordIdCorpus &devel_cor
+	, const transformer::TransformerConfig& tfc
+	, transformer::ModelStats& dstats);
 void eval_on_dev(transformer::TransformerModel &tf, 
-	WordIdCorpus &devel_cor, 
+	const WordIdCorpus &devel_cor, 
 	transformer::ModelStats& dstats, 
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo);
 // ---
@@ -396,8 +399,23 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 
 // ---
+void get_dev_stats(const WordIdCorpus &devel_cor
+	, const transformer::TransformerConfig& tfc
+	, transformer::ModelStats& dstats) // ToDo: support batch?
+{
+	for (unsigned i = 0; i < devel_cor.size(); ++i) {
+		WordIdSentence ssent, tsent;
+		tie(ssent, tsent) = devel_cor[i];  
+
+		dstats._words_src += ssent.size();
+		dstats._words_tgt += tsent.size() - 1; // shifted right 
+		for (auto& word : ssent) if (word == tfc._sm._kSRC_UNK) dstats._words_src_unk++;
+		for (auto& word : tsent) if (word == tfc._sm._kTGT_UNK) dstats._words_tgt_unk++;
+	}
+}
+
 void eval_on_dev(transformer::TransformerModel &tf, 
-	WordIdCorpus &devel_cor, 
+	const WordIdCorpus &devel_cor, 
 	transformer::ModelStats& dstats, 
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
 {
@@ -409,7 +427,7 @@ void eval_on_dev(transformer::TransformerModel &tf,
 			tie(ssent, tsent) = devel_cor[i];  
 
 			dynet::ComputationGraph cg;
-			auto i_xent = tf.build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), dstats, true);
+			auto i_xent = tf.build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), nullptr, true);
 			losses += as_scalar(cg.forward(i_xent));
 		}
 
@@ -455,7 +473,7 @@ void eval_on_dev(transformer::TransformerModel &tf,
 // ---
 
 // ---
-void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordIdCorpus &devel_cor, 
+void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
 	Trainer &sgd, 
 	const std::string& params_out_file, const std::string& config_out_file,
 	unsigned max_epochs, unsigned patience, 
@@ -470,11 +488,13 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 	// create minibatches
 	std::vector<std::vector<WordIdSentence> > train_src_minibatch;
 	std::vector<std::vector<WordIdSentence> > train_trg_minibatch;
-	std::vector<size_t> train_ids_minibatch, dev_ids_minibatch;
+	std::vector<size_t> train_ids_minibatch;
 	size_t minibatch_size = MINIBATCH_SIZE;
 	create_minibatches(train_cor, minibatch_size, train_src_minibatch, train_trg_minibatch, train_ids_minibatch);
   
-	//double best_loss = 9e+99;
+	// model stats on dev
+	transformer::ModelStats dstats(dev_eval_mea);
+	get_dev_stats(devel_cor, tfc, dstats);
 	
 	unsigned report_every_i = TREPORT;
 	unsigned dev_every_i_reports = DREPORT;
@@ -524,7 +544,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 			}
 	
 			transformer::ModelStats ctstats;
-			Expression i_xent = tf.build_graph(cg, train_src_minibatch[train_ids_minibatch[id]], train_trg_minibatch[train_ids_minibatch[id]], ctstats);
+			Expression i_xent = tf.build_graph(cg, train_src_minibatch[train_ids_minibatch[id]], train_trg_minibatch[train_ids_minibatch[id]], &ctstats);
 	
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -567,7 +587,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 				sgd.status();
 				cerr << "sents=" << sid << " ";
 				cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';// << " E=" << (tstats._scores[1] / tstats._words_tgt) << " ppl=" << exp(tstats._scores[1] / tstats._words_tgt) << ' ';
-				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl; 	
+				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt + 1) * 1000.f / elapsed << " words/sec)" << endl; 	
 			}
 			   		 
 			++id;
@@ -591,8 +611,7 @@ void run_train(transformer::TransformerModel &tf, WordIdCorpus &train_cor, WordI
 			cerr << "***Greedy translation: " << get_sentence(target, tf.get_target_dict()) << endl;
 			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
 		}
-
-		transformer::ModelStats dstats(dev_eval_mea);// FIXME: bug here, best score must be global!
+		
 		eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);
 		dstats.update_best_score(cpt);
 		if (cpt == 0){

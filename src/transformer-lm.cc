@@ -59,6 +59,12 @@ void save_config(const std::string& config_out_file
 // ---
 
 // ---
+void get_dev_stats(const WordIdSentences &devel_cor
+	, const transformer::TransformerConfig& tfc
+	, transformer::ModelStats& dstats);
+// ---
+
+// ---
 std::string get_sentence(const WordIdSentence& source, Dict& dd);
 // ---
 
@@ -464,6 +470,19 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 // ---
 
 // ---
+void get_dev_stats(const WordIdSentences &devel_cor
+	, const transformer::TransformerConfig& tfc
+	, transformer::ModelStats& dstats) // ToDo: support batch?
+{
+	for (unsigned i = 0; i < devel_cor.size(); ++i) {
+		WordIdSentence dsent = devel_cor[i];  
+		dstats._words_tgt += dsent.size() - 1; // shifted right 
+		for (auto& word : dsent) if (word == tfc._sm._kTGT_UNK) dstats._words_tgt_unk++;
+	}
+}
+// ---
+
+// ---
 void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, WordIdSentences &devel_cor, 
 	Trainer &sgd, 
 	const std::string& params_out_file, const std::string& config_out_file,
@@ -483,8 +502,10 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	std::vector<size_t> train_ids_minibatch, dev_ids_minibatch;
 	size_t minibatch_size = MINIBATCH_SIZE;
 	create_minibatches(train_cor, minibatch_size, train_cor_minibatch, train_ids_minibatch);
-  
-	//double best_loss = 9e+99;
+
+	// stats on dev  
+	transformer::ModelStats dstats;
+	get_dev_stats(devel_cor, tfc, dstats);
 	
 	unsigned report_every_i = TREPORT;
 	unsigned dev_every_i_reports = DREPORT;
@@ -534,7 +555,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			}
 	
 			transformer::ModelStats ctstats;
-			Expression i_xent = tf.build_graph(cg, train_cor_minibatch[train_ids_minibatch[id]], ctstats);
+			Expression i_xent = tf.build_graph(cg, train_cor_minibatch[train_ids_minibatch[id]], &ctstats);
 	
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -595,12 +616,12 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			cerr << "***Random sample: " << get_sentence(target, dict) << endl;// can do sampling with any prefix
 		}
 
-		transformer::ModelStats dstats;
+		// compute cross entropy loss (xent)
 		for (unsigned i = 0; i < devel_cor.size(); ++i) {
 			WordIdSentence dsent = devel_cor[i];  
 
 			dynet::ComputationGraph cg;
-			auto i_xent = tf.build_graph(cg, WordIdSentences(1, dsent), dstats, true);
+			auto i_xent = tf.build_graph(cg, WordIdSentences(1, dsent), nullptr, true);
 			dstats._scores[1] += as_scalar(cg.forward(i_xent));
 		}
 		
@@ -611,7 +632,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		}
 		
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ' ;//<< " E=" << (dstats._scores[0] / dstats._words_tgt) << " ppl=" << exp(dstats._scores[0] / dstats._words_tgt) << ' ';
+		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ' ;
 		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << dstats.get_score_string(false)  << ") ";
 		timer_iteration.show();
 
