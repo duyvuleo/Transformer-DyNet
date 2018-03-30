@@ -17,8 +17,8 @@ using namespace dynet;
 using namespace transformer;
 
 //#define USE_BEAM_SEARCH_LENGTH_NORMALISATION
-//#define USE_BEAM_SEARCH_LENGTH_NORMALISATION_NEMATUS
-#define USE_BEAM_SEARCH_LENGTH_NORMALISATION_GNMT
+#define USE_BEAM_SEARCH_LENGTH_NORMALISATION_NEMATUS
+//#define USE_BEAM_SEARCH_LENGTH_NORMALISATION_GNMT
 float _len_norm_alpha = 0.6f;// global variable
 
 class EnsembleDecoderHyp {
