@@ -41,7 +41,7 @@ if argc == 7 or argc == 8:
 	sfname = sys.argv[3] + "." + sys.argv[1] # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/train.en'
 	tfname = sys.argv[3] + "." + sys.argv[2] # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/train.vi'
 
-	if os.path.exists(sfname) and os.path.exists(tfname):
+	if os.path.exists(sys.argv[6] + "." + sys.argv[1]) and os.path.exists(sys.argv[6] + "." + sys.argv[2]):
 		if argc == 7:
 			source_vocab = load_vocab_from_file(sys.argv[6] + "." + sys.argv[1]) # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/vocab.en'
 			target_vocab = load_vocab_from_file(sys.argv[6] + "." + sys.argv[2]) # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/vocab.vi'
@@ -49,7 +49,7 @@ if argc == 7 or argc == 8:
 			source_vocab = threshold_vocab(sfname, int(sys.argv[6]))
 			target_vocab = threshold_vocab(tfname, int(sys.argv[7]))
 	elif os.path.exists(sys.argv[3]): # if using joint vocabulary
-		source_vocab = load_vocab_from_file(sys.argv[3])
+		source_vocab = load_vocab_from_file(sys.argv[6])
 		target_vocab = source_vocab
 		use_joint_vocab = True
 	else: 
