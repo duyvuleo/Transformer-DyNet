@@ -898,23 +898,22 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 
 struct Hypothesis {
 	Hypothesis() {};
-	Hypothesis(int tgt, float cst, std::vector<Expression> &al)
-		: target({tgt}), cost(cst), costs({1.f}), aligns(al) {}
-	Hypothesis(int tgt, float cst, Hypothesis &last, std::vector<Expression> &al)
-		: target(last.target), costs(last.costs), aligns(al) {
+
+	Hypothesis(int tgt, float cst, std::vector<dynet::Expression> &al)
+		: target({tgt}), cost(cst), aligns(al) {}
+
+	Hypothesis(int tgt, float cst, Hypothesis &last, std::vector<dynet::Expression> &al)
+		: target(last.target), cost(cst), aligns(al) {
 		target.push_back(tgt);
-		cost = last.cost - std::log(cst);
-		costs.push_back(cst); 
 	}
 
 	std::vector<int> target;
 	float cost;
-	std::vector<float> costs;
-	std::vector<Expression> aligns;
+	std::vector<dynet::Expression> aligns;
 };
 
 // A simplified version of beam search decoding (transformer-decode will use integrated ensemble decoding instead!)
-void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width)// FIXME: to be tested?
+void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width)
 {
 	_tfc._is_training = false;
 	
@@ -922,7 +921,7 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
 	unsigned int vocab_size = _dicts.second.size();
 
-	// start of sentence
+	// start of sequences (transformer-dynet always generates sequences with the form: <s> ... </s>.)
 	target.clear();
 	target.push_back(sos_sym); 
 
@@ -933,7 +932,7 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 	std::vector<Hypothesis> chart;
 	chart.push_back(Hypothesis(sos_sym, 0.0f, aligns));
 
-	std::vector<unsigned> vocab(boost::copy_range<std::vector<unsigned>>(boost::irange(0u, vocab_size)));
+	std::vector<unsigned int> vocab(boost::copy_range<std::vector<unsigned int>>(boost::irange(0u, vocab_size)));
 	std::vector<Hypothesis> completed;
 
 	for (unsigned steps = 0; completed.size() < beam_width && steps < 2*source.size(); ++steps) {
@@ -946,35 +945,40 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 
 			// find the top k best next words
 			auto ydist = dynet::as_vector(cg.incremental_forward(i_ydist));
-			std::partial_sort(vocab.begin(), vocab.begin()+beam_width, vocab.end(), 
-				[&ydist](unsigned v1, unsigned v2) { return ydist[v1] > ydist[v2]; });
+			std::partial_sort(vocab.begin(), vocab.begin() + beam_width, vocab.end(), 
+				[&ydist](unsigned int v1, unsigned int v2) { return ydist[v1] > ydist[v2]; });
 
 			// add to chart
 			for (auto vi = vocab.begin(); vi < vocab.begin() + beam_width; ++vi) {
-				if (new_chart.size() < beam_width) {
-					Hypothesis hnew(*vi, ydist[*vi]/*hprev.cost - std::log(ydist[*vi])*/, hprev, aligns);
+				//if (new_chart.size() < beam_width) {
+					Hypothesis hnew(*vi, hprev.cost - std::log(ydist[*vi]), hprev, aligns);
 					if (*vi == (unsigned int)eos_sym)
 						completed.push_back(hnew);
 					else
 						new_chart.push_back(hnew);
-				} 
+				//} 
 			}
 	
 			cg.revert();
 		}
 
 		if (new_chart.size() > beam_width) {
-			// sort new_chart by score, to get kbest candidates
-			std::partial_sort(new_chart.begin(), new_chart.begin()+beam_width, new_chart.end(),
+			// sort new_chart by scores, to get kbest candidates
+			std::partial_sort(new_chart.begin(), new_chart.begin() + beam_width, new_chart.end(),
 				[](Hypothesis &h1, Hypothesis &h2) { return h1.cost < h2.cost; });
-			new_chart.resize(beam_width);
+			new_chart.resize(beam_width);// only retain beam_width hypotheses
 		}
+
 		chart.swap(new_chart);
 	}
 
-	// sort completed by score, adjusting for length -- not very effective, too short!
+	// If the model is too bad (at the beginning of training process), it will not be able to generate the well-formed sequences (e.g., with </s> at the end).
+	// In this case, the generated sequences can be repeated and have the desired max length (e.g., 2 * source_len).
+	// Here, completed.size() will be zero!
+	if (completed.size() == 0)
+		completed.swap(chart);// swap with current generated hypotheses
 	auto best = std::min_element(completed.begin(), completed.end(),
-			[](Hypothesis &h1, Hypothesis &h2) { return h1.cost/h1.target.size() < h2.cost/h2.target.size(); });
+			[](Hypothesis &h1, Hypothesis &h2) { return h1.cost/h1.target.size() < h2.cost/h2.target.size(); });// sort completed by their scores, adjusting for lengths -- not very effective, too short!
 	assert(best != completed.end());
 
 	target = best->target;
