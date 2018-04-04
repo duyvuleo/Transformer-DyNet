@@ -25,24 +25,35 @@ def load_vocab_from_file(fname):
 		vocab.add(line.strip())
 	return vocab
 
+def print_help():
+	print "Usage 1: python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>"
+	print "Usage 2: python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <src-word-freq> <trg-word-freq>"
+	print "Usage 3: python scripts/wrap-data.py <train-prefix> <dev-prefix> <vocab> <word-freq>"
+
 argc = len(sys.argv)
 
 if argc == 1 or (argc == 2 and (sys.argv[1] == "--help" or sys.argv[1] == "-h")): # print help
-	# python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>
-	print "Usage 1: python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>"
-	print "Usage 2: python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>"
+	print_help()	
 	exit()
 
+use_joint_vocab = False
 if argc == 7 or argc == 8:
 	sfname = sys.argv[3] + "." + sys.argv[1] # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/train.en'
 	tfname = sys.argv[3] + "." + sys.argv[2] # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/train.vi'
 
-	if argc == 7:
-		source_vocab = load_vocab_from_file(sys.argv[6] + "." + sys.argv[1]) # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/vocab.en'
-		target_vocab = load_vocab_from_file(sys.argv[6] + "." + sys.argv[2]) # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/vocab.vi'
+	if os.path.exists(sfname) and os.path.exists(tfname):
+		if argc == 7:
+			source_vocab = load_vocab_from_file(sys.argv[6] + "." + sys.argv[1]) # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/vocab.en'
+			target_vocab = load_vocab_from_file(sys.argv[6] + "." + sys.argv[2]) # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/vocab.vi'
+		else: 
+			source_vocab = threshold_vocab(sfname, int(sys.argv[6]))
+			target_vocab = threshold_vocab(tfname, int(sys.argv[7]))
+	elif os.path.exists(sys.argv[3]): # if using joint vocabulary
+		source_vocab = load_vocab_from_file(sys.argv[3])
+		target_vocab = source_vocab
+		use_joint_vocab = True
 	else: 
-		source_vocab = threshold_vocab(sfname, int(sys.argv[6]))
-		target_vocab = threshold_vocab(tfname, int(sys.argv[7]))
+		print "Something wrong with the vocabulary file(s)!"		
 elif argc == 5:
 	if os.path.exists(sys.argv[4]):
 		vocab = load_vocab_from_file(sys.argv[4])
@@ -50,7 +61,10 @@ elif argc == 5:
 	else: 
 		vocab = threshold_vocab(sys.argv[1], int(sys.argv[4]))
 		ftail = "f" + sys.argv[4]
-else: exit()
+else: 
+	print "Bad arguments!"
+	print_help()
+	exit()
 
 def process_corpus(sf, tf, of, sv, tv):
 	with open(of, 'w') as fout:
@@ -119,6 +133,12 @@ def process_test(sf, of, vocab):
 					print >>fout, '</s>'
 
 if argc == 7 or argc == 8: # translation task
+	if use_joint_vocab:
+		print "Joint vocabulary size: " + str(len(source_vocab))
+	else:
+		print "Source vocab size: " + str(len(source_vocab))
+		print "Target vocab size: " + str(len(target_vocab))
+
 	ofname = sys.argv[3] + "." + sys.argv[1] + "-" + sys.argv[2] + ".capped" # '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/train.en-vi.vcb.capped'
 
 	process_corpus(sfname, tfname, ofname, source_vocab, target_vocab) #train (for training)
@@ -126,9 +146,8 @@ if argc == 7 or argc == 8: # translation task
 	process_test(sys.argv[4] + "." + sys.argv[1], sys.argv[4] + "." + sys.argv[1] + ".capped", source_vocab) # e.g., process_test('/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/tst2012.en','/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/tst2012.en.vcb.capped', source_vocab) #dev (for decoding)
 	process_test(sys.argv[5] + "." + sys.argv[1], sys.argv[5] + "." + sys.argv[1] + ".capped", source_vocab) # e.g., process_test('/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/tst2013.en','/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/tst2013.en.vcb.capped', source_vocab) #test (for decoding)
 elif argc == 5: # language modeling task	
+	print "Vocab size: " + str(len(vocab))
 	process_corpus_mono(sys.argv[1], sys.argv[1] + "." + ftail + ".capped", vocab) #train (for training)
 	process_test(sys.argv[2], sys.argv[2] + "." + ftail + ".capped", vocab)
 	process_test(sys.argv[3], sys.argv[3] + "." + ftail + ".capped", vocab)
 	
-
-
