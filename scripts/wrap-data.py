@@ -44,16 +44,17 @@ if argc == 7 or argc == 8:
 	if os.path.exists(sys.argv[6] + "." + sys.argv[1]) and os.path.exists(sys.argv[6] + "." + sys.argv[2]):
 		if argc == 7:
 			source_vocab = load_vocab_from_file(sys.argv[6] + "." + sys.argv[1]) # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/vocab.en'
-			target_vocab = load_vocab_from_file(sys.argv[6] + "." + sys.argv[2]) # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/vocab.vi'
+			target_vocab = load_vocab_from_file(sys.argv[6] + "." + sys.argv[2]) # e.g., '/home/vhoang2/tools/nmt/nmt/scripts/iwslt15/vocab.vi'		
 		else: 
-			source_vocab = threshold_vocab(sfname, int(sys.argv[6]))
-			target_vocab = threshold_vocab(tfname, int(sys.argv[7]))
-	elif os.path.exists(sys.argv[3]): # if using joint vocabulary
+			print "Bad arguments!"
+			print_help();exit()		
+	elif os.path.exists(sys.argv[6]): # if using joint vocabulary
 		source_vocab = load_vocab_from_file(sys.argv[6])
 		target_vocab = source_vocab
 		use_joint_vocab = True
-	else: 
-		print "Something wrong with the vocabulary file(s)!"		
+	elif argc == 8:
+		source_vocab = threshold_vocab(sfname, int(sys.argv[6]))
+		target_vocab = threshold_vocab(tfname, int(sys.argv[7]))
 elif argc == 5:
 	if os.path.exists(sys.argv[4]):
 		vocab = load_vocab_from_file(sys.argv[4])
@@ -63,8 +64,7 @@ elif argc == 5:
 		ftail = "f" + sys.argv[4]
 else: 
 	print "Bad arguments!"
-	print_help()
-	exit()
+	print_help(); exit()
 
 def process_corpus(sf, tf, of, sv, tv):
 	with open(of, 'w') as fout:
