@@ -79,7 +79,7 @@ The data can be processed by using the script (/scripts/wrap-data.py),
 
     python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>
 
-(assume that 2 files <vocab-prefix>.<src-lang-id> and <vocab-prefix>.<trg-lang-id> must exist.)
+(assume that 2 files vocab-prefix.src-lang-id and vocab-prefix.trg-lang-id must exist.)
 
 or
 
@@ -261,7 +261,7 @@ Note that it is recommended to use sacreBLEU or mteval instead for fairest evalu
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 	******************************************************************************************************************
 
-	Note/Comment: SOTA results on the task with either single or ensemble models.
+	Note/Comment: Currently, I did not use any (word) segmentation for Vietnamese (and English), just simply used all the words in the vocabularies provided from https://github.com/tensorflow/nmt. Note that tensor2tensor used wordpieces segmentation. However, I still got nearly SOTA results on the task with ensemble models.
 
 #### The Kyoto Free Translation Task (English-Japanese) (updating) 
 
