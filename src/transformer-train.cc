@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <limits>
+#include <sys/stat.h>
 
 // Boost
 #include <boost/archive/text_iarchive.hpp>
@@ -67,7 +68,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
 	Trainer &sgd, 
-	const std::string& params_out_file, const std::string& config_out_file, 
+	const std::string& model_path, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints, 
@@ -113,9 +114,7 @@ int main(int argc, char** argv) {
 		("sparse-updates", value<bool>()->default_value(true), "enable/disable sparse update(s) for lookup parameter(s); true by default")
 		("grad-clip-threshold", value<float>()->default_value(5.f), "use specific gradient clipping threshold (https://arxiv.org/pdf/1211.5063.pdf); 5 by default")
 		//-----------------------------------------
-		("initialise,i", value<std::string>(), "load initial parameters from file")
-		("parameters,p", value<std::string>(), "save best parameters to this file")
-		("config-file", value<std::string>()->default_value("/dev/null"), "save model configuration (used for decoding/inference) to this file")
+		("model-path,p", value<std::string>()->default_value("."), "all files related to the model will be saved in this folder")
 		//-----------------------------------------
 		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers; 6 by default")
 		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units; 512 by default")
@@ -206,54 +205,122 @@ int main(int argc, char** argv) {
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
-	// load fixed vocabularies from files if required
-	dynet::Dict sd, td;
-	load_vocabs(vm["src-vocab"].as<std::string>(), vm["tgt-vocab"].as<std::string>(), sd, td);
+	// get and check model path
+	std::string model_path = vm["model-path"].as<std::string>();
+	struct stat sb;
+	if (stat(model_path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode))
+		cerr << endl << "All model files will be saved to: " << model_path << "." << endl;
+	else
+		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
-	SentinelMarkers sm;
-	sm._kSRC_SOS = sd.convert("<s>");
-	sm._kSRC_EOS = sd.convert("</s>");
-	sm._kTGT_SOS = td.convert("<s>");
-	sm._kTGT_EOS = td.convert("</s>");
+	// model recipe
+	dynet::Dict sd, td;// vocabularies
+	SentinelMarkers sm;// sentinel markers
+	WordIdCorpus train_cor, devel_cor;// integer-converted train and dev data
+	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
 
-	// load data files
-	WordIdCorpus train_cor, devel_cor;
-	if (!load_data(vm, train_cor, devel_cor, sd, td, sm))
-		TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
+	std::string config_file = model_path + "/model.config";// configuration file path
+	if (stat(config_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){// check existence		
+		// (incremental training)
+		// to load the training profiles from previous training run
+		cerr << "Found existing (trained) model from " << model_path << "!" << endl;
+
+		// load vocabulary from files
+		std::string src_vocab_file = model_path + "/" + "src.vocab";
+		std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
+		load_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
+
+		// initalise sentinel markers
+		sm._kSRC_SOS = sd.convert("<s>");
+		sm._kSRC_EOS = sd.convert("</s>");
+		sm._kTGT_SOS = td.convert("<s>");
+		sm._kTGT_EOS = td.convert("</s>");
+
+		// load data files
+		if (!load_data(vm, train_cor, devel_cor, sd, td, sm))
+			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
+
+		// read model configuration
+		ifstream inpf_cfg(config_file);
+		assert(inpf_cfg);
+		
+		std::string line;
+		getline(inpf_cfg, line);
+		std::stringstream ss(line);
+		tfc._src_vocab_size = sd.size();
+		tfc._tgt_vocab_size = td.size();
+		tfc._sm = sm;
+		ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+		   >> tfc._encoder_emb_dropout_rate >> tfc._encoder_sublayer_dropout_rate >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+		   >> tfc._use_label_smoothing >> tfc._label_smoothing_weight
+		   >> tfc._position_encoding >> tfc._position_encoding_flag >> tfc._max_length
+		   >> tfc._attention_type
+		   >> tfc._ffl_activation_type
+		   >> tfc._shared_embeddings
+		   >> tfc._use_hybrid_model;
+	}
+	else{// not exist, meaning that the model will be created from scratch!
+		cerr << "Preparing to train the model from scratch..." << endl;
+
+		// load fixed vocabularies from files if provided, otherwise create them on the fly from the training data.
+		load_vocabs(vm["src-vocab"].as<std::string>(), vm["tgt-vocab"].as<std::string>(), sd, td);
+
+		// initalise sentinel markers
+		sm._kSRC_SOS = sd.convert("<s>");
+		sm._kSRC_EOS = sd.convert("</s>");
+		sm._kTGT_SOS = td.convert("<s>");
+		sm._kTGT_EOS = td.convert("</s>");
+
+		// load data files
+		if (!load_data(vm, train_cor, devel_cor, sd, td, sm))
+			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
+
+		// get transformer configuration
+		tfc = transformer::TransformerConfig(sd.size(), td.size()
+			, vm["num-units"].as<unsigned>()
+			, vm["num-heads"].as<unsigned>()
+			, vm["nlayers"].as<unsigned>()
+			, vm["n-ff-units-factor"].as<unsigned>()
+			, vm["encoder-emb-dropout-p"].as<float>()
+			, vm["encoder-sublayer-dropout-p"].as<float>()
+			, vm["decoder-emb-dropout-p"].as<float>()
+			, vm["decoder-sublayer-dropout-p"].as<float>()
+			, vm["attention-dropout-p"].as<float>()
+			, vm["ff-dropout-p"].as<float>()
+			, vm.count("use-label-smoothing")
+			, vm["label-smoothing-weight"].as<float>()
+			, vm["position-encoding"].as<unsigned>()
+			, vm["position-encoding-flag"].as<unsigned>()
+			, vm["max-pos-seq-len"].as<unsigned>()
+			, sm
+			, vm["attention-type"].as<unsigned>()
+			, vm["ff-activation-type"].as<unsigned>()
+			, vm.count("shared-embeddings")
+			, vm.count("use-hybrid-model"));
+
+		// save vocabularies to files
+		std::string src_vocab_file = model_path + "/" + "src.vocab";
+		std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
+		save_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
+
+		// save configuration file (for decoding/inference)
+		std::string config_out_file = model_path + "/model.config";
+		std::string params_out_file = model_path + "/model.params";
+		save_config(config_out_file, params_out_file, tfc);
+	}	
 
 	// learning rate scheduler
 	unsigned lr_epochs = vm["lr-epochs"].as<unsigned>(), lr_patience = vm["lr-patience"].as<unsigned>();
 	if (lr_epochs > 0 && lr_patience > 0)
 		cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;
 
-	// transformer configuration
-	transformer::TransformerConfig tfc(sd.size(), td.size()
-		, vm["num-units"].as<unsigned>()
-		, vm["num-heads"].as<unsigned>()
-		, vm["nlayers"].as<unsigned>()
-		, vm["n-ff-units-factor"].as<unsigned>()
-		, vm["encoder-emb-dropout-p"].as<float>()
-		, vm["encoder-sublayer-dropout-p"].as<float>()
-		, vm["decoder-emb-dropout-p"].as<float>()
-		, vm["decoder-sublayer-dropout-p"].as<float>()
-		, vm["attention-dropout-p"].as<float>()
-		, vm["ff-dropout-p"].as<float>()
-		, vm.count("use-label-smoothing")
-		, vm["label-smoothing-weight"].as<float>()
-		, vm["position-encoding"].as<unsigned>()
-		, vm["position-encoding-flag"].as<unsigned>()
-		, vm["max-pos-seq-len"].as<unsigned>()
-		, sm
-		, vm["attention-type"].as<unsigned>()
-		, vm["ff-activation-type"].as<unsigned>()
-		, vm.count("shared-embeddings")
-		, vm.count("use-hybrid-model"));
-
 	// initialise transformer object
 	transformer::TransformerModel tf(tfc, sd, td);
-	if (vm.count("initialise")){
-		cerr << endl << "Loading model from file: " << vm["initialise"].as<std::string>() << "..." << endl;
-		tf.initialise_params_from_file(vm["initialise"].as<std::string>());// load pre-trained model (for incremental training)
+	std::string model_file = model_path + "/model.params";
+	if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
+	{
+		cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
+		tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
 	}
 	cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
 
@@ -266,7 +333,7 @@ int main(int argc, char** argv) {
 	run_train(tf
 		, train_cor, devel_cor
 		, *p_sgd_trainer
-		, vm["parameters"].as<std::string>() /*best saved model parameter file*/, vm["config-file"].as<std::string>() /*saved configuration file*/
+		, model_path
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
 		, vm["average-checkpoints"].as<unsigned>()
@@ -475,15 +542,17 @@ void eval_on_dev(transformer::TransformerModel &tf,
 // ---
 void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
 	Trainer &sgd, 
-	const std::string& params_out_file, const std::string& config_out_file,
+	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints,
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
 {
-	// save configuration file (for decoding/inference)
+	// get current configuration
 	const transformer::TransformerConfig& tfc = tf.get_config();
-	save_config(config_out_file, params_out_file, tfc);
+
+	// model params file
+	std::string params_out_file = model_path + "/model.params";
 
 	// create minibatches
 	std::vector<std::vector<WordIdSentence> > train_src_minibatch;

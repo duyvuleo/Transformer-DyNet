@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <limits>
+#include <sys/stat.h>
 
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
@@ -19,13 +20,6 @@ using namespace std;
 using namespace dynet;
 using namespace transformer;
 using namespace boost::program_options;
-
-// ---
-bool load_data(const variables_map& vm
-	, WordIdCorpus& train_cor
-	, dynet::Dict& sd, dynet::Dict& td
-	, transformer::SentinelMarkers& sm);
-// ---
 
 // ---
 bool load_model_config(const std::string& model_cfg_file
@@ -67,14 +61,7 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("dynet-autobatch", value<unsigned>()->default_value(0), "impose the auto-batch mode (support both GPU and CPU); no by default")
 		//-----------------------------------------
-		("train,t", value<std::string>(), "file containing training sentences, with each line consisting of source ||| target.")		
-		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
-		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
-		("src-vocab", value<std::string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
-		("tgt-vocab", value<std::string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")	
-		//-----------------------------------------
-		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
-		//-----------------------------------------
+		("model-path,p", value<std::string>()->default_value("."), "specify pre-trained model path")
 		//-----------------------------------------
 		("test,T", value<std::string>(), "file containing testing sentences.")
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")
@@ -114,115 +101,62 @@ int main(int argc, char** argv) {
 	cerr << endl;
 	
 	// print help
-	if (vm.count("help") 
-		|| !(vm.count("train") || (vm.count("src-vocab") && vm.count("tgt-vocab"))) || !vm.count("test"))
+	if (vm.count("help")
+		|| !(vm.count("model-path") || !vm.count("test")))
 	{
 		cout << opts << "\n";
 		return EXIT_FAILURE;
 	}
 
-	// load fixed vocabularies from files if required
-	dynet::Dict sd, td;
-	load_vocabs(vm["src-vocab"].as<std::string>(), vm["tgt-vocab"].as<std::string>(), sd, td);
-	cerr << endl;
+	// get and check model path
+	std::string model_path = vm["model-path"].as<std::string>();
+	struct stat sb;
+	if (stat(model_path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode))
+		cerr << endl << "All model files will be saved to: " << model_path << "." << endl;
+	else
+		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
-	transformer::SentinelMarkers sm;
-	sm._kSRC_SOS = sd.convert("<s>");
-	sm._kSRC_EOS = sd.convert("</s>");
-	sm._kTGT_SOS = td.convert("<s>");
-	sm._kTGT_EOS = td.convert("</s>");
-
-	// load training data for building vocabularies w/o vocabulary files
-	WordIdCorpus train_cor;
-	if (!load_data(vm, train_cor, sd, td, sm))
-		TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
-
-	// load models
+	// Model recipe
+	dynet::Dict sd, td;// vocabularies
+	SentinelMarkers sm;// sentinel markers
 	std::vector<std::shared_ptr<transformer::TransformerModel>> v_tf_models;
-	if (!load_model_config(vm["model-cfg"].as<std::string>(), v_tf_models, sd, td, sm))
-		TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
 
+	std::string config_file = model_path + "/model.config";// configuration file path
+	if (stat(config_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){// check existence	
+		// load vocabulary from files
+		std::string src_vocab_file = model_path + "/" + "src.vocab";
+		std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
+		load_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
+
+		transformer::SentinelMarkers sm;
+		sm._kSRC_SOS = sd.convert("<s>");
+		sm._kSRC_EOS = sd.convert("</s>");
+		sm._kTGT_SOS = td.convert("<s>");
+		sm._kTGT_EOS = td.convert("</s>");
+
+		// load models
+		std::string config_file = model_path + "/model.config";
+		if (!load_model_config(config_file, v_tf_models, sd, td, sm))
+			TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
+	}
+	else TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s) from: " + std::string(model_path) + "!");
+
+	// length normalisation hyperparameter for beam search
 	_len_norm_alpha = vm["alpha"].as<float>();
+
+	// input test file
+	// the output will be printed to stdout!
+	std::string test_input_file = vm["test"].as<std::string>();
 
 	// decode the input file
 	if (vm.count("topk"))
-		decode_nbest(vm["test"].as<std::string>(), v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<std::string>(), vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
+		decode_nbest(test_input_file, v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<std::string>(), vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
 	else
-		decode(vm["test"].as<std::string>(), v_tf_models, vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
+		decode(test_input_file, v_tf_models, vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
 
 	return EXIT_SUCCESS;
 }
 //************************************************************************************************************************************************************
-
-// ---
-bool load_data(const variables_map& vm
-	, WordIdCorpus& train_cor
-	, dynet::Dict& sd, dynet::Dict& td
-	, SentinelMarkers& sm)
-{
-	bool swap = vm.count("swap");
-	bool r2l_target = vm.count("r2l_target");
-
-	if (vm.count("train")){
-		cerr << "Reading training data from " << vm["train"].as<std::string>() << "...\n";	
-		if (vm.count("shared-embeddings"))
-			train_cor = read_corpus(vm["train"].as<std::string>(), &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
-		else 
-			train_cor = read_corpus(vm["train"].as<std::string>(), &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
-		cerr << endl;
-	}
-
-	if ("" == vm["src-vocab"].as<std::string>() 
-		&& "" == vm["tgt-vocab"].as<std::string>()) // if not using external vocabularies
-	{
-		sd.freeze(); // no new word types allowed
-		td.freeze(); // no new word types allowed
-	}
-
-	// limit the percent of training data to be used
-	unsigned train_percent = vm["train-percent"].as<unsigned>();
-	if (train_percent < 100 
-		&& train_percent > 0)
-	{
-		if (vm.count("train")){
-			cerr << "Only use " << train_percent << "% of " << train_cor.size() << " training instances: ";
-			unsigned int rev_pos = train_percent * train_cor.size() / 100;
-			train_cor.erase(train_cor.begin() + rev_pos, train_cor.end());
-			cerr << train_cor.size() << " instances remaining!" << endl;
-		}
-	}
-	else if (train_percent != 100){
-		cerr << "Invalid --train-percent <num> used. <num> must be (0,100]" << endl;
-		return false;
-	}
-
-	// set up <s>, </s>, <unk> ids
-	sd.set_unk("<unk>");
-	sm._kSRC_UNK = sd.get_unk_id();
-	td.set_unk("<unk>");
-	sm._kTGT_UNK = td.get_unk_id();
-
-	if (swap) {
-		cerr << "Swapping role of source and target\n";
-		if (!vm.count("shared-embeddings")){
-			std::swap(sd, td);
-			std::swap(sm._kSRC_SOS, sm._kTGT_SOS);
-			std::swap(sm._kSRC_EOS, sm._kTGT_EOS);
-			std::swap(sm._kSRC_UNK, sm._kTGT_UNK);
-		}
-
-		for (auto &sent: train_cor){
-			std::swap(get<0>(sent), get<1>(sent));
-			if (r2l_target){
-				WordIdSentence &tsent = get<1>(sent);
-				std::reverse(tsent.begin() + 1, tsent.end() - 1);
-			}
-		}		
-	}
-
-	return true;
-}
-// ---
 
 // ---
 bool load_model_config(const std::string& model_cfg_file
@@ -272,6 +206,7 @@ bool load_model_config(const std::string& model_cfg_file
 
 		v_models.push_back(std::shared_ptr<transformer::TransformerModel>());
 		v_models[i].reset(new transformer::TransformerModel(tfc, sd, td));
+		cerr << "Model file: " << model_file << endl;
 		v_models[i].get()->initialise_params_from_file(model_file);// load pre-trained model from file
 		cerr << "Count of model parameters: " << v_models[i].get()->get_model_parameters().parameter_count() << endl;
 

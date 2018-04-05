@@ -13,6 +13,7 @@ using namespace transformer;
 #include <fstream>
 #include <sstream>
 #include <limits>
+#include <sys/stat.h>
 
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
@@ -200,29 +201,71 @@ int main(int argc, char** argv) {
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
-	// load fixed vocabularies from files if required
-	dynet::Dict d;
-	load_vocab(vm["vocab"].as<std::string>(), d);
+	// get and check model path
+	std::string model_path = vm["model-path"].as<std::string>();
+	struct stat sb;
+	if (stat(model_path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode))
+		cerr << endl << "All model files will be saved to: " << model_path << "." << endl;
+	else
+		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
-	SentinelMarkers sm;
-	sm._kTGT_SOS = d.convert("<s>");
-	sm._kTGT_EOS = d.convert("</s>");
+	// model recipe
+	dynet::Dict d;// vocabularies
+	SentinelMarkers sm;// sentinel markers
+	WordIdSentences train_cor, devel_cor;// integer-converted train and dev data
+	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
 
-	// load data files
-	WordIdSentences train_cor, devel_cor;
-	if (!load_data(vm, train_cor, devel_cor, d, sm))
-		TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
+	std::string config_file = model_path + "/model.config";// configuration file path
+	if (stat(config_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){// check existence	
+		// (incremental training)
+		// to load the training profiles from previous training run
+		cerr << "Found existing (trained) model from " << model_path << "!" << endl;	
 
-	bool is_training = !vm.count("test");
+		// load vocabulary from files
+		std::string vocab_file = model_path + "/" + "vocab";
+		load_vocab(vocab_file, d);
 
-	if (is_training){
-		// learning rate scheduler
-		unsigned lr_epochs = vm["lr-epochs"].as<unsigned>(), lr_patience = vm["lr-patience"].as<unsigned>();
-		if (lr_epochs > 0 && lr_patience > 0)
-			cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;
+		// initalise sentinel markers
+		sm._kTGT_SOS = d.convert("<s>");
+		sm._kTGT_EOS = d.convert("</s>");
+
+		// load data files
+		if (!load_data(vm, train_cor, devel_cor, d, sm))
+			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
+
+		// model configuration
+		ifstream inpf_cfg(config_file);
+		assert(inpf_cfg);
+		
+		std::string line;
+		getline(inpf_cfg, line);
+		std::stringstream ss(line);
+		tfc._tgt_vocab_size = d.size();
+		tfc._sm = sm;
+		ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+		   >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+		   >> tfc._use_label_smoothing >> tfc._label_smoothing_weight
+		   >> tfc._position_encoding >> tfc._max_length
+		   >> tfc._attention_type
+		   >> tfc._ffl_activation_type
+		   >> tfc._use_hybrid_model;
+	}
+	else{// not exist, meaning that the model will be created from scratch!
+		cerr << "Preparing to train the model from scratch..." << endl;
+
+		// load fixed vocabularies from files if provided
+		load_vocab(vm["vocab"].as<std::string>(), d);
+
+		// sentinel markers
+		sm._kTGT_SOS = d.convert("<s>");
+		sm._kTGT_EOS = d.convert("</s>");
+
+		// load data files
+		if (!load_data(vm, train_cor, devel_cor, d, sm))
+			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 		// transformer configuration
-		transformer::TransformerConfig tfc(0, d.size()
+		tfc = transformer::TransformerConfig(0, d.size()
 			, vm["num-units"].as<unsigned>()
 			, vm["num-heads"].as<unsigned>()
 			, vm["nlayers"].as<unsigned>()
@@ -242,7 +285,16 @@ int main(int argc, char** argv) {
 			, vm["attention-type"].as<unsigned>()
 			, vm["ff-activation-type"].as<unsigned>()
 			, false
-			, vm.count("use-hybrid-model"));
+			, vm.count("use-hybrid-model"));		
+	}	
+
+	bool is_training = !vm.count("test");
+
+	if (is_training){
+		// learning rate scheduler
+		unsigned lr_epochs = vm["lr-epochs"].as<unsigned>(), lr_patience = vm["lr-patience"].as<unsigned>();
+		if (lr_epochs > 0 && lr_patience > 0)
+			cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;		
 
 		// initialise transformer object
 		transformer::TransformerLModel tf(tfc, d);
@@ -271,8 +323,9 @@ int main(int argc, char** argv) {
 	}
 	else{
 		// load models
+		std::string config_file = model_path + "/model.config";
 		std::vector<std::shared_ptr<transformer::TransformerLModel>> v_tf_models;// to support ensemble models
-		if (!load_model_config(vm["config-file"].as<std::string>(), v_tf_models, d, sm))
+		if (!load_model_config(config_file, v_tf_models, d, sm))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
 		
 		cerr << "Reading testing data from " << vm["test"].as<std::string>() << "..." << endl;

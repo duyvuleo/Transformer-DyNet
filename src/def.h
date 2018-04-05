@@ -231,7 +231,7 @@ struct TransformerConfig{
 		_use_hybrid_model = use_hybrid_model;
 		_is_training = is_training;
 		_use_dropout = _is_training;
-	}
+	}	
 
 	TransformerConfig(const TransformerConfig& tfc){
 		_src_vocab_size = tfc._src_vocab_size;

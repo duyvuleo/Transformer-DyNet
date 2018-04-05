@@ -502,6 +502,7 @@ struct Decoder{
 
 				target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));
 			}
+			
 			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
 
 			// scale

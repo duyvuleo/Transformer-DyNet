@@ -79,9 +79,11 @@ The data can be processed by using the script (/scripts/wrap-data.py),
 
     python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>
 
+(assume that 2 files <vocab-prefix>.<src-lang-id> and <vocab-prefix>.<trg-lang-id> must exist.)
+
 or
 
-    python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <src-freq-cutoff> <trg-freq-cutoff>
+    python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <src-word-freq-cutoff> <trg-word-freq-cutoff>
 
 Example:
 
@@ -101,11 +103,11 @@ First, print command line's help of transformer-train and transformer-decode,
 
 The model can be run as follows:
 
-    nice ./build_gpu/transformer-train --dynet-devices GPU:2 --max-seq-len 300 --minibatch-size 1024  --treport 200 --dreport 20000  --src-vocab <your-path>/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi -t <your-path>/data/iwslt-envi/train.en-vi.vcb.capped -d <your-path>/data/iwslt-envi/tst2012.en-vi.vcb.capped -p <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 2 --num-units 128 --num-heads 2 &><your-path>/models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu &
+    nice ./build_gpu/transformer-train --dynet-devices GPU:0 --max-seq-len 150 --minibatch-size 1024 --treport 1000 --dreport 20000 --src-vocab <your-path>/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi -t <your-path>/data/iwslt-envi/train.en-vi.vcb.capped -d <your-path>/data/iwslt-envi/tst2012.en-vi.vcb.capped --model-path <your-path>/models/iwslt-envi -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 2 --num-units 128 --num-heads 2 &><your-path>/models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu &
 
 or the vocabularies will be built on the fly:
 
-    nice ./build_gpu/transformer-train --dynet-devices GPU:2 --max-seq-len 300 --minibatch-size 1024  --treport 200 --dreport 20000 -t <your-path>/data/iwslt-envi/train.en-vi.vcb.capped -d <your-path>/data/iwslt-envi/tst2012.en-vi.vcb.capped -p <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 2 --num-units 128 --num-heads 2 &><your-path>/models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu &
+    nice ./build_gpu/transformer-train --dynet-devices GPU:0 --max-seq-len 300 --minibatch-size 1024  --treport 200 --dreport 20000 -t <your-path>/data/iwslt-envi/train.en-vi.vcb.capped -d <your-path>/data/iwslt-envi/tst2012.en-vi.vcb.capped --model-path <your-path>/models/iwslt-envi -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 2 --num-units 128 --num-heads 2 &><your-path>/models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu &
 
 which will train a small model on a tiny training set, i.e.,
 
@@ -125,7 +127,10 @@ which will train a small model on a tiny training set, i.e.,
 	[dynet] memory allocation done.
 
 	PID=27539
-	Command: ./build_gpu/transformer-train --max-seq-len 300 --minibatch-size 1024 --treport 200 --dreport 20000 --src-vocab experiments/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi -t experiments/data/iwslt-envi/train.en-vi.vcb.capped -d experiments/data/iwslt-envi/tst2012.en-vi.vcb.capped -p experiments/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 2 --num-units 128 --num-heads 2 
+	Command: ./build_gpu/transformer-train --max-seq-len 300 --minibatch-size 1024 --treport 200 --dreport 20000 --src-vocab experiments/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi -t experiments/data/iwslt-envi/train.en-vi.vcb.capped -d experiments/data/iwslt-envi/tst2012.en-vi.vcb.capped --model-path <your-path>/models/iwslt-envi -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 2 --num-units 128 --num-heads 2 
+
+	All model files will be saved to: experiments/models/envi.
+	Preparing to train the model from scratch...
 
 	Loading vocabularies from files...
 	Source vocabulary file: experiments/data/iwslt-envi/vocab.en
@@ -159,17 +164,26 @@ which will train a small model on a tiny training set, i.e.,
 	[lr=0.1 clips=7 updates=7] sents=2803 src_unks=1308 trg_unks=594 E=6.71087 ppl=821.286 (11220.3 words/sec)
 	...
 
-Alternatively, you can train a large model (similar to the model configuration in the original paper) on the training set, i.e.,
+Note that transformer-train will automatically detect existing trained models specified in the <model-path> folder path and resume the training cycle if required.
 
-    nice ./build_gpu/transformer-train --dynet-devices GPU:2 --max-seq-len 300 --minibatch-size 1024  --treport 200 --dreport 20000 --src-vocab <your-path>/data/iwslt-envi/vocab.en --tgt-vocab <your-path>/data/iwslt-envi/vocab.vi -t <your-path>/data/iwslt-envi/train.en-vi.vcb.capped -d <your-path>/data/iwslt-envi/tst2012.en-vi.vcb.capped u -p <your-path>/models/iwslt-envi/params.en-vi.transformer.h8_l6_u512_do010101010001_att1_ls00_pe1_ml300_ffrelu -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 6 --num-units 512 --num-heads 8 &><your-path>/models/iwslt-envi/log.en-vi.transformer.h8_l6_u512_do010101010001_att1_ls00_pe1_ml300_ffrelu & 
+Alternatively, we can train a larger model (similar to the model configuration in the original paper) on the training set, i.e.,
+
+    nice ./build_gpu/transformer-train --dynet-devices GPU:0 --max-seq-len 150 --minibatch-size 1024  --treport 200 --dreport 20000 --src-vocab <your-path>/data/iwslt-envi/vocab.en --tgt-vocab <your-path>/data/iwslt-envi/vocab.vi -t <your-path>/data/iwslt-envi/train.en-vi.vcb.capped -d <your-path>/data/iwslt-envi/tst2012.en-vi.vcb.capped u --model-path <your-path>/models/iwslt-envi -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 6 --num-units 512 --num-heads 8 &><your-path>/models/iwslt-envi/log.en-vi.transformer.h8_l6_u512_do010101010001_att1_ls00_pe1_ml150_ffrelu & 
+
+If the training is successfully executed, it will create the following recipe files in the <model-path> folder path:
+
+	model.params
+	model.config
+	src.vocab
+	tgt.vocab
 
 For decoding/inference, we can use the integrated ensemble decoder, i.e.,
 
-    ./build_gpu/transformer-decode --dynet-devices GPU:2 --max-seq-len 300 --src-vocab experiments/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi --beam 5 --model-cfg experiments/models/iwslt-envi/model-small-dropout.cfg -T experiments/data/iwslt-envi/tst2013.en.vcb.capped > experiments/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
+    ./build_gpu/transformer-decode --dynet-devices GPU:0 --model-path <your-path>/models/iwslt-envi --beam 5 -T experiments/data/iwslt-envi/tst2013.en.vcb.capped > experiments/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu
 
 Decoding with n-best list can be performed, e.g.,
 
-    ./build_gpu/transformer-decode --dynet-devices GPU:2 --max-seq-len 300 --src-vocab experiments/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi --beam 5 --topk 100 --nbest-style moses --model-cfg experiments/models/iwslt-envi/model-small-dropout.cfg -T experiments/data/iwslt-envi/tst2013.en.vcb.capped > experiments/models/iwslt-envi/100besttranslations-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
+    ./build_gpu/transformer-decode --dynet-devices GPU:0 --model-path <your-path>/models/iwslt-envi --beam 5 --topk 100 --nbest-style moses -T experiments/data/iwslt-envi/tst2013.en.vcb.capped > experiments/models/iwslt-envi/100besttranslations-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu
 
 resulting in the following format:
 
@@ -177,26 +191,28 @@ resulting in the following format:
     <line_number2> ||| source ||| target2 ||| TransformerModelScore=score2 || total_score2
     ...
 	
-The decoding configuration file (e.g., --model-cfg experiments/models/iwslt-envi/model-small-dropout.cfg) has the following format:
+The decoding configuration file (e.g., --model-cfg experiments/models/iwslt-envi/model.config) has the following format:
 
     <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <position-encoding-flag> <max-seq-len> <attention-type> <ff-activation-type> <use-shared-embeddings> <use-hybrid-model> <your-trained-model-path>
 
-Note that, during training, the configuration file will be automatically created if "--config-file" is indicated, e.g.,
-
-    nice ./build_gpu/transformer-train --dynet-devices GPU:2 --max-seq-len 300 --minibatch-size 1024  --treport 200 --dreport 20000  --src-vocab <your-path>/data/iwslt-envi/vocab.en --tgt-vocab experiments/data/iwslt-envi/vocab.vi -t <your-path>/data/iwslt-envi/train.en-vi.vcb.capped -d <your-path>/data/iwslt-envi/tst2012.en-vi.vcb.capped -p <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu --config-file experiments/models/iwslt-envi/model-small-dropout.cfg -e 50 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --encoder-emb-dropout-p 0.1 --encoder-sublayer-dropout-p 0.1 --decoder-emb-dropout-p 0.1 --decoder-sublayer-dropout-p 0.1 --attention-dropout-p 0.0 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 2 --num-units 128 --num-heads 2 &><your-path>/models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu &
+Note that, during training, the configuration file will be automatically created in the <model-path> folder path.
 
 The following is an example of configuration file, 
 
-    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu
     
 It's worth noting that we can have multiple models for ensemble decoding, i.e., 
 
-    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run1
-    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu_run2
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu_run1
+    128 2 2 4 0.1 0.1 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu_run2
+
+Suppose all these models use the same vocabulary sizes.
 
 Finally, we can evaluate the translation result with BLEU:
 
-    <your-moses-path>/mosesdecoder-RELEASE-3.0/scripts/generic/multi-bleu.perl <your-path>/data/iwslt15-envi/tst2013.vi < <your-path>/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu > <your-path>/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml300_ffrelu.score-BLEU 
+    <your-moses-path>/mosesdecoder-RELEASE-3.0/scripts/generic/multi-bleu.perl <your-path>/data/iwslt15-envi/tst2013.vi < <your-path>/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu > <your-path>/models/iwslt-envi/translation-beam5.test2013.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu.score-BLEU 
+
+Note that it is recommended to use sacreBLEU or mteval instead for fairest evaluation(s).
 
 ## Benchmarks on Sequence-to-Sequence Generation Tasks
 
