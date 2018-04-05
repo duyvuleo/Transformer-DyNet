@@ -14,9 +14,11 @@ inline void load_vocabs(const std::string& src_vocab_file, const std::string& tr
 	, dynet::Dict& sd, dynet::Dict& td, bool freeze=true);
 inline void load_vocab(const std::string& vocab_file
 	, dynet::Dict& d, bool freeze=true);
+inline void load_joint_vocab(const std::string& vocab_file
+	, dynet::Dict& sd, dynet::Dict& td, bool freeze=true);
 inline void save_vocabs(const std::string& src_vocab_file, const std::string& trg_vocab_file
 	, dynet::Dict& sd, dynet::Dict& td);
-inline void save_vocabs(const std::string& vocab_file
+inline void save_vocab(const std::string& vocab_file
 	, dynet::Dict& d);
 
 inline void load_vocabs(const std::string& src_vocab_file, const std::string& trg_vocab_file
@@ -39,6 +41,23 @@ inline void load_vocabs(const std::string& src_vocab_file, const std::string& tr
 		sd.freeze();
 		td.freeze();
 	}
+}
+
+inline void load_joint_vocab(const std::string& vocab_file
+	, dynet::Dict& sd, dynet::Dict& td, bool freeze)
+{
+	if ("" == vocab_file) return;
+
+	cerr << "Loading joint source and target vocabulary from file: " << vocab_file << endl;
+	ifstream if_vocab(vocab_file);
+	std::string word;
+	while (getline(if_vocab, word)) sd.convert(word);
+	
+	cerr << "Joint vocabluary size: " << sd.size() << endl;
+
+	if (freeze) sd.freeze();
+
+	td = sd;
 }
 
 inline void load_vocab(const std::string& vocab_file
@@ -73,7 +92,7 @@ inline void save_vocabs(const std::string& src_vocab_file, const std::string& tr
 		of_tvocab << tword << endl;
 }
 
-inline void save_vocabs(const std::string& vocab_file
+inline void save_vocab(const std::string& vocab_file
 	, dynet::Dict& d)
 {
 	if ("" == vocab_file) return;

@@ -65,12 +65,8 @@ void get_dev_stats(const WordIdSentences &devel_cor
 	, transformer::ModelStats& dstats);
 // ---
 
-// ---
-std::string get_sentence(const WordIdSentence& source, Dict& dd);
-// ---
-
 //---
-std::string get_sentence(const WordIdSentence& source, Dict& td);
+std::string get_sentence(const WordIdSentence& source, Dict& d);
 //---
 
 // ---
@@ -84,7 +80,7 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 // ---
 void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, WordIdSentences &devel_cor, 
 	Trainer &sgd, 
-	const std::string& params_out_file, const std::string& config_out_file, 
+	const std::string& model_path, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints);// support batching
@@ -285,7 +281,16 @@ int main(int argc, char** argv) {
 			, vm["attention-type"].as<unsigned>()
 			, vm["ff-activation-type"].as<unsigned>()
 			, false
-			, vm.count("use-hybrid-model"));		
+			, vm.count("use-hybrid-model"));
+
+		// save vocabularies to files
+		std::string vocab_file = model_path + "/" + "vocab";
+		save_vocab(vocab_file, d);
+
+		// save configuration file (for decoding/inference)
+		std::string config_out_file = model_path + "/model.config";
+		std::string params_out_file = model_path + "/model.params";
+		save_config(config_out_file, params_out_file, tfc);		
 	}	
 
 	bool is_training = !vm.count("test");
@@ -307,11 +312,11 @@ int main(int argc, char** argv) {
 		// create SGD trainer
 		Trainer* p_sgd_trainer = create_sgd_trainer(vm, tf.get_model_parameters());
 
-		// train transformer model
+		// train transformer-based language model
 		run_train(tf
 			, train_cor, devel_cor
 			, *p_sgd_trainer
-			, vm["parameters"].as<std::string>() /*best saved model parameter file*/, vm["config-file"].as<std::string>() /*saved configuration file*/
+			, model_path
 			, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 			, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
 			, vm["average-checkpoints"].as<unsigned>());
@@ -538,14 +543,15 @@ void get_dev_stats(const WordIdSentences &devel_cor
 // ---
 void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, WordIdSentences &devel_cor, 
 	Trainer &sgd, 
-	const std::string& params_out_file, const std::string& config_out_file,
+	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints)
 {
-	// save configuration file (for decoding/inference)
+	std::string params_out_file = model_path + "/model.params";
+
+	// model configuration
 	const transformer::TransformerConfig& tfc = tf.get_config();
-	save_config(config_out_file, params_out_file, tfc);
 
 	// get current dict
 	dynet::Dict& dict = tf.get_dict();

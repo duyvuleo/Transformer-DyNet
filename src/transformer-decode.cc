@@ -123,10 +123,17 @@ int main(int argc, char** argv) {
 
 	std::string config_file = model_path + "/model.config";// configuration file path
 	if (stat(config_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){// check existence	
-		// load vocabulary from files
-		std::string src_vocab_file = model_path + "/" + "src.vocab";
-		std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
-		load_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
+		// load vocabulary from file(s)
+		std::string vocab_file = model_path + "/" + "src-tgt.joint-vocab";
+		if (stat(vocab_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){
+			load_vocab(model_path + "/" + "src-tgt.joint-vocab", sd);
+			td = sd;
+		}
+		else{
+			std::string src_vocab_file = model_path + "/" + "src.vocab";
+			std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
+			load_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
+		}
 
 		transformer::SentinelMarkers sm;
 		sm._kSRC_SOS = sd.convert("<s>");

@@ -103,6 +103,7 @@ int main(int argc, char** argv) {
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
 		("src-vocab", value<std::string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
 		("tgt-vocab", value<std::string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
+		("joint-vocab", value<std::string>()->default_value(""), "file containing target joint vocabulary file for both source and target; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		//-----------------------------------------
 		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
@@ -226,9 +227,16 @@ int main(int argc, char** argv) {
 		cerr << "Found existing (trained) model from " << model_path << "!" << endl;
 
 		// load vocabulary from files
-		std::string src_vocab_file = model_path + "/" + "src.vocab";
-		std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
-		load_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
+		std::string vocab_file = model_path + "/" + "src-tgt.joint-vocab";
+		if (stat(vocab_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){
+			load_vocab(model_path + "/" + "src-tgt.joint-vocab", sd);
+			td = sd;
+		}
+		else{
+			std::string src_vocab_file = model_path + "/" + "src.vocab";
+			std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
+			load_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
+		}
 
 		// initalise sentinel markers
 		sm._kSRC_SOS = sd.convert("<s>");
@@ -263,7 +271,11 @@ int main(int argc, char** argv) {
 		cerr << "Preparing to train the model from scratch..." << endl;
 
 		// load fixed vocabularies from files if provided, otherwise create them on the fly from the training data.
-		load_vocabs(vm["src-vocab"].as<std::string>(), vm["tgt-vocab"].as<std::string>(), sd, td);
+		bool use_joint_vocab = vm.count("joint-vocab");
+		if (use_joint_vocab)
+			load_joint_vocab(vm["joint-vocab"].as<std::string>(), sd, td);
+		else
+			load_vocabs(vm["src-vocab"].as<std::string>(), vm["tgt-vocab"].as<std::string>(), sd, td);
 
 		// initalise sentinel markers
 		sm._kSRC_SOS = sd.convert("<s>");
@@ -295,13 +307,19 @@ int main(int argc, char** argv) {
 			, sm
 			, vm["attention-type"].as<unsigned>()
 			, vm["ff-activation-type"].as<unsigned>()
-			, vm.count("shared-embeddings")
+			, use_joint_vocab | vm.count("shared-embeddings")
 			, vm.count("use-hybrid-model"));
 
 		// save vocabularies to files
-		std::string src_vocab_file = model_path + "/" + "src.vocab";
-		std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
-		save_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
+		if (use_joint_vocab){
+			std::string vocab_file = model_path + "/" + "src-tgt.joint-vocab";
+			save_vocab(vocab_file, sd);
+		}
+		else{
+			std::string src_vocab_file = model_path + "/" + "src.vocab";
+			std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
+			save_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
+		}
 
 		// save configuration file (for decoding/inference)
 		std::string config_out_file = model_path + "/model.config";
