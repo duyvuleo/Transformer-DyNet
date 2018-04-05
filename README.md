@@ -218,8 +218,8 @@ Finally, we can evaluate the translation result with BLEU:
 	(1 bi-LSTM encoder, 2 LSTM decoders, 512 hidden/embedding dim, 512 attention dim, SGD, beam5)
 		w/ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963
 	------------------------------------------------------------------------------------------------------------------
-	Sockeye (Transformer)					?			?			?
-	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 128 units, Adam, beam5)
+	tensor2tensor						-			28.30			-
+	(data w/ wordpieces segmentation?, transformer base (8 heads, 6 layers, 512 dim), trained 200K steps, averaging 10 last checkpoints)
 	------------------------------------------------------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1a (small model)
@@ -239,6 +239,10 @@ Finally, we can evaluate the translation result with BLEU:
 		and label smoothing (0.1)			-			27.41			9.88427
 	- Ensemble (1 small and 1 medium models)		26.10			28.79			-
 	- Ensemble (2 small and 2 medium models)		26.91			29.53			-
+	- Baseline 3a (w/ wordpieces segmentation)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
+	- Baseline 3b (w/ BPE)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 	******************************************************************************************************************
 
 	Note/Comment: SOTA results on the task with either single or ensemble models.
