@@ -33,6 +33,11 @@ inline void load_vocabs(const std::string& src_vocab_file, const std::string& tr
 	std::string sword, tword;
 	while (getline(if_src_vocab, sword)) sd.convert(sword);
 	while (getline(if_trg_vocab, tword)) td.convert(tword);
+
+	sd.convert("<s>");
+	sd.convert("</s>");
+	td.convert("<s>");
+	td.convert("</s>");
 	
 	cerr << "Source vocabluary size: " << sd.size() << endl;
 	cerr << "Target vocabluary size: " << td.size() << endl;
@@ -52,7 +57,10 @@ inline void load_joint_vocab(const std::string& vocab_file
 	ifstream if_vocab(vocab_file);
 	std::string word;
 	while (getline(if_vocab, word)) sd.convert(word);
-	
+
+	sd.convert("<s>");
+	sd.convert("</s>");
+		
 	cerr << "Joint vocabluary size: " << sd.size() << endl;
 
 	if (freeze) sd.freeze();
@@ -70,6 +78,9 @@ inline void load_vocab(const std::string& vocab_file
 	ifstream if_vocab(vocab_file);
 	std::string word;
 	while (getline(if_vocab, word)) d.convert(word);
+
+	d.convert("<s>");
+	d.convert("</s>");
 	
 	cerr << "Vocabluary size: " << d.size() << endl;
 
