@@ -6,11 +6,10 @@
 // The batching strategy here is similar to one used in lamtram toolkit (https://github.com/neubig/lamtram).
 
 inline size_t calc_size(const WordIdSentence & src, const WordIdSentence & trg);
-inline size_t create_minibatches(const WordIdCorpus& cor
+inline void create_minibatches(const WordIdCorpus& cor
 	, size_t max_size
 	, std::vector<WordIdSentences> & train_src_minibatch
-	, std::vector<WordIdSentences> & train_trg_minibatch
-	, std::vector<size_t> & train_ids_minibatch);
+	, std::vector<WordIdSentences> & train_trg_minibatch);
 
 struct DoubleLength
 {
@@ -28,14 +27,11 @@ inline size_t calc_size(const WordIdSentence & src, const WordIdSentence & trg) 
 	return src.size()+trg.size();
 }
 
-inline size_t create_minibatches(const WordIdCorpus& cor
+inline void create_minibatches(const WordIdCorpus& cor
 	, size_t max_size
 	, std::vector<WordIdSentences> & train_src_minibatch
-	, std::vector<WordIdSentences> & train_trg_minibatch
-	, std::vector<size_t> & train_ids_minibatch) 
+	, std::vector<WordIdSentences> & train_trg_minibatch) 
 {
-	cerr << endl << "Creating minibatches for training data (using minibatch_size=" << max_size << ")..." << endl;
-
 	train_src_minibatch.clear();
 	train_trg_minibatch.clear();
 
@@ -66,19 +62,12 @@ inline size_t create_minibatches(const WordIdCorpus& cor
 		train_src_minibatch.push_back(train_src_next);
 		train_trg_minibatch.push_back(train_trg_next);
 	}
-
-	// Create a sentence list for this minibatch
-	train_ids_minibatch.resize(train_src_minibatch.size());
-	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
-
-	return train_ids.size();
 }
 
 // for monolingual data
 inline void create_minibatches(const WordIdSentences& traincor,
 	size_t max_size, 
-	std::vector<WordIdSentences> & traincor_minibatch, 
-	std::vector<size_t>& train_ids_minibatch);
+	std::vector<WordIdSentences> & traincor_minibatch);
 
 struct SingleLength
 {
@@ -92,8 +81,7 @@ struct SingleLength
 
 inline void create_minibatches(const WordIdSentences& traincor,
 	size_t max_size,
-	std::vector<WordIdSentences> & traincor_minibatch,
-	std::vector<size_t>& train_ids_minibatch)
+	std::vector<WordIdSentences> & traincor_minibatch)
 {
 	std::vector<size_t> train_ids(traincor.size());
 	std::iota(train_ids.begin(), train_ids.end(), 0);
@@ -116,10 +104,6 @@ inline void create_minibatches(const WordIdSentences& traincor,
 	}
 	
 	if (traincor_next.size()) traincor_minibatch.push_back(traincor_next);
-
-	// Create a sentence list for this minibatch
-	train_ids_minibatch.resize(traincor_minibatch.size());
-	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
 }
 // --------------------------------------------------------------------------------------------------------------------------------
 

@@ -86,6 +86,10 @@ void eval_on_dev(transformer::TransformerModel &tf,
 	const WordIdCorpus &devel_cor, 
 	transformer::ModelStats& dstats, 
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo);
+void eval_on_dev_batch(transformer::TransformerModel &tf, 
+	const std::vector<WordIdSentences> &dev_src_minibatch, const std::vector<WordIdSentences> &dev_tgt_minibatch,  
+	transformer::ModelStats& dstats, 
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo);// batched version (much faster)
 // ---
 
 //************************************************************************************************************************************************************
@@ -563,14 +567,21 @@ void eval_on_dev(transformer::TransformerModel &tf,
 	}
 }
 void eval_on_dev_batch(transformer::TransformerModel &tf, 
-	const std::vector<WordIdSentences> &devel_cor_batched, 
+	const std::vector<WordIdSentences> &dev_src_minibatch, const std::vector<WordIdSentences> &dev_tgt_minibatch,  
 	transformer::ModelStats& dstats, 
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
 {
 	if (dev_eval_mea == 0) // perplexity
 	{
 		double losses = 0.f;
-		// FIXME
+		for (unsigned i = 0; i < dev_src_minibatch.size(); i++) {		
+			const auto& ssentb = dev_src_minibatch[i];
+			const auto& tsentb = dev_tgt_minibatch[i];
+
+			dynet::ComputationGraph cg;
+			auto i_xent = tf.build_graph(cg, ssentb, tsentb, nullptr, true);
+			losses += as_scalar(cg.forward(i_xent));
+		}
 
 		dstats._scores[1] = losses;
 	}
@@ -612,11 +623,17 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	std::string params_out_file = model_path + "/model.params";
 
 	// create minibatches
-	std::vector<std::vector<WordIdSentence> > train_src_minibatch;
-	std::vector<std::vector<WordIdSentence> > train_trg_minibatch;
+	std::vector<std::vector<WordIdSentence> > train_src_minibatch, dev_src_minibatch;
+	std::vector<std::vector<WordIdSentence> > train_trg_minibatch, dev_trg_minibatch;
 	std::vector<size_t> train_ids_minibatch;
 	size_t minibatch_size = MINIBATCH_SIZE;
-	create_minibatches(train_cor, minibatch_size, train_src_minibatch, train_trg_minibatch, train_ids_minibatch);
+	cerr << endl << "Creating minibatches for training data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	create_minibatches(train_cor, minibatch_size, train_src_minibatch, train_trg_minibatch);// on train
+	cerr << "Creating minibatches for development data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	create_minibatches(devel_cor, minibatch_size, dev_src_minibatch, dev_trg_minibatch);// on dev
+	// create a sentence list for this train minibatch
+	train_ids_minibatch.resize(train_src_minibatch.size());
+	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
   
 	// model stats on dev
 	transformer::ModelStats dstats(dev_eval_mea);
@@ -738,7 +755,8 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
 		}
 		
-		eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);
+		//eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);// non-batched version
+		eval_on_dev_batch(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// much faster
 		dstats.update_best_score(cpt);
 		if (cpt == 0){
 			// FIXME: consider average checkpointing?

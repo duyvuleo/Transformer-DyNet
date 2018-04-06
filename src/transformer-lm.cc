@@ -557,10 +557,16 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	dynet::Dict& dict = tf.get_dict();
 
 	// create minibatches
-	std::vector<WordIdSentences> train_cor_minibatch;
-	std::vector<size_t> train_ids_minibatch, dev_ids_minibatch;
+	std::vector<WordIdSentences> train_cor_minibatch, dev_cor_minibatch;
+	std::vector<size_t> train_ids_minibatch;
 	size_t minibatch_size = MINIBATCH_SIZE;
-	create_minibatches(train_cor, minibatch_size, train_cor_minibatch, train_ids_minibatch);
+	cerr << endl << "Creating minibatches for training data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	create_minibatches(train_cor, minibatch_size, train_cor_minibatch);// for train
+	cerr << "Creating minibatches for development data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	create_minibatches(devel_cor, minibatch_size, dev_cor_minibatch);// for dev
+	// create a sentence list for this minibatch
+	train_ids_minibatch.resize(train_cor_minibatch.size());
+	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
 
 	// stats on dev  
 	transformer::ModelStats dstats;
@@ -676,12 +682,19 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		}
 
 		// compute cross entropy loss (xent)
+		/* non-batched version
 		for (unsigned i = 0; i < devel_cor.size(); ++i) {
 			WordIdSentence dsent = devel_cor[i];  
 
 			dynet::ComputationGraph cg;
 			auto i_xent = tf.build_graph(cg, WordIdSentences(1, dsent), nullptr, true);
 			dstats._scores[1] += as_scalar(cg.forward(i_xent));
+		}*/
+		// batched version (faster)
+		for (const WordIdSentences& dsentb : dev_cor_minibatch){
+			dynet::ComputationGraph cg;
+			auto i_xent = tf.build_graph(cg, dsentb, nullptr, true);
+			dstats._scores[1] += as_scalar(cg.incremental_forward(i_xent));
 		}
 		
 		dstats.update_best_score(cpt);
