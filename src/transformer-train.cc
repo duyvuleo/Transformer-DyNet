@@ -42,6 +42,9 @@ unsigned DREPORT = 5000;
 
 bool SAMPLING_TRAINING = false;
 
+bool RESET_IF_STUCK = false;
+bool SWITCH_TO_ADAM = false;
+
 bool VERBOSE = false;
 
 // ---
@@ -67,7 +70,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 
 // ---
 void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
-	Trainer &sgd, 
+	dynet::Trainer* p_sgd, 
 	const std::string& model_path, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -150,6 +153,8 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("lr-epochs", value<unsigned>()->default_value(0), "no. of epochs for starting learning rate annealing (e.g., halving)") // learning rate scheduler 1
 		("lr-patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved, e.g., for starting learning rate annealing (e.g., halving)") // learning rate scheduler 2
+		("reset-if-stuck", "a strategy if the model gets stuck then reset everything and resume training; default not")
+		("switch-to-adam", "switch to Adam trainer if getting stuck; default not")
 		//-----------------------------------------
 		("sampling", "sample translation during training; default not")
 		//-----------------------------------------
@@ -204,6 +209,8 @@ int main(int argc, char** argv) {
 	DREPORT = vm["dreport"].as<unsigned>(); 
 	SAMPLING_TRAINING = vm.count("sampling");
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
+	RESET_IF_STUCK = vm.count("reset-if-stuck");
+	SWITCH_TO_ADAM = vm.count("switch-to-adam");
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
 	// get and check model path
@@ -350,7 +357,7 @@ int main(int argc, char** argv) {
 	// train transformer model
 	run_train(tf
 		, train_cor, devel_cor
-		, *p_sgd_trainer
+		, p_sgd_trainer
 		, model_path
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
@@ -559,7 +566,7 @@ void eval_on_dev(transformer::TransformerModel &tf,
 
 // ---
 void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
-	Trainer &sgd, 
+	dynet::Trainer* p_sgd, 
 	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -612,7 +619,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 				// learning rate scheduler 1: after lr_epochs, for every next epoch, the learning rate will be decreased by a factor of eta_decay.
 				if (lr_epochs > 0 && epoch >= lr_epochs)
-					sgd.learning_rate /= lr_eta_decay; 
+					p_sgd->learning_rate /= lr_eta_decay; 
 
 				if (epoch >= max_epochs) break;
 
@@ -659,7 +666,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			tstats._words_tgt_unk += ctstats._words_tgt_unk;  
 
 			cg.backward(i_objective);
-			sgd.update();
+			p_sgd->update();
 
 			sid += train_trg_minibatch[train_ids_minibatch[id]].size();
 			iter += train_trg_minibatch[train_ids_minibatch[id]].size();
@@ -671,7 +678,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 				float elapsed = timer_iteration.elapsed();
 
-				sgd.status();
+				p_sgd->status();
 				cerr << "sents=" << sid << " ";
 				cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';// << " E=" << (tstats._scores[1] / tstats._words_tgt) << " ppl=" << exp(tstats._scores[1] / tstats._words_tgt) << ' ';
 				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl; 	
@@ -707,7 +714,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		}
 
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
+		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
 
 		if (cpt > 0) cerr << "(not improved, best score on dev so far: " << dstats.get_score_string(false) << ") ";
 		timer_iteration.show();
@@ -715,19 +722,40 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		// learning rate scheduler 2: if the model has not been improved for lr_patience times, decrease the learning rate by lr_eta_decay factor.
 		if (lr_patience > 0 && cpt > 0 && cpt % lr_patience == 0){
 			cerr << "The model has not been improved for " << lr_patience << " times. Decreasing the learning rate..." << endl;
-			sgd.learning_rate /= lr_eta_decay;
+			p_sgd->learning_rate /= lr_eta_decay;
 		}
 
 		// another early stopping criterion
 		if (patience > 0 && cpt >= patience)
 		{
-			cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
-			cerr << "No. of epochs so far: " << epoch << "." << endl;
-			cerr << "Best score on dev: " << dstats.get_score_string(false) << endl;
-			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-			break;
+			if (RESET_IF_STUCK){
+				cerr << "The model seems to get stuck. Resetting now...!" << endl;
+				cerr << "Attempting to resume the training..." << endl;
+				// 1) shuffle the training data
+				cerr << "***SHUFFLE" << endl;
+				std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+				// 2) load the previous best model
+				cerr << "Loading previous best model..." << endl;
+				tf.initialise_params_from_file(params_out_file);
+				// 3) others
+				sid = 0; id = 0; last_print = 0; cpt = 0;
+				// 4) reset SGD trainer, switching to Adam instead!
+				if (SWITCH_TO_ADAM) p_sgd = new dynet::AdamTrainer(tf.get_model_parameters(), 0.001f/*maybe smaller?*/);
+
+				RESET_IF_STUCK = false;// only do this once!
+			}
+			else{
+				cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
+				cerr << "No. of epochs so far: " << epoch << "." << endl;
+				cerr << "Best score on dev: " << dstats.get_score_string(false) << endl;
+				cerr << "--------------------------------------------------------------------------------------------------------" << endl;
+
+				break;
+			}
 		}
+
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
+
 		timer_iteration.reset();
 	}
 

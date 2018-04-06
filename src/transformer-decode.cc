@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
 	std::string model_path = vm["model-path"].as<std::string>();
 	struct stat sb;
 	if (stat(model_path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode))
-		cerr << endl << "All model files will be saved to: " << model_path << "." << endl;
+		cerr << endl << "All model files will be loaded from: " << model_path << "." << endl;
 	else
 		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
