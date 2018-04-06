@@ -562,6 +562,38 @@ void eval_on_dev(transformer::TransformerModel &tf,
 		dstats._scores[1] = evaluator->integrate(eval_stats);
 	}
 }
+void eval_on_dev_batch(transformer::TransformerModel &tf, 
+	const std::vector<WordIdSentences> &devel_cor_batched, 
+	transformer::ModelStats& dstats, 
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
+{
+	if (dev_eval_mea == 0) // perplexity
+	{
+		double losses = 0.f;
+		// FIXME
+
+		dstats._scores[1] = losses;
+	}
+	else{
+		// create evaluators
+		std::string spec;
+		if (dev_eval_mea == 1) spec = "BLEU";
+		else if (dev_eval_mea == 2) spec = "NIST";
+		else if (dev_eval_mea == 3) spec = "WER";
+		else if (dev_eval_mea == 4) spec = "RIBES";
+		std::shared_ptr<MTEval::Evaluator> evaluator(MTEval::EvaluatorFactory::create(spec));
+		std::vector<MTEval::Sample> v_samples;
+		// FIXME
+		
+		// analyze the evaluation score
+		MTEval::Statistics eval_stats;
+    		for (unsigned i = 0; i < v_samples.size(); ++i) {			
+      			eval_stats += evaluator->map(v_samples[i]);
+    		}
+
+		dstats._scores[1] = evaluator->integrate(eval_stats);
+	}
+}
 // ---
 
 // ---
@@ -740,7 +772,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				// 3) others
 				sid = 0; id = 0; last_print = 0; cpt = 0;
 				// 4) reset SGD trainer, switching to Adam instead!
-				if (SWITCH_TO_ADAM) p_sgd = new dynet::AdamTrainer(tf.get_model_parameters(), 0.001f/*maybe smaller?*/);
+				if (SWITCH_TO_ADAM){ 
+					delete p_sgd; p_sgd = 0;
+					p_sgd = new dynet::AdamTrainer(tf.get_model_parameters(), 0.001f/*maybe smaller?*/);
+				}
 
 				RESET_IF_STUCK = false;// only do this once!
 			}
