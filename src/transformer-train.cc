@@ -44,6 +44,8 @@ bool SAMPLING_TRAINING = false;
 
 bool RESET_IF_STUCK = false;
 bool SWITCH_TO_ADAM = false;
+bool USE_SMALLER_MINIBATCH = false;
+unsigned NUM_RESETS = 1;
 
 bool VERBOSE = false;
 
@@ -70,7 +72,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 
 // ---
 void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
-	dynet::Trainer* p_sgd, 
+	dynet::Trainer*& p_sgd, 
 	const std::string& model_path, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -155,10 +157,14 @@ int main(int argc, char** argv) {
 		("lr-eta", value<float>()->default_value(0.1f), "SGD learning rate value (e.g., 0.1 for simple SGD trainer or smaller 0.001 for ADAM trainer)")
 		("lr-eta-decay", value<float>()->default_value(2.0f), "SGD learning rate decay value")
 		//-----------------------------------------
+		// learning rate scheduler
 		("lr-epochs", value<unsigned>()->default_value(0), "no. of epochs for starting learning rate annealing (e.g., halving)") // learning rate scheduler 1
 		("lr-patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved, e.g., for starting learning rate annealing (e.g., halving)") // learning rate scheduler 2
+		//-----------------------------------------
 		("reset-if-stuck", "a strategy if the model gets stuck then reset everything and resume training; default not")
 		("switch-to-adam", "switch to Adam trainer if getting stuck; default not")
+		("use-smaller-minibatch", "use smaller mini-batch size if getting stuck; default not")
+		("num-resets", value<unsigned>()->default_value(1), "no. of times the training process will be reset; default 1") 
 		//-----------------------------------------
 		("sampling", "sample translation during training; default not")
 		//-----------------------------------------
@@ -215,6 +221,8 @@ int main(int argc, char** argv) {
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
 	RESET_IF_STUCK = vm.count("reset-if-stuck");
 	SWITCH_TO_ADAM = vm.count("switch-to-adam");
+	USE_SMALLER_MINIBATCH = vm.count("use-smaller-minibatch");
+	NUM_RESETS = vm["num-resets"].as<unsigned>();
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
 	// get and check model path
@@ -609,7 +617,7 @@ void eval_on_dev_batch(transformer::TransformerModel &tf,
 
 // ---
 void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
-	dynet::Trainer* p_sgd, 
+	dynet::Trainer*& p_sgd, 
 	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -789,13 +797,29 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				tf.initialise_params_from_file(params_out_file);
 				// 3) others
 				sid = 0; id = 0; last_print = 0; cpt = 0;
-				// 4) reset SGD trainer, switching to Adam instead!
+				// a) reset SGD trainer, switching to Adam instead!
 				if (SWITCH_TO_ADAM){ 
 					delete p_sgd; p_sgd = 0;
 					p_sgd = new dynet::AdamTrainer(tf.get_model_parameters(), 0.001f/*maybe smaller?*/);
+					SWITCH_TO_ADAM = false;// do it once!
+				}
+				// b) use smaller batch size
+				if (USE_SMALLER_MINIBATCH){
+					cerr << "Creating minibatches for training data (using minibatch_size=" << minibatch_size/2 << ")..." << endl;
+					train_src_minibatch.clear();
+					train_trg_minibatch.clear();
+					train_ids_minibatch.clear();
+					create_minibatches(train_cor, minibatch_size/2, train_src_minibatch, train_trg_minibatch);// on train
+					// create a sentence list for this train minibatch
+					train_ids_minibatch.resize(train_src_minibatch.size());
+					std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
+
+					minibatch_size /= 2;
 				}
 
-				RESET_IF_STUCK = false;// only do this once!
+				NUM_RESETS--;
+				if (NUM_RESETS == 0)
+					RESET_IF_STUCK = false;// it's right time to stop anyway!
 			}
 			else{
 				cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
@@ -812,7 +836,8 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		timer_iteration.reset();
 	}
 
-	cerr << endl << "Transformer training completed!" << endl;
+	cerr << endl << "***************************" << endl;
+	cerr << "Transformer training completed!" << endl;
 }
 // ---
 
