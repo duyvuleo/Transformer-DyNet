@@ -191,7 +191,7 @@ resulting in the following format:
     <line_number2> ||| source ||| target2 ||| TransformerModelScore=score2 || total_score2
     ...
 	
-The decoding configuration file (e.g., --model-cfg experiments/models/iwslt-envi/model.config) has the following format:
+The decoding configuration file inside the model folder (e.g., experiments/models/iwslt-envi/model.config) has the following format:
 
     <num-units> <num-heads> <nlayers> <ff-num-units-factor> <encoder-emb-dropout> <encoder-sub-layer-dropout> <decoder-emb-dropout> <decoder-sublayer-dropout> <attention-dropout> <ff-dropout> <use-label-smoothing> <label-smoothing-weight> <position-encoding-type> <position-encoding-flag> <max-seq-len> <attention-type> <ff-activation-type> <use-shared-embeddings> <use-hybrid-model> <your-trained-model-path>
 
@@ -232,10 +232,10 @@ Note that it is recommended to use sacreBLEU or mteval instead for fairest evalu
 	Mantidae (https://github.com/duyvuleo/Mantidae)
 	- Baseline (attentional model)				-			23.94			13.6704
 	(1 bi-LSTM encoder, 2 LSTM decoders, 512 hidden/embedding dim, 512 attention dim, SGD, beam5)
-		w/ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963
+		w/ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963			
 	------------------------------------------------------------------------------------------------------------------
-	tensor2tensor						-			28.30			-
-	(data w/ wordpieces segmentation?, transformer base (8 heads, 6 layers, 512 dim), trained 200K steps, averaging 10 last checkpoints)
+	tensor2tensor						-			28.47			-			(as of April 2018)
+	(data w/ wordpieces segmentation?, transformer base (8 heads, 6 layers, 512 dim), trained 500K steps, averaging 10 last checkpoints)
 	------------------------------------------------------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
 	- Baseline 1a (small model)
@@ -243,27 +243,24 @@ Note that it is recommended to use sacreBLEU or mteval instead for fairest evalu
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward))
 		and label smoothing (0.1)			-			27.50			10.5622	
-	- Baseline 1b (small model)
-	(2 heads, 2 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
-		w/ dropout (0.1)					
-		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			-			27.52			9.98913					
 	- Baseline 2 (medium model)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
-		(source and target embeddings, sub-layers (attention + feedforward))
-		and label smoothing (0.1)			-			27.41			9.88427
-	- Ensemble (1 small and 1 medium models)		26.10			28.79			-
-	- Ensemble (2 small and 2 medium models)		26.91			29.53			-
+		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
+		and label smoothing (0.1)			-			28.85			8.97637 		(new, latest improved version)
+	- Ensemble models
+		1 small and 1 medium models (old)		26.10			28.79			-
+		2 small and 2 medium models (old)		26.91			29.53			-
+		2 medium models (new)				27.11			29.72			-			(new, latest improved version)
 	- Baseline 3a (w/ wordpieces segmentation)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 	- Baseline 3b (w/ BPE)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 	******************************************************************************************************************
 
-	Note/Comment: Currently, I did not use any (word) segmentation for Vietnamese (and English), just simply used all the words in the vocabularies provided from https://github.com/tensorflow/nmt. Note that tensor2tensor used wordpieces segmentation. However, I still got nearly SOTA results on the task with ensemble models.
+	Note/Comment: Currently, I did not use any (word) segmentation for Vietnamese (and English), just simply used all the words in the vocabularies provided from https://github.com/tensorflow/nmt. Note that tensor2tensor used wordpieces segmentation?. Also, my network is much smaller (4 heads, 4 layers). However, I still got SOTA results on the task with both single (28.85) and ensemble (29.71) models.
 
-#### The Kyoto Free Translation Task (English-Japanese) (updating) 
+#### The Kyoto Free Translation Task (English-Japanese)
 
 	* Data for English --> Japanese (train (clean version): 329882; dev&dev-tune: 2401; test: 1160; vocab (src & trg freq >=3, lowercased) 51159 (en) & 51626 (ja) types), can be obtained from http://www.phontron.com/kftt/#dataonly. 
 
@@ -292,9 +289,9 @@ Note that it is recommended to use sacreBLEU or mteval instead for fairest evalu
 		ensemble (2 different runs)			-		26.55		-		
 	********************************************************************************************************************************************************
 
-	Note/Comment: Single transformer model (with medium network) can outperform the best SMT (with preordering in Japanese) as well as the NMT with translation lexicon integration. Also, just simply applying joint byte-pair encoding (BPE) on both English and Japanese, we can obtain much better SOTA result on the task (25.22 vs 23.53 vs. 23.20). 
+	Note/Comment: For experiments done earlier, I did not use the attention dropout mechanism (by using it, the result may be much better). As seen, single transformer model (with medium network) does outperform the best SMT (with preordering in Japanese) as well as the NMT with translation lexicon integration. Also, just simply applying joint byte-pair encoding (BPE) on both English and Japanese, we can obtain much better SOTA result on the task (25.22 vs 23.53 vs. 23.20). 
 
-#### WMT17 English<->German (updating)
+#### WMT17 English<->German
 
 	* Data (http://www.statmt.org/wmt17/translation-task.html) (train: 5777224 after filtering 40K_jBPE-ed sentences with length >=80; dev: newstest2013), preprocessed data can be obtained from http://data.statmt.org/wmt17/translation-task/preprocessed/.
 
@@ -401,7 +398,7 @@ Note that it is recommended to use sacreBLEU or mteval instead for fairest evalu
 
 #### NIST English-Chinese (in plan)
 
-## Abstractive Summarisation (updating)
+## Abstractive Summarisation
 
 	* Data for English (train (Gigaword): 3803957; dev (Gigaword, random): 6000; 2 tests: 2000 Gigaword samples and DUC 2004 test set; vocab (src & trg freq >=5): 119506 (article) & 68886 (title)  types), can be obtained from https://github.com/harvardnlp/sent-summary. Evaluation with ROUGE 1.5.5 (75-byte length limit).
 
@@ -520,7 +517,7 @@ Currently, this implementation supports single GPU only since DyNet has not full
 
 1. implementation for Bahdanau attention type? (seem to be infeasible with current implementation)
 
-2. speed up the decoding process of Transformer by caching technique (like in tensor2tensor) or other?
+2. speed up the decoding process of Transformer by caching technique (like in tensor2tensor) or other? Also batch decoding?
 
 3. weighted transformer (https://arxiv.org/pdf/1711.02132.pdf, ICLR'18 rejected)
 
