@@ -788,14 +788,11 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		{
 			if (RESET_IF_STUCK){
 				cerr << "The model seems to get stuck. Resetting now...!" << endl;
-				cerr << "Attempting to resume the training..." << endl;
-				// 1) shuffle the training data
-				cerr << "***SHUFFLE" << endl;
-				std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
-				// 2) load the previous best model
+				cerr << "Attempting to resume the training..." << endl;			
+				// 1) load the previous best model
 				cerr << "Loading previous best model..." << endl;
 				tf.initialise_params_from_file(params_out_file);
-				// 3) others
+				// 2) some useful tricks:
 				sid = 0; id = 0; last_print = 0; cpt = 0;
 				// a) reset SGD trainer, switching to Adam instead!
 				if (SWITCH_TO_ADAM){ 
@@ -815,7 +812,11 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 					std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
 
 					minibatch_size /= 2;
+					dev_every_i_reports /= 2;
 				}
+				// 3) shuffle the training data
+				cerr << "***SHUFFLE" << endl;
+				std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
 
 				NUM_RESETS--;
 				if (NUM_RESETS == 0)
