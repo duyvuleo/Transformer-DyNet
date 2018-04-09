@@ -27,4 +27,12 @@ mkdir experiments/models/envi/run2
 /nfs/team/nlp/users/vhoang/tools/mosesdecoder/scripts/generic/multi-bleu.perl sample-data/tst2013.vi < experiments/models/envi/run2/translation-beam5.en-vi.transformer.base_h4_l4_u512_do010101010101_att1_ls01_pe2_ml150_ffrelu
 
 # ensemble 2 runs
-i
+mkdir experiments/models/envi/ensemble_2runs
+cp experiments/models/envi/run1/*.vocab experiments/models/envi/ensemble_2runs
+for f in experiments/models/envi/run1/model.config experiments/models/envi/run2/model.config; do (cat "${f}"; echo) >> experiments/models/envi/ensemble_2runs/model.config; done
+# tst2012
+./build_gpu/transformer-decode --dynet-devices GPU:1 --model-path experiments/models/envi/ensemble_2runs --beam 5 -T sample-data/tst2012.en.capped | sed 's/<s> //g' | sed 's/ <\/s>//g' > experiments/models/envi/ensemble_2runs/translation-beam5.tst2012.en-vi.transformer.base_h4_l4_u512_do010101010101_att1_ls01_pe2_ml150_ffrelu
+/nfs/team/nlp/users/vhoang/tools/mosesdecoder/scripts/generic/multi-bleu.perl sample-data/tst2012.vi < experiments/models/envi/ensemble_2runs/translation-beam5.tst2012.en-vi.transformer.base_h4_l4_u512_do010101010101_att1_ls01_pe2_ml150_ffrelu > experiments/models/envi/ensemble_2runs/translation-beam5.tst2012.en-vi.transformer.base_h4_l4_u512_do010101010101_att1_ls01_pe2_ml150_ffrelu.scoreBLEU
+# tst2013
+./build_gpu/transformer-decode --dynet-devices GPU:1 --model-path experiments/models/envi/ensemble_2runs --beam 5 -T sample-data/tst2013.en.capped | sed 's/<s> //g' | sed 's/ <\/s>//g' > experiments/models/envi/ensemble_2runs/translation-beam5.tst2013.en-vi.transformer.base_h4_l4_u512_do010101010101_att1_ls01_pe2_ml150_ffrelu
+/nfs/team/nlp/users/vhoang/tools/mosesdecoder/scripts/generic/multi-bleu.perl sample-data/tst2013.vi < experiments/models/envi/ensemble_2runs/translation-beam5.tst2013.en-vi.transformer.base_h4_l4_u512_do010101010101_att1_ls01_pe2_ml150_ffrelu > experiments/models/envi/ensemble_2runs/translation-beam5.tst2013.en-vi.transformer.base_h4_l4_u512_do010101010101_att1_ls01_pe2_ml150_ffrelu.scoreBLEU
