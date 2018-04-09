@@ -95,7 +95,7 @@ or
 
 This script will create necessary data files (*.capped) that can be processed by transformer-train and transformer-decode.
 
-First, print command line's help of transformer-train and transformer-decode,
+First, print command line's help of transformer-train and transformer-decode (or transformer-lm),
 
     ./build_gpu/transformer-train --help
     ./build_gpu/transformer-decode --help
@@ -216,6 +216,8 @@ Note that it is recommended to use sacreBLEU or mteval instead for fairest evalu
 
 ## Benchmarks on Sequence-to-Sequence Generation Tasks
 
+### Language Modeling (to be updated)
+
 ### Machine Translation
 
 #### IWSLT English-Vietnamese 
@@ -234,7 +236,8 @@ Note that it is recommended to use sacreBLEU or mteval instead for fairest evalu
 	(1 bi-LSTM encoder, 2 LSTM decoders, 512 hidden/embedding dim, 512 attention dim, SGD, beam5)
 		w/ LSTM dropout (0.2) for encoder/decoder	-			24.96			13.0963			
 	------------------------------------------------------------------------------------------------------------------
-	tensor2tensor						-			28.47			-			(as of April 2018)
+	tensor2tensor						-			27.69 (multi-bleu)	-			(as of April 2018)
+								-			28.47 (t2t-bleu)	-
 	(data w/ wordpieces segmentation?, transformer base (8 heads, 6 layers, 512 dim), trained 500K steps, averaging 10 last checkpoints)
 	------------------------------------------------------------------------------------------------------------------
 	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
@@ -247,11 +250,13 @@ Note that it is recommended to use sacreBLEU or mteval instead for fairest evalu
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 		w/ dropout (0.1)					
 		(source and target embeddings, sub-layers (attention + feedforward), attentive dropout)
-		and label smoothing (0.1)			-			28.85			8.97637 		(new, latest improved version)
+		and label smoothing (0.1)			-			28.85 (multi-bleu)	8.97637 		(new, latest improved version)
+								-			29.23 (t2t-bleu)	
 	- Ensemble models
 		1 small and 1 medium models (old)		26.10			28.79			-
 		2 small and 2 medium models (old)		26.91			29.53			-
-		2 medium models (new)				27.11			29.72			-			(new, latest improved version)
+		2 medium models (new)				27.11			29.72 (multi-bleu)	-			(new, latest improved version)
+											30.37 (t2t-bleu)
 	- Baseline 3a (w/ wordpieces segmentation)
 	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 	- Baseline 3b (w/ BPE)
