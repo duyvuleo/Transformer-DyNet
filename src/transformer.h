@@ -143,13 +143,14 @@ struct Encoder{
 	{
 		// compute embeddings
 		// get max length within a batch
+		unsigned bsize = sents.size();
 		size_t max_len = sents[0].size();
-		for(size_t i = 1; i < sents.size(); i++) max_len = std::max(max_len, sents[i].size());
+		for(size_t i = 1; i < bsize; i++) max_len = std::max(max_len, sents[i].size());
 		_batch_slen = max_len;
 
 		std::vector<dynet::Expression> source_embeddings;   
-		std::vector<unsigned> words(sents.size());
-		std::vector<std::vector<float>> v_seq_masks(sents.size());
+		std::vector<unsigned> words(bsize);
+		std::vector<std::vector<float>> v_seq_masks(bsize);
 		dynet::Expression i_src;
 		if (_p_tfc->_use_hybrid_model){
 			// first 2 layers (forward and backward)
@@ -164,7 +165,7 @@ struct Encoder{
 			_v_p_src_rnns[0]->new_graph(cg);
 			_v_p_src_rnns[0]->start_new_sequence();
 			for (unsigned l = 0; l < max_len; l++){
-				for (unsigned bs = 0; bs < sents.size(); ++bs){
+				for (unsigned bs = 0; bs < bsize; ++bs){
 					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;		
 					if (l < sents[bs].size()){ 
 						words[bs] = (unsigned)sents[bs][l];
@@ -192,7 +193,7 @@ struct Encoder{
 			for (int l = max_len - 1; l >= 0; --l) { // int instead of unsigned for negative value of l
 				// offset by one position to the right, to catch </s> and generally
 				// not duplicate the w_t already captured in src_fwd[t]
-				for (unsigned bs = 0; bs < sents.size(); ++bs) 
+				for (unsigned bs = 0; bs < bsize; ++bs) 
 					words[bs] = ((unsigned)l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;
 				src_bwd[l] = _v_p_src_rnns[1]->add_input(dynet::lookup(cg, _p_embed_s, words));
 			}
@@ -209,7 +210,7 @@ struct Encoder{
 		else{
 			// source embeddings
 			for (unsigned l = 0; l < max_len; l++){
-				for (unsigned bs = 0; bs < sents.size(); ++bs){
+				for (unsigned bs = 0; bs < bsize; ++bs){
 					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kSRC_EOS;		
 					if (l < sents[bs].size()){ 
 						words[bs] = (unsigned)sents[bs][l];
@@ -237,9 +238,9 @@ struct Encoder{
 			if (_p_tfc->_position_encoding_flag == 0 || _p_tfc->_position_encoding_flag == 1){
 				if (_p_tfc->_position_encoding == 1){// learned positional embedding 
 					std::vector<dynet::Expression> pos_embeddings;  
-					std::vector<unsigned> positions(sents.size());
+					std::vector<unsigned> positions(bsize);
 					for (unsigned l = 0; l < max_len; l++){
-						for (unsigned bs = 0; bs < sents.size(); ++bs){
+						for (unsigned bs = 0; bs < bsize; ++bs){
 							if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to (_p_tfc._max_length - 1).
 							else
 								positions[bs] = l;
@@ -454,20 +455,21 @@ struct Decoder{
 	{
 		// compute embeddings			
 		// get max length in a batch
+		unsigned bsize = sents.size();
 		size_t max_len = sents[0].size();
-		for(size_t i = 1; i < sents.size(); i++) max_len = std::max(max_len, sents[i].size());
+		for(size_t i = 1; i < bsize; i++) max_len = std::max(max_len, sents[i].size());
 		_batch_tlen = max_len;
 
 		std::vector<dynet::Expression> target_embeddings;   
-		std::vector<unsigned> words(sents.size());
-		std::vector<std::vector<float>> v_seq_masks(sents.size());
+		std::vector<unsigned> words(bsize);
+		std::vector<std::vector<float>> v_seq_masks(bsize);
 		dynet::Expression i_tgt;
 		if (_p_tfc->_use_hybrid_model){
 			// target embeddings via RNN
 			_p_tgt_rnn->new_graph(cg);
 			_p_tgt_rnn->start_new_sequence();
 			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
-				for (unsigned bs = 0; bs < sents.size(); ++bs)
+				for (unsigned bs = 0; bs < bsize; ++bs)
 				{
 					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
 					if (l < sents[bs].size()){
@@ -485,9 +487,9 @@ struct Decoder{
 			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
 		}
 		else{
-			// target embeddings
+			// target embeddings			
 			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
-				for (unsigned bs = 0; bs < sents.size(); ++bs)
+				for (unsigned bs = 0; bs < bsize; ++bs)
 				{
 					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
 					if (l < sents[bs].size()){
@@ -495,14 +497,14 @@ struct Decoder{
 						v_seq_masks[bs].push_back(0.f);// padding position
 					}
 					else{
-						words[bs] = (unsigned)_p_tfc->_sm._kTGT_EOS;
+						words[bs] = (unsigned)_p_tfc->_sm._kTGT_EOS;						
 						v_seq_masks[bs].push_back(1.f);// padding position
 					}
 				}
 
-				target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));
+				target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));								
 			}
-			
+
 			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
 
 			// scale
@@ -512,9 +514,9 @@ struct Decoder{
 			if (_p_tfc->_position_encoding_flag == 0 || _p_tfc->_position_encoding_flag == 2){
 				if (_p_tfc->_position_encoding == 1){// learned positional embedding 
 					std::vector<dynet::Expression> pos_embeddings;  
-					std::vector<unsigned> positions(sents.size());
+					std::vector<unsigned> positions(bsize);
 					for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
-						for (unsigned bs = 0; bs < sents.size(); ++bs){
+						for (unsigned bs = 0; bs < bsize; ++bs){
 							if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
 							else
 								positions[bs] = l;
@@ -522,7 +524,7 @@ struct Decoder{
 
 						pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
 					}
-					dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
+					dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// ((num_units, Ly), batch_size)
 
 					i_tgt = i_tgt + i_pos;
 				}
@@ -565,13 +567,40 @@ struct Decoder{
 
 		return i_tgt;
 	}
+	
+	// ------------------------------------------------------------------------------------------------------------------------------------------------------
+	// WIP
+	dynet::Expression compute_embeddings_and_masks_for_inference(dynet::ComputationGraph &cg
+		, const WordIdSentences& partial_sents/*batch of partial target sentences*/
+		, const InferState& prev_state)// this function is to speed up the inference process!
+	{
+		dynet::Expression i_tgt;
+
+		// compute embeddings
+		// FIXME: how to efficiently compute embeddings of previous target words? Currently, during beam search, this computation is wasteful because embeddings of every partial sentences must be re-computed from scratch. 
+		
+		// masks
+		// FIXME: how to update masks efficiently w/ recomputing?
+
+		// self-attention
+
+		// for future blinding	
+
+		return i_tgt;
+	}
+	// ------------------------------------------------------------------------------------------------------------------------------------------------------
 
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& tsents/*batch of sentences*/
-		, const dynet::Expression& i_src_rep)
+		, const dynet::Expression& i_src_rep
+		, InferState prev_state = -2)
 	{		
 		// compute target (+ postion) embeddings
-		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, tsents);// ((num_units, Ly), batch_size)
+		dynet::Expression i_tgt_rep;
+		//if (prev_state == -2)
+			i_tgt_rep = compute_embeddings_and_masks(cg, tsents);// ((num_units, Ly), batch_size)
+		//else
+		//	i_tgt_rep = compute_embeddings_and_masks_for_inference(cg, tsents, prev_state);// ((num_units, Ly), batch_size)
 			
 		dynet::Expression i_dec_l_out = i_tgt_rep;
 		for (auto& dec : _v_dec_layers){
@@ -607,6 +636,8 @@ public:
 	dynet::Expression step_forward(dynet::ComputationGraph & cg
 		, const dynet::Expression& i_src_rep
 		, const WordIdSentence &partial_sent
+		, const InferState& prev_state
+		, InferState& state
 		, bool log_prob
 		, std::vector<dynet::Expression> &aligns);// forward step to get softmax scores
 	void sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// sampling
@@ -672,12 +703,16 @@ dynet::Expression TransformerModel::compute_source_rep(dynet::ComputationGraph &
 dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	, const dynet::Expression& i_src_rep
 	, const WordIdSentence &partial_sent
+	, const InferState& prev_state
+	, InferState& state
 	, bool log_prob
 	, std::vector<dynet::Expression> &aligns)
 {
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
-	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, WordIdSentences(1, partial_sent), i_src_rep);
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, WordIdSentences(1, partial_sent), i_src_rep, prev_state);// the whole matrix of context representation for every words in partial_sent - which is also wasteful because we only need the representation of last comlumn?
+
+	// only consider the prediction of last column in the matrix
 	dynet::Expression i_tgt_t;
 	if (partial_sent.size() == 1) i_tgt_t = i_tgt_ctx;
 	else 
@@ -807,6 +842,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
 
+	InferState prev_state = -1, state = prev_state;
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	std::stringstream ss;
 	ss << "<s>";
@@ -815,7 +851,8 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 	{
 		cg.checkpoint();
 				
-		dynet::Expression ydist = this->step_forward(cg, i_src_rep, target, false, aligns);
+		dynet::Expression ydist = this->step_forward(cg, i_src_rep, target, prev_state, state, false, aligns);
+		prev_state = state;
 
 		auto dist = dynet::as_vector(cg.incremental_forward(ydist));
 		double p = rand01();
@@ -828,7 +865,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 		// this shouldn't happen
 		if (w == (WordId)dist.size()) w = eos_sym;
 
-		if (t > 2 * source.size())
+		if (t > TARGET_LENGTH_LIMIT_FACTOR * source.size())
 			w = eos_sym;
 
 		target.push_back(w);
@@ -857,6 +894,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
 	
+	InferState prev_state = -1, state = prev_state;
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	std::stringstream ss;
 	ss << "<s>";
@@ -865,7 +903,8 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 	{
 		cg.checkpoint();
 			
-		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, target, false, aligns);
+		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, target, prev_state, state, false, aligns);
+		prev_state = state;
 
 		// find the argmax next word (greedy)
 		unsigned w = 0;
@@ -879,7 +918,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 		}
 
 		// break potential infinite loop
-		if (t > 2 * source.size()) {
+		if (t > TARGET_LENGTH_LIMIT_FACTOR * source.size()) {
 			w = eos_sym;
 			pr_w = ydist[w];
 		}
@@ -900,16 +939,17 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 struct Hypothesis {
 	Hypothesis() {};
 
-	Hypothesis(int tgt, float cst, std::vector<dynet::Expression> &al)
-		: target({tgt}), cost(cst), aligns(al) {}
+	Hypothesis(int tgt, float cst, InferState st, std::vector<dynet::Expression> &al)
+		: target({tgt}), cost(cst), state(st), aligns(al) {}
 
-	Hypothesis(int tgt, float cst, Hypothesis &last, std::vector<dynet::Expression> &al)
-		: target(last.target), cost(cst), aligns(al) {
+	Hypothesis(int tgt, float cst, InferState st, Hypothesis &last, std::vector<dynet::Expression> &al)
+		: target(last.target), cost(cst), state(st), aligns(al) {
 		target.push_back(tgt);
 	}
 
 	std::vector<int> target;
 	float cost;
+	InferState state;
 	std::vector<dynet::Expression> aligns;
 };
 
@@ -924,25 +964,26 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 
 	// start of sequences (transformer-dynet always generates sequences with the form: <s> ... </s>.)
 	target.clear();
-	target.push_back(sos_sym); 
+	target.push_back(sos_sym);
 
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 
 	std::vector<Hypothesis> chart;
-	chart.push_back(Hypothesis(sos_sym, 0.0f, aligns));
+	chart.push_back(Hypothesis(sos_sym, 0.0f, InferState(-1), aligns));
 
 	std::vector<unsigned int> vocab(boost::copy_range<std::vector<unsigned int>>(boost::irange(0u, vocab_size)));
 	std::vector<Hypothesis> completed;
+	InferState state = -1;
 
-	for (unsigned steps = 0; completed.size() < beam_width && steps < 2*source.size(); ++steps) {
+	for (unsigned steps = 0; completed.size() < beam_width && steps < TARGET_LENGTH_LIMIT_FACTOR * source.size(); ++steps) {
 		std::vector<Hypothesis> new_chart;
 
 		for (auto& hprev: chart) {
 			cg.checkpoint();
 		
-			dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, hprev.target, false, aligns);
+			dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, hprev.target, hprev.state, state, false, aligns);
 
 			// find the top k best next words
 			auto ydist = dynet::as_vector(cg.incremental_forward(i_ydist));
@@ -952,7 +993,7 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 			// add to chart
 			for (auto vi = vocab.begin(); vi < vocab.begin() + beam_width; ++vi) {
 				//if (new_chart.size() < beam_width) {
-					Hypothesis hnew(*vi, hprev.cost - std::log(ydist[*vi]), hprev, aligns);
+					Hypothesis hnew(*vi, hprev.cost - std::log(ydist[*vi]), state, hprev, aligns);
 					if (*vi == (unsigned int)eos_sym)
 						completed.push_back(hnew);
 					else

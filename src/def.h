@@ -35,6 +35,11 @@ typedef std::vector<WordIdSentencePair> WordIdCorpus;// ToDo: change to WordIdPa
 typedef dynet::ParameterCollection DyNetModel;
 typedef std::shared_ptr<DyNetModel> DyNetModelPointer;
 
+typedef int InferState;
+
+// the generated target sequence may not have its length which is 2 (or 3) times greater than one of the source sequence. 
+#define TARGET_LENGTH_LIMIT_FACTOR 2 // or 3
+
 namespace transformer {
 //---
 #define TRANSFORMER_RUNTIME_ASSERT(msg) do {        \

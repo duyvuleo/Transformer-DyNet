@@ -505,7 +505,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 void get_dev_stats(const WordIdCorpus &devel_cor
 	, const transformer::TransformerConfig& tfc
-	, transformer::ModelStats& dstats) // ToDo: support batch?
+	, transformer::ModelStats& dstats)
 {
 	for (unsigned i = 0; i < devel_cor.size(); ++i) {
 		WordIdSentence ssent, tsent;
@@ -737,14 +737,12 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 				p_sgd->status();
 				cerr << "sents=" << sid << " ";
-				cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';// << " E=" << (tstats._scores[1] / tstats._words_tgt) << " ppl=" << exp(tstats._scores[1] / tstats._words_tgt) << ' ';
+				cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';
 				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl; 	
 			}
 			   		 
 			++id;
 		}
-
-		timer_iteration.reset();
 
 		// show score on dev data?
 		tf.set_dropout(false);// disable dropout for evaluating dev data
@@ -762,20 +760,25 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			cerr << "***Greedy translation: " << get_sentence(target, tf.get_target_dict()) << endl;
 			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
 		}
+
+		timer_iteration.reset();
 		
 		//eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);// non-batched version
-		eval_on_dev_batch(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// much faster
+		eval_on_dev_batch(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+		float elapsed = timer_iteration.elapsed();
+
+		// update best score and save parameter to file
 		dstats.update_best_score(cpt);
 		if (cpt == 0){
 			// FIXME: consider average checkpointing?
 			tf.save_params_to_file(params_out_file);
 		}
 
+		// verbose
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
-
 		if (cpt > 0) cerr << "(not improved, best score on dev so far: " << dstats.get_score_string(false) << ") ";
-		timer_iteration.show();
+		cerr << "[completed in " << elapsed << " ms]" << endl;
 
 		// learning rate scheduler 2: if the model has not been improved for lr_patience times, decrease the learning rate by lr_eta_decay factor.
 		if (lr_patience > 0 && cpt > 0 && cpt % lr_patience == 0){
@@ -812,7 +815,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 					std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
 
 					minibatch_size /= 2;
-					dev_every_i_reports /= 2;
+					report_every_i /= 2;
 				}
 				// 3) shuffle the training data
 				cerr << "***SHUFFLE" << endl;
@@ -833,8 +836,6 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		}
 
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-
-		timer_iteration.reset();
 	}
 
 	cerr << endl << "***************************" << endl;

@@ -35,6 +35,11 @@ bool PRINT_GRAPHVIZ = false;
 unsigned TREPORT = 50;
 unsigned DREPORT = 5000;
 
+bool RESET_IF_STUCK = false;
+bool SWITCH_TO_ADAM = false;
+bool USE_SMALLER_MINIBATCH = false;
+unsigned NUM_RESETS = 1;
+
 bool SAMPLING_TRAINING = false;
 
 bool VERBOSE = false;
@@ -79,7 +84,7 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 
 // ---
 void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, WordIdSentences &devel_cor, 
-	Trainer &sgd, 
+	dynet::Trainer* &p_sgd, 
 	const std::string& model_path, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -136,7 +141,7 @@ int main(int argc, char** argv) {
 		("max-pos-seq-len", value<unsigned>()->default_value(300), "specify the maximum word-based sentence length (either source or target) for learned positional encoding; 300 by default")
 		//-----------------------------------------
 		("use-hybrid-model", "use hybrid model in which RNN encodings are used in place of word embeddings and positional encodings (a hybrid architecture between AM and Transformer?) partially adopted from GNMT style; no by default")
-		//-----------------------------------------
+		//-----------------------------------------		
 		("attention-type", value<unsigned>()->default_value(1), "impose attention type (1: Luong attention type; 2: Bahdanau attention type); 1 by default")
 		//-----------------------------------------
 		("epochs,e", value<unsigned>()->default_value(20), "maximum number of training epochs")
@@ -147,6 +152,11 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("lr-epochs", value<unsigned>()->default_value(0), "no. of epochs for starting learning rate annealing (e.g., halving)") // learning rate scheduler 1
 		("lr-patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved, e.g., for starting learning rate annealing (e.g., halving)") // learning rate scheduler 2
+		//-----------------------------------------
+		("reset-if-stuck", "a strategy if the model gets stuck then reset everything and resume training; default not")
+		("switch-to-adam", "switch to Adam trainer if getting stuck; default not")
+		("use-smaller-minibatch", "use smaller mini-batch size if getting stuck; default not")
+		("num-resets", value<unsigned>()->default_value(1), "no. of times the training process will be reset; default 1") 
 		//-----------------------------------------
 		("sampling", "sample during training; default not")
 		//-----------------------------------------
@@ -194,6 +204,10 @@ int main(int argc, char** argv) {
 	TREPORT = vm["treport"].as<unsigned>(); 
 	DREPORT = vm["dreport"].as<unsigned>(); 
 	SAMPLING_TRAINING = vm.count("sampling");
+	RESET_IF_STUCK = vm.count("reset-if-stuck");
+	SWITCH_TO_ADAM = vm.count("switch-to-adam");
+	USE_SMALLER_MINIBATCH = vm.count("use-smaller-minibatch");
+	NUM_RESETS = vm["num-resets"].as<unsigned>();
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 
@@ -315,7 +329,7 @@ int main(int argc, char** argv) {
 		// train transformer-based language model
 		run_train(tf
 			, train_cor, devel_cor
-			, *p_sgd_trainer
+			, p_sgd_trainer
 			, model_path
 			, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 			, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
@@ -323,7 +337,7 @@ int main(int argc, char** argv) {
 
 		// clean up
 		cerr << "Cleaning up..." << endl;
-		delete p_sgd_trainer;
+		delete p_sgd_trainer; 
 		// transformer object will be automatically cleaned, no action required!
 	}
 	else{
@@ -542,7 +556,7 @@ void get_dev_stats(const WordIdSentences &devel_cor
 
 // ---
 void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, WordIdSentences &devel_cor, 
-	Trainer &sgd, 
+	dynet::Trainer* &p_sgd, 
 	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -601,7 +615,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 
 				// learning rate scheduler 1: after lr_epochs, for every next epoch, the learning rate will be decreased by a factor of eta_decay.
 				if (lr_epochs > 0 && epoch >= lr_epochs)
-					sgd.learning_rate /= lr_eta_decay; 
+					p_sgd->learning_rate /= lr_eta_decay; 
 
 				if (epoch >= max_epochs) break;
 
@@ -646,7 +660,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			tstats._words_tgt_unk += ctstats._words_tgt_unk;  
 
 			cg.backward(i_objective);
-			sgd.update();
+			p_sgd->update();
 
 			sid += train_cor_minibatch[train_ids_minibatch[id]].size();
 			iter += train_cor_minibatch[train_ids_minibatch[id]].size();
@@ -658,7 +672,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 
 				float elapsed = timer_iteration.elapsed();
 
-				sgd.status();
+				p_sgd->status();
 				cerr << "sents=" << sid << " ";
 				cerr /*<< "loss=" << tstats._scores[1]*/ << "words=" << tstats._words_tgt << " unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';//<< " E=" << (tstats._scores[1] / tstats._words_tgt) << " ppl=" << exp(tstats._scores[1] / tstats._words_tgt) << ' ';
 				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;  					
@@ -666,8 +680,6 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			   		 
 			++id;
 		}
-
-		timer_iteration.reset();
 
 		// show score on dev data?
 		tf.set_dropout(false);// disable dropout for evaluating dev data
@@ -680,6 +692,8 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			tf.sample(cg, target/*, prefix if possible*/);		
 			cerr << "***Random sample: " << get_sentence(target, dict) << endl;// can do sampling with any prefix
 		}
+
+		timer_iteration.reset();
 
 		// compute cross entropy loss (xent)
 		/* non-batched version
@@ -697,6 +711,8 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			dstats._scores[1] += as_scalar(cg.incremental_forward(i_xent));
 		}
 		
+		float elapsed = timer_iteration.elapsed();
+
 		dstats.update_best_score(cpt);
 		if (cpt == 0){
 			// FIXME: consider average checkpointing?
@@ -704,27 +720,65 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		}
 		
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << sgd.learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ' ;
+		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
 		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << dstats.get_score_string(false)  << ") ";
-		timer_iteration.show();
-
+		cerr << "[completed in " << elapsed << " ms]" << endl;
+	
 		// learning rate scheduler 2: if the model has not been improved for lr_patience times, decrease the learning rate by lr_eta_decay factor.
 		if (lr_patience > 0 && cpt > 0 && cpt % lr_patience == 0){
 			cerr << "The model has not been improved for " << lr_patience << " times. Decreasing the learning rate..." << endl;
-			sgd.learning_rate /= lr_eta_decay;
+			p_sgd->learning_rate /= lr_eta_decay;
 		}
 
 		// another early stopping criterion
 		if (patience > 0 && cpt >= patience)
 		{
-			cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
-			cerr << "No. of epochs so far: " << epoch << "." << endl;
-			cerr << "Best ppl on dev: " << dstats.get_score_string(false) << endl;
-			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-			break;
+			if (RESET_IF_STUCK){
+				cerr << "The model seems to get stuck. Resetting now...!" << endl;
+				cerr << "Attempting to resume the training..." << endl;			
+				// 1) load the previous best model
+				cerr << "Loading previous best model..." << endl;
+				tf.initialise_params_from_file(params_out_file);
+				// 2) some useful tricks:
+				sid = 0; id = 0; last_print = 0; cpt = 0;
+				// a) reset SGD trainer, switching to Adam instead!
+				if (SWITCH_TO_ADAM){ 
+					delete p_sgd; p_sgd = 0;
+					p_sgd = new dynet::AdamTrainer(tf.get_model_parameters(), 0.001f/*maybe smaller?*/);
+					SWITCH_TO_ADAM = false;// do it once!
+				}
+				// b) use smaller batch size
+				if (USE_SMALLER_MINIBATCH){
+					cerr << "Creating minibatches for training data (using minibatch_size=" << minibatch_size/2 << ")..." << endl;
+					train_cor_minibatch.clear();
+					train_ids_minibatch.clear();
+					create_minibatches(train_cor, minibatch_size/2, train_cor_minibatch);// for train
+					// create a sentence list for this train minibatch
+					train_ids_minibatch.resize(train_cor_minibatch.size());
+					std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
+
+					minibatch_size /= 2;
+					report_every_i /= 2;
+				}
+				// 3) shuffle the training data
+				cerr << "***SHUFFLE" << endl;
+				std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+
+				NUM_RESETS--;
+				if (NUM_RESETS == 0)
+					RESET_IF_STUCK = false;// it's right time to stop anyway!
+			}			
+			else{
+				cerr << "The model has not been improved for " << patience << " times. Stopping now...!" << endl;
+				cerr << "No. of epochs so far: " << epoch << "." << endl;
+				cerr << "Best ppl on dev: " << dstats.get_score_string(false) << endl;
+				cerr << "--------------------------------------------------------------------------------------------------------" << endl;
+
+				break;
+			}
 		}
+
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		timer_iteration.reset();
 	}
 
 	cerr << endl << "Transformer training completed!" << endl;
