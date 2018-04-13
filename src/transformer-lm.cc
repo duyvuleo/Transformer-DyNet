@@ -703,14 +703,16 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			dstats._scores[1] += as_scalar(cg.forward(i_xent));
 		}*/
 		// batched version (faster)
+		float dloss = 0.f;
 		for (const WordIdSentences& dsentb : dev_cor_minibatch){
 			dynet::ComputationGraph cg;
 			auto i_xent = tf.build_graph(cg, dsentb, nullptr, true);
-			dstats._scores[1] += as_scalar(cg.incremental_forward(i_xent));
+			dloss += as_scalar(cg.incremental_forward(i_xent));
 		}
 		
 		float elapsed = timer_iteration.elapsed();
 
+		dstats._scores[1] = dloss;
 		dstats.update_best_score(cpt);
 		if (cpt == 0){
 			// FIXME: consider average checkpointing?
