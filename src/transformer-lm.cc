@@ -118,9 +118,7 @@ int main(int argc, char** argv) {
 		("sparse-updates", value<bool>()->default_value(true), "enable/disable sparse update(s) for lookup parameter(s); true by default")
 		("grad-clip-threshold", value<float>()->default_value(5.f), "use specific gradient clipping threshold (https://arxiv.org/pdf/1211.5063.pdf); 5 by default")
 		//-----------------------------------------
-		("initialise,i", value<std::string>(), "load initial parameters from file")
-		("parameters,p", value<std::string>(), "save best parameters to this file")
-		("config-file", value<std::string>()->default_value("/dev/null"), "save model configuration (used for decoding/inference) to this file")
+		("model-path,p", value<std::string>()->default_value("."), "all files related to the model will be saved in this folder")
 		//-----------------------------------------
 		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked decoder layers; 6 by default")
 		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units; 512 by default")
