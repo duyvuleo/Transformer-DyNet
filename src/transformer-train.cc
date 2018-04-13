@@ -766,7 +766,6 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		//eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);// non-batched version
 		eval_on_dev_batch(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
 		float elapsed = timer_iteration.elapsed();
-		timer_iteration.reset();
 
 		// update best score and save parameter to file
 		dstats.update_best_score(cpt);
@@ -836,7 +835,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			}
 		}
 
+		timer_iteration.reset();
+
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;	
+
 	}
 
 	cerr << endl << "***************************" << endl;
