@@ -237,6 +237,7 @@ int main(int argc, char** argv) {
 		// initalise sentinel markers
 		sm._kTGT_SOS = d.convert("<s>");
 		sm._kTGT_EOS = d.convert("</s>");
+		sm._kTGT_UNK = d.convert("<unk>");
 
 		// load data files and config file for training
 		if (is_training){
