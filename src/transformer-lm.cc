@@ -208,12 +208,13 @@ int main(int argc, char** argv) {
 	NUM_RESETS = vm["num-resets"].as<unsigned>();
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
+	bool is_training = !vm.count("test");
 
 	// get and check model path
 	std::string model_path = vm["model-path"].as<std::string>();
 	struct stat sb;
 	if (stat(model_path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode))
-		cerr << endl << "All model files will be saved to: " << model_path << "." << endl;
+		cerr << endl << "All model files will be loaded from: " << model_path << "." << endl;
 	else
 		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
@@ -237,26 +238,28 @@ int main(int argc, char** argv) {
 		sm._kTGT_SOS = d.convert("<s>");
 		sm._kTGT_EOS = d.convert("</s>");
 
-		// load data files
-		if (!load_data(vm, train_cor, devel_cor, d, sm))
-			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
+		// load data files and config file for training
+		if (is_training){
+			if (!load_data(vm, train_cor, devel_cor, d, sm))
+				TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
-		// model configuration
-		ifstream inpf_cfg(config_file);
-		assert(inpf_cfg);
+			// model configuration
+			ifstream inpf_cfg(config_file);
+			assert(inpf_cfg);
 		
-		std::string line;
-		getline(inpf_cfg, line);
-		std::stringstream ss(line);
-		tfc._tgt_vocab_size = d.size();
-		tfc._sm = sm;
-		ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
-		   >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
-		   >> tfc._use_label_smoothing >> tfc._label_smoothing_weight
-		   >> tfc._position_encoding >> tfc._max_length
-		   >> tfc._attention_type
-		   >> tfc._ffl_activation_type
-		   >> tfc._use_hybrid_model;
+			std::string line;
+			getline(inpf_cfg, line);
+			std::stringstream ss(line);
+			tfc._tgt_vocab_size = d.size();
+			tfc._sm = sm;
+			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+			   >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+			   >> tfc._use_label_smoothing >> tfc._label_smoothing_weight
+			   >> tfc._position_encoding >> tfc._max_length
+			   >> tfc._attention_type
+			   >> tfc._ffl_activation_type
+			   >> tfc._use_hybrid_model;
+		}// otherwise for testing, move on!		
 	}
 	else{// not exist, meaning that the model will be created from scratch!
 		cerr << "Preparing to train the model from scratch..." << endl;
@@ -303,9 +306,7 @@ int main(int argc, char** argv) {
 		std::string config_out_file = model_path + "/model.config";
 		std::string params_out_file = model_path + "/model.params";
 		save_config(config_out_file, params_out_file, tfc);		
-	}	
-
-	bool is_training = !vm.count("test");
+	}		
 
 	if (is_training){
 		// learning rate scheduler
