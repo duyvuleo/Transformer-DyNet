@@ -66,7 +66,7 @@ void save_config(const std::string& config_out_file
 
 // ---
 void get_dev_stats(const WordIdSentences &devel_cor
-	, const transformer::TransformerConfig& tfc
+	, int unk_id
 	, transformer::ModelStats& dstats);
 // ---
 
@@ -79,7 +79,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 
 // ---
-void report_perplexity_score(std::vector<std::shared_ptr<transformer::TransformerLModel>> &v_tf_models, WordIdSentences &test_cor);
+void report_perplexity_score(std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_tf_models, WordIdSentences &test_cor, unsigned minibatch_size);// support ensemble models
 // ---
 
 // ---
@@ -351,7 +351,7 @@ int main(int argc, char** argv) {
 		cerr << "Reading testing data from " << vm["test"].as<std::string>() << "..." << endl;
 		WordIdSentences test_cor = read_corpus(vm["test"].as<std::string>(), &d, false/*for development*/, 0, vm.count("r2l_target"));
 
-		report_perplexity_score(v_tf_models, test_cor);
+		report_perplexity_score(v_tf_models, test_cor, MINIBATCH_SIZE);
 	}
 
 	return EXIT_SUCCESS;
@@ -501,56 +501,75 @@ bool load_model_config(const std::string& model_cfg_file
 // ---
 
 // ---
-void report_perplexity_score(std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_tf_models, WordIdSentences &test_cor)// support ensemble models
+void report_perplexity_score(std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_tf_models, WordIdSentences &test_cor, unsigned minibatch_size)// support ensemble models
 {
 	// Sentinel symbols
 	const transformer::SentinelMarkers& sm = v_tf_models[0].get()->get_config()._sm;
 
 	transformer::ModelStats dstats;
-	for (unsigned i = 0; i < test_cor.size(); ++i) {
-		cerr << "Processing sent " << i << "..." << endl;;
-		WordIdSentence tsent = test_cor[i];  
+	get_dev_stats(test_cor, sm._kTGT_UNK, dstats);
 
+	std::vector<WordIdSentences> test_cor_minibatch;
+	cerr << "Creating minibatches for testing data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	create_minibatches(test_cor, minibatch_size, test_cor_minibatch);// for dev
+
+	MyTimer timer_iteration("completed in");
+
+	unsigned cb = 0;
+	float dloss = 0.f;
+	for (auto& minibatch : test_cor_minibatch) {
+		cerr << "Processing minibatch " << cb++ << "..." << endl;
+
+		unsigned bsize = minibatch.size();
+		size_t max_len = minibatch[0].size();
+		for(size_t i = 1; i < bsize; i++) max_len = std::max(max_len, minibatch[i].size());
+		
 		dynet::ComputationGraph cg;
-		WordIdSentence partial_sent(1, sm._kTGT_SOS);
-		for (unsigned i = 1; i < tsent.size(); i++){// shifted to the right
-			WordId wordid = tsent[i];
-			dstats._words_tgt++;
-			if (wordid == sm._kTGT_UNK) dstats._words_tgt_unk++;
+		WordIdSentences partial_sents(bsize, WordIdSentence(1, sm._kTGT_SOS));
+		std::vector<unsigned> next_words(bsize);
+		for (unsigned t = 1; t < max_len; t++){// shifted to the right
+			vector<int> wordids;
+			for (unsigned bs = 0; bs < bsize; bs++)
+				next_words[bs] = (minibatch[bs].size()>t)?(unsigned)minibatch[bs][t]:sm._kTGT_EOS;
 
-			// Perform the forward step on all models
-			std::vector<Expression> i_softmaxes, i_aligns/*unused for now*/;
+			// perform the forward step on all models
+			std::vector<Expression> i_softmaxes, i_aligns/*unused*/;
 			for(int j : boost::irange(0, (int)v_tf_models.size())){
 				i_softmaxes.push_back(v_tf_models[j].get()->step_forward(cg
-					, partial_sent
+					, partial_sents
 					, false
 					, i_aligns));
 			}
 
-			dynet::Expression i_logprob = dynet::log({dynet::average(i_softmaxes)});
-			dynet::Expression i_loss = -dynet::pick(i_logprob, wordid);
-			dstats._scores[0] += dynet::as_scalar(cg.incremental_forward(i_loss));
+			dynet::Expression i_logprob = dynet::log({dynet::average(i_softmaxes)});// averaging
+			dynet::Expression i_loss = dynet::sum_batches(dynet::pick(-i_logprob, next_words));
+			dloss += dynet::as_scalar(cg.incremental_forward(i_loss));
 
-			partial_sent.push_back(wordid);
+			for (unsigned bs = 0; bs < bsize; bs++)
+				partial_sents[bs].push_back(next_words[bs]);
 
 			cg.clear();
 		}
 	}
-		
+
+	dstats._scores[1] = dloss;
+
 	cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-	cerr << "***TEST: " << "sents=" << test_cor.size() << " unks=" << dstats._words_tgt_unk  << " E=" << (dstats._scores[0] / dstats._words_tgt) << " PPLX=" << exp(dstats._scores[0] / dstats._words_tgt) << ' ' << endl;
+	cerr << "***TEST: " << "sents=" << test_cor.size() << " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk  << dstats.get_score_string(false) << ' ';
+
+	timer_iteration.show();
 }
 // ---
 
 // ---
 void get_dev_stats(const WordIdSentences &devel_cor
-	, const transformer::TransformerConfig& tfc
+	, int unk_id
 	, transformer::ModelStats& dstats) // ToDo: support batch?
 {
 	for (unsigned i = 0; i < devel_cor.size(); ++i) {
 		WordIdSentence dsent = devel_cor[i];  
 		dstats._words_tgt += dsent.size() - 1; // shifted right 
-		for (auto& word : dsent) if (word == tfc._sm._kTGT_UNK) dstats._words_tgt_unk++;
+		for (auto& word : dsent) if (word == unk_id) dstats._words_tgt_unk++;
 	}
 }
 // ---
@@ -585,7 +604,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 
 	// stats on dev  
 	transformer::ModelStats dstats;
-	get_dev_stats(devel_cor, tfc, dstats);
+	get_dev_stats(devel_cor, tfc._sm._kTGT_UNK, dstats);
 	
 	unsigned report_every_i = TREPORT;
 	unsigned dev_every_i_reports = DREPORT;
@@ -724,7 +743,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
-		if (cpt > 0) cerr << "(not improved, best ppl on dev so far = " << dstats.get_score_string(false)  << ") ";
+		if (cpt > 0) cerr << "(not improved, best ppl on dev so far: " << dstats.get_score_string(false)  << ") ";
 		cerr << "[completed in " << elapsed << " ms]" << endl;
 	
 		// learning rate scheduler 2: if the model has not been improved for lr_patience times, decrease the learning rate by lr_eta_decay factor.

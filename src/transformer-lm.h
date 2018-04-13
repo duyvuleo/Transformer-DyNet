@@ -296,9 +296,9 @@ public:
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& sents/*batched*/
 		, ModelStats* pstats=nullptr
-		, bool is_eval_on_dev=false);
+		, bool is_eval_on_dev=false);	
 	dynet::Expression step_forward(dynet::ComputationGraph &cg
-		, const WordIdSentence &partial_sent
+		, const WordIdSentences &partial_sents/*batched*/
 		, bool log_prob
 		, std::vector<dynet::Expression> &aligns);
 	void sample(dynet::ComputationGraph& cg, WordIdSentence &sampled_sent, const std::string &prefix=""/*e.g., <s>*/);// sampling
@@ -346,18 +346,18 @@ TransformerLModel::TransformerLModel(const TransformerConfig& tfc, dynet::Dict& 
 }
 
 dynet::Expression TransformerLModel::step_forward(dynet::ComputationGraph &cg
-	, const WordIdSentence &partial_sent
+	, const WordIdSentences &partial_sents
 	, bool log_prob
 	, std::vector<dynet::Expression> &aligns)
 {
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
-	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, WordIdSentences(1, partial_sent));
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, partial_sents);
 	dynet::Expression i_tgt_t;
-	if (partial_sent.size() == 1) i_tgt_t = i_tgt_ctx;
+	if (partial_sents[0].size() == 1) i_tgt_t = i_tgt_ctx;
 	else 
-		//i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
-		i_tgt_t = dynet::pick(i_tgt_ctx, (unsigned)(partial_sent.size() - 1), 1);// shifted right, ((|V_T|, 1), batch_size)
+		//i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sents.size() - 1)});
+		i_tgt_t = dynet::pick(i_tgt_ctx, (unsigned)(partial_sents[0].size() - 1), 1);// shifted right, ((|V_T|, 1), batch_size)
 
 	// output linear projections (w/ bias)
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
@@ -445,7 +445,7 @@ void TransformerLModel::sample(dynet::ComputationGraph& cg, WordIdSentence &targ
 	unsigned t = 0;
 	while (target.back() != eos_sym) 
 	{		
-		dynet::Expression ydist = this->step_forward(cg, target, false, aligns);
+		dynet::Expression ydist = this->step_forward(cg, WordIdSentences{1, target}/*non-batched*/, false, aligns);
 
 		auto dist = dynet::as_vector(cg.incremental_forward(ydist));
 		double p = rand01();
