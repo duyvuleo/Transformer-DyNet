@@ -528,7 +528,6 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 		WordIdSentences partial_sents(bsize, WordIdSentence(1, sm._kTGT_SOS));
 		std::vector<unsigned> next_words(bsize);
 		for (unsigned t = 1; t < max_len; t++){// shifted to the right
-			vector<int> wordids;
 			for (unsigned bs = 0; bs < bsize; bs++)
 				next_words[bs] = (minibatch[bs].size()>t)?(unsigned)minibatch[bs][t]:sm._kTGT_EOS;
 
@@ -555,7 +554,7 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 	dstats._scores[1] = dloss;
 
 	cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-	cerr << "***TEST: " << "sents=" << test_cor.size() << " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk  << dstats.get_score_string(false) << ' ';
+	cerr << "***TEST: " << "sents=" << test_cor.size() << " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string(true) << ' ';
 
 	timer_iteration.show();
 }
