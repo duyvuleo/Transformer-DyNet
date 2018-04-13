@@ -711,6 +711,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		}
 		
 		float elapsed = timer_iteration.elapsed();
+		timer_iteration.reset();
 
 		dstats._scores[1] = dloss;
 		dstats.update_best_score(cpt);
