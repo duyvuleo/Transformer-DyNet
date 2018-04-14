@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
 		("src-vocab", value<std::string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
 		("tgt-vocab", value<std::string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
-		("joint-vocab", value<std::string>(), "file containing target joint vocabulary file for both source and target; none by default (will be built from train file)")
+		("joint-vocab", value<std::string>()->default_value(""), "file containing target joint vocabulary file for both source and target; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		//-----------------------------------------
 		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
