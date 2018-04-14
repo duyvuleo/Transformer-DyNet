@@ -115,8 +115,6 @@ int main(int argc, char** argv) {
 		("joint-vocab", value<std::string>(), "file containing target joint vocabulary file for both source and target; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		//-----------------------------------------
-		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
-		//-----------------------------------------
 		("minibatch-size,b", value<unsigned>()->default_value(1), "impose the minibatch size for training (support both GPU and CPU); single batch by default")
 		("dynet-autobatch", value<unsigned>()->default_value(0), "impose the auto-batch mode (support both GPU and CPU); no by default")
 		//-----------------------------------------
@@ -326,7 +324,7 @@ int main(int argc, char** argv) {
 			, sm
 			, vm["attention-type"].as<unsigned>()
 			, vm["ff-activation-type"].as<unsigned>()
-			, use_joint_vocab | vm.count("shared-embeddings")
+			, use_joint_vocab
 			, vm.count("use-hybrid-model"));
 
 		// save vocabularies to files
@@ -397,7 +395,7 @@ bool load_data(const variables_map& vm
 	std::vector<std::string> train_paths = vm["train"].as<std::vector<std::string>>();// to handle multiple training data
 	if (train_paths.size() > 2) TRANSFORMER_RUNTIME_ASSERT("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
-	if (vm.count("shared-embeddings"))
+	if (vm.count("joint-vocab"))
 		train_cor = read_corpus(train_paths[0], &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 	else
 		train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
@@ -446,7 +444,7 @@ bool load_data(const variables_map& vm
 
 	if (swap) {
 		cerr << "Swapping role of source and target\n";
-		if (!vm.count("shared-embeddings")){
+		if (!vm.count("joint-vocab")){
 			std::swap(sd, td);
 			std::swap(sm._kSRC_SOS, sm._kTGT_SOS);
 			std::swap(sm._kSRC_EOS, sm._kTGT_EOS);
