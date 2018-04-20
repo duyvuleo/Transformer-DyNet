@@ -398,8 +398,10 @@ bool load_data(const variables_map& vm
 	if (train_paths.size() > 2) TRANSFORMER_RUNTIME_ASSERT("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
 	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
 	bool use_joint_vocab = vm.count("joint-vocab") | vm.count("shared-embeddings"); 
-	if (use_joint_vocab)
+	if (use_joint_vocab){
 		train_cor = read_corpus(train_paths[0], &sd, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+		td = sd;
+	}
 	else
 		train_cor = read_corpus(train_paths[0], &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
 	if ("" == vm["src-vocab"].as<std::string>() 
