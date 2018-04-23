@@ -34,11 +34,14 @@ inline void load_vocabs(const std::string& src_vocab_file, const std::string& tr
 	while (getline(if_src_vocab, sword)) sd.convert(sword);
 	while (getline(if_trg_vocab, tword)) td.convert(tword);
 
-	sd.convert("<s>");
+	// automatically add sentinel markers
+	sd.convert("<s>");// source
 	sd.convert("</s>");
-	td.convert("<s>");
+	sd.convert("<unk>");
+	td.convert("<s>");// target
 	td.convert("</s>");
-	
+	td.convert("<unk>");	
+
 	cerr << "Source vocabluary size: " << sd.size() << endl;
 	cerr << "Target vocabluary size: " << td.size() << endl;
 
@@ -58,8 +61,10 @@ inline void load_joint_vocab(const std::string& vocab_file
 	std::string word;
 	while (getline(if_vocab, word)) sd.convert(word);
 
+	// automatically add sentinel markers
 	sd.convert("<s>");
 	sd.convert("</s>");
+	sd.convert("<unk>");
 		
 	cerr << "Joint vocabluary size: " << sd.size() << endl;
 
@@ -79,8 +84,10 @@ inline void load_vocab(const std::string& vocab_file
 	std::string word;
 	while (getline(if_vocab, word)) d.convert(word);
 
+	// automatically add sentinel markers
 	d.convert("<s>");
 	d.convert("</s>");
+	d.convert("<unk>");
 	
 	cerr << "Vocabluary size: " << d.size() << endl;
 
