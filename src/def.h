@@ -183,6 +183,8 @@ struct TransformerConfig{
 
 	bool _shared_embeddings = false;// use shared word embeddings between source and target
 
+	bool _use_external_contexts = false;// [WIP] (future feature): to take external contexts (side information, document contexts, ...)
+
 	bool _is_training = true;
 
 	TransformerConfig(){}
@@ -261,6 +263,7 @@ struct TransformerConfig{
 		_ffl_activation_type = tfc._ffl_activation_type;
 		_shared_embeddings = tfc._shared_embeddings;
 		_use_hybrid_model = tfc._use_hybrid_model;
+		_use_external_contexts = tfc._use_external_contexts;
 		_is_training = tfc._is_training;
 		_use_dropout = _is_training;
 	}

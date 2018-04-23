@@ -541,6 +541,7 @@ void report_perplexity_score(std::vector<std::shared_ptr<transformer::Transforme
 					, i_aligns));
 			}
 
+			// ToDo: losses for padded positions should not be included. This will result in smaller perplexity scores!
 			dynet::Expression i_logprob = dynet::log({dynet::average(i_softmaxes)});// averaging
 			dynet::Expression i_loss = dynet::sum_batches(dynet::pick(-i_logprob, next_words));
 			dloss += dynet::as_scalar(cg.incremental_forward(i_loss));

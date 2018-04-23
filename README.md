@@ -216,6 +216,8 @@ Note that it is recommended to use sacreBLEU or mteval instead for fairest evalu
 
 ## Benchmarks on Sequence-to-Sequence Generation Tasks
 
+The details of my benchmarks (scripts, results, scores) can be found in 'benchmarks' folder. 
+
 ### Language Modeling (to be updated)
 
 ### Machine Translation
