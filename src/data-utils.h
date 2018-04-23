@@ -25,6 +25,9 @@ WordIdCorpus read_corpus(const string &filename
 	, unsigned slen, bool r2l_target
 	, bool swap)
 {
+	bool use_joint_vocab = false;
+	if (sd == td) use_joint_vocab = true;
+
 	int kSRC_SOS = sd->convert("<s>");
 	int kSRC_EOS = sd->convert("</s>");
 	int kTGT_SOS = td->convert("<s>");
@@ -80,8 +83,12 @@ WordIdCorpus read_corpus(const string &filename
 	}
 
 	// print stats
-	if (cid)
-		cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t), " << "max length (s & t): " << max_src_len << " & " << max_tgt_len << ", " << sd->size() << " & " << td->size() << " types" << endl;
+	if (cid){
+		if (!use_joint_vocab)
+			cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t), " << "max length (s & t): " << max_src_len << " & " << max_tgt_len << ", " << sd->size() << " & " << td->size() << " types" << endl;
+		else 
+			cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t), " << "max length (s & t): " << max_src_len << " & " << max_tgt_len << ", " << sd->size() << " joint s & t types" << endl;
+	}
 	else 
 		cerr << lc << " lines, " << stoks << " & " << ttoks << " tokens (s & t), " << "max length (s & t): " << max_src_len << " & " << max_tgt_len << endl;
 
