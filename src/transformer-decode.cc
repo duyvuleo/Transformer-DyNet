@@ -71,8 +71,6 @@ int main(int argc, char** argv) {
 		("topk,k", value<unsigned>(), "use <num> top kbest entries; none by default")
 		("nbest-style", value<std::string>()->default_value("simple"), "style for nbest translation outputs (moses|simple); simple by default")
 		//-----------------------------------------
-		("model-cfg,m", value<std::string>(), "model configuration file (to support ensemble decoding)")
-		//-----------------------------------------
 		("remove-unk", "remove <unk> in the output; default not")
 		//-----------------------------------------
 		("r2l-target", "use right-to-left direction for target during training; default not")
@@ -126,7 +124,7 @@ int main(int argc, char** argv) {
 		// load vocabulary from file(s)
 		std::string vocab_file = model_path + "/" + "src-tgt.joint-vocab";
 		if (stat(vocab_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){
-			load_vocab(model_path + "/" + "src-tgt.joint-vocab", sd);
+			load_vocab(vocab_file, sd);
 			td = sd;
 		}
 		else{
