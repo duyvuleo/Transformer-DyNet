@@ -260,8 +260,10 @@ int main(int argc, char** argv) {
 		// initalise sentinel markers
 		sm._kSRC_SOS = sd.convert("<s>");
 		sm._kSRC_EOS = sd.convert("</s>");
+		sm._kSRC_UNK = sd.convert("<unk>");
 		sm._kTGT_SOS = td.convert("<s>");
 		sm._kTGT_EOS = td.convert("</s>");
+		sm._kTGT_UNK = td.convert("<unk>");
 
 		// load data files
 		if (!load_data(vm, train_cor, devel_cor, sd, td, sm))
@@ -299,8 +301,10 @@ int main(int argc, char** argv) {
 		// initalise sentinel markers
 		sm._kSRC_SOS = sd.convert("<s>");
 		sm._kSRC_EOS = sd.convert("</s>");
+		sm._kSRC_UNK = sd.convert("<unk>");
 		sm._kTGT_SOS = td.convert("<s>");
 		sm._kTGT_EOS = td.convert("</s>");
+		sm._kTGT_UNK = td.convert("<unk>");
 
 		// load data files
 		if (!load_data(vm, train_cor, devel_cor, sd, td, sm))
