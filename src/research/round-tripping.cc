@@ -4,7 +4,7 @@
  * Yingce Xia, Di He, Tao Qin, Liwei Wang, Nenghai Yu, Tie-Yan Liu, Wei-Ying Ma
  * https://papers.nips.cc/paper/6469-dual-learning-for-machine-translation.pdf
  * Developed by Cong Duy Vu Hoang (vhoang2@student.unimelb.edu.au)
- * Date: 21 May 2017
+ * Date: April 2018
  *
 */
 
