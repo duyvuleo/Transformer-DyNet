@@ -565,7 +565,11 @@ void eval_on_dev(transformer::TransformerModel &tf,
 			else if (dev_eval_infer_algo == 1)// greedy decoding
 				tf.greedy_decode(cg, ssent, thyp);// faster with relatively good translations
 			else// beam search decoding
-				tf.beam_decode(cg, ssent, thyp, dev_eval_infer_algo/*N>1: beam decoding with N size of beam*/);// slow with better translations
+			{
+				WordIdSentences thyps;	
+				tf.beam_decode(cg, ssent, thyps, dev_eval_infer_algo/*N>1: beam decoding with N size of beam*/);// slow with better translations
+				thyp = thyps[0];
+			}
 					
 			// collect statistics for mteval
 			v_samples.push_back(MTEval::Sample({thyp, {tsent/*, tsent2, tsent3, tsent4*/}}));// multiple references are supported as well!
@@ -757,15 +761,38 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		// sample a random sentence (for observing translations during training progress)
 		if (SAMPLING_TRAINING){// Note: this will slow down the training process, suitable for debugging only.
 			dynet::ComputationGraph cg;
-			WordIdSentence target;// raw translation (w/o scores)
+			WordIdSentence target;// raw translation (w/o scores)			
 			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;
 			cerr << "***Source: " << get_sentence(train_src_minibatch[train_ids_minibatch[id]][0], tf.get_source_dict()) << endl;
 			tf.sample(cg, train_src_minibatch[train_ids_minibatch[id]][0], target);
 			cerr << "***Sampled translation: " << get_sentence(target, tf.get_target_dict()) << endl;
-			cg.clear();
 			tf.greedy_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], target);
 			cerr << "***Greedy translation: " << get_sentence(target, tf.get_target_dict()) << endl;
+			/*std::vector<WordIdSentence> targets;
+			tf.beam_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], targets, 4, 5);
+			for (auto& tgt : targets)
+				cerr << "***Beam translation: " << get_sentence(tgt, tf.get_target_dict()) << endl;*/
 			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;
+
+			/* for debugging only
+			for (auto& src : train_src_minibatch[train_ids_minibatch[id]])
+				cerr << "***Source: " << get_sentence(src, tf.get_source_dict()) << endl;
+			tf.sample(cg, train_src_minibatch[train_ids_minibatch[id]], targets);
+			for (auto& tgt : targets)
+				cerr << "***Sampled translation (batched): " << get_sentence(tgt, tf.get_target_dict()) << endl;
+			tf.greedy_decode(cg, train_src_minibatch[train_ids_minibatch[id]], targets);
+			for (auto& tgt : targets)
+				cerr << "***Greedy translation (batched): " << get_sentence(tgt, tf.get_target_dict()) << endl;
+
+			cerr << "***Source: " << get_sentence(train_src_minibatch[train_ids_minibatch[id]][0], tf.get_source_dict()) << endl;
+			std::vector<WordIdSentence> samples;
+			std::vector<float> v_probs;
+			tf.sample_sentences(cg, train_src_minibatch[train_ids_minibatch[id]][0], 5, samples, v_probs);
+			cerr << "***Sampled translations: " << endl;
+			for (unsigned id = 0; id < samples.size(); id++){
+				auto& sample = samples[id];
+				cerr << get_sentence(sample, tf.get_target_dict()) << " (log-probability=" << v_probs[id]/sample.size() << ")" << endl;
+			}*/
 		}
 
 		timer_iteration.reset();
@@ -855,8 +882,15 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 //---
 std::string get_sentence(const WordIdSentence& source, Dict& td){
+	WordId eos_sym = td.convert("</s>");
+
 	std::stringstream ss;
 	for (WordId w : source){
+		if (w == eos_sym) {
+			ss << "</s>";
+			break;// stop if seeing EOS marker!
+		}
+
 		ss << td.convert(w) << " ";
 	}
 

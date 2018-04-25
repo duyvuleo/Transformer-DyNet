@@ -619,13 +619,15 @@ public:
 		, std::vector<dynet::Expression> &aligns);
 	void sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// random sampling
 	void sample(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets); // batched version of random sampling
-	dynet::Expression sample_sentences(dynet::ComputationGraph& cg
-        	, const WordIdSentence& source
+	void sample_sentences(dynet::ComputationGraph& cg
+	        , const WordIdSentence& source
         	, unsigned num_samples
-        	, std::vector<WordIdSentence>& samples);
+	        , std::vector<WordIdSentence>& samples
+		, std::vector<float>& v_probs);
 	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// greedy decoding
 	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets);// batched version of greedy decoding
-	void beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width);// beam search decoding
+	//void beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width);// beam search decoding (return one best hypo)
+	void beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentences &targets, unsigned beam_width, unsigned top_beams=1);// beam search decoding (return top_beams hypos)
 
 	dynet::ParameterCollection& get_model_parameters();
 	void initialise_params_from_file(const std::string &params_file);
@@ -724,9 +726,9 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 {
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
-	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, partial_sents, i_src_rep);// the whole matrix of context representation for every words in partial_sent - which is also wasteful because we only need the representation of last comlumn?
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, partial_sents, i_src_rep);// the whole matrix of context representation for every words in partial_sents is computed - which is also wasteful because we only need the representation of last comlumn?
 
-	// only consider the prediction of last column in the matrix
+	// only consider the prediction of last column in the matrix	
 	dynet::Expression i_tgt_t;
 	if (_decoder.get()->_batch_tlen == 1) i_tgt_t = i_tgt_ctx;
 	else 
@@ -922,13 +924,13 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentences
 		for (unsigned bs = 0 ; bs < bsize; bs++){
 			double p = rand01();
 			WordId w = 0;
-			for (; w < _tfc._tgt_vocab_size; ++w) {
+			for (; w < (WordId)_tfc._tgt_vocab_size; ++w) {
 				p -= dist[w + _tfc._tgt_vocab_size * bs];
 				if (p < 0.f) break;
 			}
 
 			// this shouldn't happen
-			if (w == _tfc._tgt_vocab_size) w = eos_sym;
+			if (w == (WordId)_tfc._tgt_vocab_size) w = eos_sym;
 
 			if (t > TARGET_LENGTH_LIMIT_FACTOR * max_src_len)
 				w = eos_sym;
@@ -958,17 +960,18 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentences
 	_tfc._is_training = true;
 }
 
-dynet::Expression TransformerModel::sample_sentences(dynet::ComputationGraph& cg
+void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
         , const WordIdSentence& source
         , unsigned num_samples
-        , std::vector<WordIdSentence>& samples)
+        , std::vector<WordIdSentence>& samples
+	, std::vector<float>& v_probs)
 {
 	_tfc._is_training = false;
 	
 	const int& sos_sym = _tfc._sm._kTGT_SOS;
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
 	
-	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);
+	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(num_samples, source));
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 
@@ -976,26 +979,27 @@ dynet::Expression TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 	samples.resize(num_samples, WordIdSentence(1, sos_sym)); 
 	std::vector<unsigned> words(num_samples, sos_sym);
 
-	std::vector<dynet::Expression> v_log_probs;
+	v_probs.clear();
+	v_probs.resize(num_samples, 0.f);
 
 	unsigned t = 0;
 	while (true) 
 	{
 		cg.checkpoint();
-				
+	
 		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, samples, false, aligns);// batched, ((TARGET_VOCAB_SIZE, 1), num_samples)
-		auto dist = dynet::as_vector(cg.incremental_forward(i_ydist));// (num_samples * TARGET_VOCAB_SIZE)
-
+	
+		auto ydist = dynet::as_vector(cg.incremental_forward(i_ydist));// (num_samples * TARGET_VOCAB_SIZE)
 		for (unsigned s = 0 ; s < num_samples; s++){
 			double p = rand01();
 			WordId w = 0;
-			for (; w < _tfc._tgt_vocab_size; ++w) {
-				p -= dist[w + _tfc._tgt_vocab_size * s];
+			for (; w < (WordId)_tfc._tgt_vocab_size; ++w) {
+				p -= ydist[w + _tfc._tgt_vocab_size * s];
 				if (p < 0.f) break;
 			}
 
 			// this shouldn't happen
-			if (w == _tfc._tgt_vocab_size) w = eos_sym;
+			if (w == (WordId)_tfc._tgt_vocab_size) w = eos_sym;
 
 			if (t > TARGET_LENGTH_LIMIT_FACTOR * source.size())
 				w = eos_sym;
@@ -1004,8 +1008,10 @@ dynet::Expression TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 			words[s] = (unsigned)w;
 		}
 
-		dynet::Expression i_log_pick = dynet::log(dynet::pick(i_ydist, words));// ((1, 1), num_samples)
-		v_log_probs.push_back(i_log_pick);
+		dynet::Expression i_log_pick = -dynet::log(dynet::pick(i_ydist, words));// ((1, 1), num_samples)
+		auto probs = dynet::as_vector(cg.incremental_forward(i_log_pick));// num_samples
+		unsigned id = 0;
+		for (auto& prob : probs) v_probs[id++] += prob;
 
 		t += 1;
 		if (_tfc._position_encoding == 1 && t >= _tfc._max_length) break;// to prevent over-length sample in learned positional encoding
@@ -1027,8 +1033,6 @@ dynet::Expression TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 	cg.clear();
 
 	_tfc._is_training = true;
-
-	return dynet::reshape(dynet::sum(v_log_probs), dynet::Dim({(unsigned int)num_samples}));
 }
 
 void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target)
@@ -1059,7 +1063,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 		for (unsigned x = 1; x < ydist.size(); ++x) {
 			if (ydist[x] > pr_w) {
 				w = x;
-				pr_w = ydist[x];
+				pr_w = ydist[w];
 			}
 		}
 
@@ -1068,6 +1072,8 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 			w = eos_sym;
 			pr_w = ydist[w];
 		}
+
+		// Note: use pr_w if getting the probability of the generated sequence!
 
 		target.push_back(w);
 
@@ -1111,11 +1117,11 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 		// find the argmax next word (greedy)
 		for (unsigned bs = 0; bs < bsize; bs++){
 			unsigned w = 0;
-			auto pr_w = ydist[w];
+			auto pr_w = ydist[w + _tfc._tgt_vocab_size * bs];
 			for (unsigned x = 1; x < _tfc._tgt_vocab_size; ++x) {
 				if (ydist[x + _tfc._tgt_vocab_size * bs] > pr_w) {
 					w = x;
-					pr_w = ydist[x];
+					pr_w = ydist[x + _tfc._tgt_vocab_size * bs];
 				}
 			}
 
@@ -1167,7 +1173,7 @@ struct Hypothesis {
 };
 
 // A simplified version of beam search decoding (transformer-decode will use integrated ensemble decoding instead!)
-void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width)
+void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentences &targets, unsigned beam_width, unsigned top_beams)
 {
 	_tfc._is_training = false;
 	
@@ -1175,10 +1181,7 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
 	unsigned int vocab_size = _dicts.second.size();
 
-	// start of sequences (transformer-dynet always generates sequences with the form: <s> ... </s>.)
-	target.clear();
-	target.push_back(sos_sym);
-
+	// get the source representation
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
@@ -1231,11 +1234,21 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 	// Here, completed.size() will be zero!
 	if (completed.size() == 0)
 		completed.swap(chart);// swap with current generated hypotheses
-	auto best = std::min_element(completed.begin(), completed.end(),
-			[](Hypothesis &h1, Hypothesis &h2) { return h1.cost/h1.target.size() < h2.cost/h2.target.size(); });// sort completed by their scores, adjusting for lengths -- not very effective, too short!
-	assert(best != completed.end());
+	
+	// return 1-best hypo
+	//auto best = std::min_element(completed.begin(), completed.end(),
+	//		[](Hypothesis &h1, Hypothesis &h2) { return h1.cost/h1.target.size() < h2.cost/h2.target.size(); });// sort completed by their scores, adjusting for lengths -- not very effective, too short!
+	//assert(best != completed.end());
+	//target = best->target;
 
-	target = best->target;
+	// return top_beams hypos
+	top_beams = (completed.size() > top_beams)? top_beams : completed.size();
+	std::partial_sort(completed.begin(), completed.begin() + top_beams, completed.end(),
+				[](Hypothesis &h1, Hypothesis &h2) { return h1.cost/h1.target.size() < h2.cost/h2.target.size(); });
+	completed.resize(top_beams);
+
+	targets.clear();
+	for (auto& best : completed) targets.push_back(best.target);
 
 	cg.clear();
 

@@ -30,14 +30,14 @@ dynet::Expression arange(dynet::ComputationGraph &cg, unsigned begin, unsigned e
 	aux_mem->clear();
 	for (unsigned i = begin; i < end; ++i) 
 		aux_mem->push_back((log_transform) ? log(1.0 + i) : i);
-	return input(cg, dynet::Dim({end-begin}), aux_mem, dynet::default_device);
+	return dynet::input(cg, dynet::Dim({end-begin}), aux_mem, dynet::default_device);
 }
 
 dynet::Expression repeat(dynet::ComputationGraph &cg, unsigned num, float value, std::vector<float> *aux_mem) 
 {
 	aux_mem->clear();
 	aux_mem->resize(num, value);
-	return input(cg, dynet::Dim({num}), aux_mem, dynet::default_device);
+	return dynet::input(cg, dynet::Dim({num}), aux_mem, dynet::default_device);
 }
 
 dynet::Expression dither(dynet::ComputationGraph &cg, const dynet::Expression &expr, float pad_value, std::vector<float> *aux_mem)
@@ -45,7 +45,7 @@ dynet::Expression dither(dynet::ComputationGraph &cg, const dynet::Expression &e
 	const auto& shape = cg.nodes[expr.i]->dim;
 	aux_mem->clear();
 	aux_mem->resize(shape.cols(), pad_value);
-	dynet::Expression padding = input(cg, dynet::Dim({shape.cols()}), aux_mem, dynet::default_device);
+	dynet::Expression padding = dynet::input(cg, dynet::Dim({shape.cols()}), aux_mem, dynet::default_device);
 	dynet::Expression padded = dynet::concatenate(std::vector<dynet::Expression>({padding, expr, padding}));
 	dynet::Expression left_shift = dynet::pickrange(padded, 2, shape.rows() + 2);
 	dynet::Expression right_shift = dynet::pickrange(padded, 0, shape.rows());
