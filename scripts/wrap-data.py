@@ -28,7 +28,7 @@ def load_vocab_from_file(fname):
 def print_help():
 	print "Usage 1: python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <vocab-prefix>"
 	print "Usage 2: python scripts/wrap-data.py <src-lang-id> <trg-lang-id> <train-prefix> <dev-prefix> <test-prefix> <src-word-freq> <trg-word-freq>"
-	print "Usage 3: python scripts/wrap-data.py <train-prefix> <dev-prefix> [<vocab>] <word-freq>"
+	print "Usage 3: python scripts/wrap-data.py <train-prefix> <dev-prefix> <test-prefix> [<vocab>|<word-freq>]"
 
 argc = len(sys.argv)
 
