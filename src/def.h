@@ -187,6 +187,8 @@ struct TransformerConfig{
 
 	bool _is_training = true;
 
+	std::string _model_path = "";
+
 	TransformerConfig(){}
 
 	TransformerConfig(unsigned src_vocab_size
@@ -266,6 +268,7 @@ struct TransformerConfig{
 		_use_external_contexts = tfc._use_external_contexts;
 		_is_training = tfc._is_training;
 		_use_dropout = _is_training;
+		_model_path = tfc._model_path;
 	}
 };
 //---

@@ -36,7 +36,17 @@ int main_body(variables_map vm);
 
 typedef WordIdSentences MonoData;
 
+void get_dev_stats(const WordIdCorpus &devel_cor
+	, const transformer::TransformerConfig& tfc
+	, transformer::ModelStats& dstats
+	, bool swap=false);
 std::string get_sentence(const WordIdSentence& source, Dict& td);
+
+// eval on dev (batch supported)
+void eval_on_dev_batch(transformer::TransformerModel &tf, 
+	const std::vector<WordIdSentences> &dev_src_minibatch, const std::vector<WordIdSentences> &dev_tgt_minibatch,  
+	transformer::ModelStats& dstats, 
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo);
 
 // create SGD trainer
 dynet::Trainer* create_sgd_trainer(unsigned opt_type, float lr, dynet::ParameterCollection& model);
@@ -49,7 +59,8 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 		, const MonoData& mono_s, const MonoData& mono_t
 		, const WordIdCorpus& dev_cor // for evaluation
 		, unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
-		, unsigned opt_type);
+		, unsigned opt_type
+		, unsigned dev_eval_mea);
 
 int main(int argc, char** argv) {
 	dynet::initialize(argc, argv);
@@ -75,6 +86,8 @@ int main(int argc, char** argv) {
 		("alpha", value<float>()->default_value(0.05f), "the alpha hyper-parameter for balancing the rewards")
 		("gamma_1", value<float>()->default_value(0.001f), "the gamma 1 hyper-parameter for stochastic gradient update in tuning source-to-target transformer model")
 		("gamma_2", value<float>()->default_value(0.001f), "the gamma 2 hyper-parameter for stochastic gradient update in tuning target-to-source transformer model")
+		//-----------------------------------------
+		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES); default 0 (perplexity)")
 		//-----------------------------------------
 		("mono_s", value<string>()->default_value(""), "File to read the monolingual source from")
 		("mono_t", value<string>()->default_value(""), "File to read the monolingual target from")
@@ -160,6 +173,7 @@ int main(int argc, char** argv) {
 			   >> tfc._use_hybrid_model;
 			tfc._is_training = true;
 			tfc._use_dropout = true;
+			tfc._model_path = model_path;
 
 			// load models
 			v_tf_models.push_back(std::shared_ptr<transformer::TransformerModel>());
@@ -240,7 +254,8 @@ int main(int argc, char** argv) {
 				mono_cor_s, mono_cor_t,
 				devel_cor,
 				K, beam_size, alpha, gamma_1, gamma_2,
-				0/*use normal SGD*/);
+				0,/*use normal SGD*/
+				vm["dev-eval-measure"].as<unsigned>());
 	
 	
 	// finished!
@@ -251,13 +266,18 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
                 , const MonoData& mono_s, const MonoData& mono_t
                 , const WordIdCorpus& dev_cor // for evaluation
                 , unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
-                , unsigned opt_type)
+                , unsigned opt_type
+		, unsigned dev_eval_mea)
 {
 	cerr << endl << "Performing round tripping learning..." << endl;
 
 	// get dicts
 	dynet::Dict& sd = v_tm_models[0]->get_source_dict();
 	dynet::Dict& td = v_tm_models[0]->get_target_dict();
+
+	// configs
+	const transformer::TransformerConfig& tfc_s2t = v_tm_models[0]->get_config();
+	const transformer::TransformerConfig& tfc_t2s = v_tm_models[1]->get_config();
 
 	// set up monolingual data
 	vector<unsigned> orders_s(mono_s.size());// IDs from mono_s
@@ -266,6 +286,16 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 	std::iota(orders_t.begin(), orders_t.end(), 0);
 	shuffle(orders_s.begin(), orders_s.end(), *rndeng);// to make it random
 	shuffle(orders_t.begin(), orders_t.end(), *rndeng);
+
+	// model stats on dev
+	transformer::ModelStats dstats_s2t(dev_eval_mea);
+	transformer::ModelStats dstats_t2s(dev_eval_mea);
+	get_dev_stats(dev_cor, tfc_s2t, dstats_s2t);
+	get_dev_stats(dev_cor, tfc_t2s, dstats_t2s, true);
+
+	// create minibatches for development data
+	std::vector<std::vector<WordIdSentence> > dev_src_minibatch, dev_trg_minibatch;
+	create_minibatches(dev_cor, 1024/*set it by default*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 
 	// set up optimizers 
 	dynet::Trainer* p_sgd_s2t = create_sgd_trainer(opt_type, gamma_1, v_tm_models[0]->get_model_parameters());
@@ -277,7 +307,7 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 
 	// start the round tripping algorithm	
 	unsigned long id_s = 0, id_t = 0;
-	unsigned r = 0/*round*/, epoch_s2t = 0, epoch_t2s = 0;
+	unsigned r = 1/*round*/, epoch_s2t = 0, epoch_t2s = 0;
 	bool flag = true;// role of source and target
 	unsigned cpt_s2t = 0, cpt_t2s = 0/*count of patience*/;
 	while (epoch_s2t < MAX_EPOCH 
@@ -312,18 +342,19 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 		}
 
 		//---
-		cerr << "Sampled sentence: " << get_sentence(sent, (flag?sd:td)) << endl;
+		if (VERBOSE)
+			cerr << "Sampled sentence: " << get_sentence(sent, (flag?sd:td)) << endl;
 		//---
 
 		// generate K translated sentences s_{mid,1},...,s_{mid,K} using beam search according to translation model P(.|sentA; mod_am_s2t).
 		std::vector<WordIdSentence> v_mid_hyps;
-		cerr << "Performing beam decoding..." << endl;
+		if (VERBOSE) cerr << "Performing beam decoding..." << endl;
 		p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
 		p_tf_s2t->beam_decode(cg, sent, v_mid_hyps, beam_size, K);
 		p_tf_s2t->set_dropout(true);// enable dropout for training
 		std::vector<dynet::Expression> v_r1, v_r2;
 		for (auto& mid_hyp : v_mid_hyps){
-			cerr << "Decoded sentence: " << get_sentence(mid_hyp, (flag?td:sd)) << endl;		
+			if (VERBOSE) cerr << "Decoded sentence: " << get_sentence(mid_hyp, (flag?td:sd)) << endl;		
 
 			// set the language-model reward for current sampled sentence from p_alm
 			auto r1 = p_alm->build_graph(cg, WordIdSentences(1, mid_hyp));
@@ -346,8 +377,9 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 		cg.incremental_forward(i_loss);		
 		//-----------------------------------
 		float loss = dynet::as_scalar(cg.get_value(i_loss)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s));
-		p_sgd_s2t->status(); p_sgd_t2s->status();
+		p_sgd_s2t->status(); //p_sgd_t2s->status();
 		cerr << "round=" << r << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "loss=" << loss << "; " << "loss_s2t=" << loss_s2t << "; " << "loss_t2s=" << loss_t2s << endl;
+		cerr << "-----------------------------------" << endl << endl;
 		//-----------------------------------
 		
 		// execute backward step (including computation of derivatives)
@@ -362,46 +394,82 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 
 		if (id_s == id_t) r++;
 
-		// testing over the development data to check the improvements (after a desired number of rounds)
-		if (r == DEV_ROUND){
+		// evaluate over the development data to check the improvements (after a desired number of rounds)
+		if (r % DEV_ROUND){
 			// clear the graph first
 			cg.clear();
 
 			p_tf_s2t->set_dropout(false);// disable dropout for evaluaing on dev
 			p_tf_t2s->set_dropout(false);
 
-			/*
-			ModelStats dstats_s2t, dstats_t2s;
-			for (unsigned i = 0; i < dev_cor.size(); ++i) {
-				WordIdSentence ssent, tsent;
-				tie(ssent, tsent) = dev_cor[i]; 
-			
-				auto i_xent_s2t = p_tf_s2t->build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), &dstats_s2t, true);
-				auto i_xent_t2s = p_tf_t2s->build_graph(cg, WordIdSentences(1, tsent), WordIdSentences(1, ssent), &dstats_t2s, true);
-
-				dstats_s2t._scores[1] += dynet::as_scalar(cg.incremental_forward(i_xent_s2t));
-				dstats_t2s._scores[1] += dynet::as_scalar(cg.incremental_forward(i_xent_t2s));
-			}
+			eval_on_dev_batch(*p_tf_s2t, dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
+			eval_on_dev_batch(*p_tf_t2s, dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
 
 			dstats_s2t.update_best_score(cpt_s2t);
 			dstats_t2s.update_best_score(cpt_t2s);
 
-			if (cpt_s2t == 0) p_tf_s2t->save_params_to_file(params_out_file);
-			if (cpt_t2s == 0) p_tf_t2s->save_params_to_file(params_out_file);			
+			if (cpt_s2t == 0) p_tf_s2t->save_params_to_file(tfc_s2t._model_path + "/model.params.rt");
+			if (cpt_t2s == 0) p_tf_t2s->save_params_to_file(tfc_t2s._model_path + "/model.params.rt");
 
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-			cerr << "***DEV (s2t) [epoch=" << epoch_s2t + (float)id_s/(float)orders_s.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk <<  << endl;
-			cerr << "***DEV (t2s) [epoch=" << epoch_t2s + (float)id_t/(float)orders_t.size() << " eta=" << p_sgd_t2s->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_t2s.words_src_unk << " trg_unks=" << dstats_t2s.words_tgt_unk << " E=" << (dstats_t2s.loss / dstats_t2s.words_tgt) << " ppl=" << exp(dstats_t2s.loss / dstats_t2s.words_tgt) << endl;
-cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-			*/
+			cerr << "***DEV (s2t) [epoch=" << epoch_s2t + (float)id_s/(float)orders_s.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << dstats_s2t.get_score_string(false) << endl;
+			cerr << "***DEV (t2s) [epoch=" << epoch_t2s + (float)id_t/(float)orders_t.size() << " eta=" << p_sgd_t2s->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_t2s._words_src_unk << " trg_unks=" << dstats_t2s._words_tgt_unk << dstats_t2s.get_score_string(false) << endl;
+			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
+
+			// FIXME: observe cpt_s2t and cpt_t2s
 
 			p_tf_s2t->set_dropout(true);// enable dropout for next training
 			p_tf_t2s->set_dropout(true);
 
-			r = 0;
+			r = 1;
 		}
 	}
 }
+
+void eval_on_dev_batch(transformer::TransformerModel &tf, 
+	const std::vector<WordIdSentences> &dev_src_minibatch, const std::vector<WordIdSentences> &dev_tgt_minibatch,  
+	transformer::ModelStats& dstats, 
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
+{
+	if (dev_eval_mea == 0) // perplexity
+	{
+		double losses = 0.f;
+		for (unsigned i = 0; i < dev_src_minibatch.size(); i++) {		
+			const auto& ssentb = dev_src_minibatch[i];
+			const auto& tsentb = dev_tgt_minibatch[i];
+
+			dynet::ComputationGraph cg;
+			auto i_xent = tf.build_graph(cg, ssentb, tsentb, nullptr, true);
+			losses += as_scalar(cg.forward(i_xent));
+		}
+
+		dstats._scores[1] = losses;
+	}
+	else{
+		// FIXME
+	}
+}
+// ---
+
+// ---
+void get_dev_stats(const WordIdCorpus &devel_cor
+	, const transformer::TransformerConfig& tfc
+	, transformer::ModelStats& dstats
+	, bool swap)
+{
+	for (unsigned i = 0; i < devel_cor.size(); ++i) {
+		WordIdSentence ssent, tsent;
+		tie(ssent, tsent) = devel_cor[i];  
+
+		if (swap) std::swap(ssent, tsent);
+
+		dstats._words_src += ssent.size();
+		dstats._words_tgt += tsent.size() - 1; // shifted right 
+		for (auto& word : ssent) if (word == tfc._sm._kSRC_UNK) dstats._words_src_unk++;
+		for (auto& word : tsent) if (word == tfc._sm._kTGT_UNK) dstats._words_tgt_unk++;
+	}
+}
+// ---
 
 // ---
 dynet::Trainer* create_sgd_trainer(unsigned opt_type, float lr, dynet::ParameterCollection& model)
