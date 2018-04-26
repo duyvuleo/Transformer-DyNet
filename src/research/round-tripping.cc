@@ -70,17 +70,17 @@ int main(int argc, char** argv) {
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sequence length loaded from mono data; none by default")
 		("mono-load-percent", value<unsigned>()->default_value(100), "limit the use of <num> percent of sequences in monolingual data; full by default")
 		//-----------------------------------------	
-		("K", value<unsigned>()->default_value(10), "the K value for sampling K-best translations from transformer models")
-		("beam_size", value<unsigned>()->default_value(5), "the beam size of beam search decoding")
-		("alpha", value<float>()->default_value(0.5f), "the alpha hyper-parameter for balancing the rewards")
-		("gamma_1", value<float>()->default_value(0.1f), "the gamma 1 hyper-parameter for stochastic gradient update in tuning source-to-target transformer model")
-		("gamma_2", value<float>()->default_value(0.1f), "the gamma 2 hyper-parameter for stochastic gradient update in tuning target-to-source transformer model")
+		("K", value<unsigned>()->default_value(2), "the K value for sampling K-best translations from transformer models")
+		("beam_size", value<unsigned>()->default_value(4), "the beam size of beam search decoding")
+		("alpha", value<float>()->default_value(0.05f), "the alpha hyper-parameter for balancing the rewards")
+		("gamma_1", value<float>()->default_value(0.001f), "the gamma 1 hyper-parameter for stochastic gradient update in tuning source-to-target transformer model")
+		("gamma_2", value<float>()->default_value(0.001f), "the gamma 2 hyper-parameter for stochastic gradient update in tuning target-to-source transformer model")
 		//-----------------------------------------
 		("mono_s", value<string>()->default_value(""), "File to read the monolingual source from")
 		("mono_t", value<string>()->default_value(""), "File to read the monolingual target from")
 		//-----------------------------------------
-		("epoch,e", value<unsigned>()->default_value(50), "number of training epochs, 50 by default")
-		("dev_round", value<unsigned>()->default_value(25000), "number of rounds for evaluating over development data, 25000 by default")
+		("epoch,e", value<unsigned>()->default_value(20), "number of training epochs, 50 by default")
+		("dev_round", value<unsigned>()->default_value(10000), "number of rounds for evaluating over development data, 25000 by default")
 		//-----------------------------------------
 		("verbose,v", "be extremely chatty")
 	;
@@ -262,6 +262,8 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 	// set up monolingual data
 	vector<unsigned> orders_s(mono_s.size());// IDs from mono_s
 	vector<unsigned> orders_t(mono_t.size());// IDs from mono_t
+	std::iota(orders_s.begin(), orders_s.end(), 0);
+	std::iota(orders_t.begin(), orders_t.end(), 0);
 	shuffle(orders_s.begin(), orders_s.end(), *rndeng);// to make it random
 	shuffle(orders_t.begin(), orders_t.end(), *rndeng);
 
