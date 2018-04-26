@@ -36,6 +36,8 @@ int main_body(variables_map vm);
 
 typedef WordIdSentences MonoData;
 
+std::string get_sentence(const WordIdSentence& source, Dict& td);
+
 // create SGD trainer
 dynet::Trainer* create_sgd_trainer(unsigned opt_type, float lr, dynet::ParameterCollection& model);
 
@@ -45,7 +47,7 @@ MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq
 // main round tripping function
 void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerModel>>& v_tm_models, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_alm_models
 		, const MonoData& mono_s, const MonoData& mono_t
-		, const WordIdCorpus& dev_cor, const WordIdCorpus& dev_cor_rev // for evaluation
+		, const WordIdCorpus& dev_cor // for evaluation
 		, unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
 		, unsigned opt_type);
 
@@ -229,15 +231,14 @@ int main(int argc, char** argv) {
 	mono_cor_t = read_mono_data(v_tf_lmodels[1]->get_dict(), vm["mono_t"].as<string>(), vm["max-seq-len"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
 
 	// development parallel data
-	WordIdCorpus devel_cor, devel_cor_rev;// integer-converted dev parallel data
+	WordIdCorpus devel_cor;// integer-converted dev parallel data
 	cerr << endl << "Reading dev parallel data from " << vm["devel"].as<std::string>() << "...\n";
 	devel_cor = read_corpus(vm["devel"].as<std::string>(), &v_tf_models[0]->get_source_dict(), &v_tf_models[0]->get_target_dict(), false/*for development*/);
-	devel_cor_rev = read_corpus(vm["devel"].as<std::string>(), &v_tf_models[1]->get_source_dict(), &v_tf_models[1]->get_target_dict(), false/*for development*/, 0, false, true);		
 
 	//--- execute round tripping
 	run_round_tripping(v_tf_models, v_tf_lmodels, 
 				mono_cor_s, mono_cor_t,
-				devel_cor, devel_cor_rev,
+				devel_cor,
 				K, beam_size, alpha, gamma_1, gamma_2,
 				0/*use normal SGD*/);
 	
@@ -248,10 +249,16 @@ int main(int argc, char** argv) {
 
 void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerModel>>& v_tm_models, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_alm_models
                 , const MonoData& mono_s, const MonoData& mono_t
-                , const WordIdCorpus& dev_cor, const WordIdCorpus& dev_cor_rev // for evaluation
+                , const WordIdCorpus& dev_cor // for evaluation
                 , unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
                 , unsigned opt_type)
 {
+	cerr << "Performing round tripping learning..." << endl;
+
+	// get dicts
+	dynet::Dict& sd = v_tm_models[0]->get_source_dict();
+	dynet::Dict& td = v_tm_models[0]->get_target_dict();
+
 	// set up monolingual data
 	vector<unsigned> orders_s(mono_s.size());// IDs from mono_s
 	vector<unsigned> orders_t(mono_t.size());// IDs from mono_t
@@ -302,11 +309,18 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 			p_alm = v_alm_models[0].get();
 		}
 
+		//---
+		cerr << "Sampled sentence: " << get_sentence(sent, (flag?sd:td)) << endl;
+		//---
+
 		// generate K translated sentences s_{mid,1},...,s_{mid,K} using beam search according to translation model P(.|sentA; mod_am_s2t).
 		std::vector<WordIdSentence> v_mid_hyps;
-		p_tf_s2t->beam_decode(cg, sent, v_mid_hyps, beam_size, K);		
+		cerr << "Performing beam decoding..." << endl;
+		p_tf_s2t->beam_decode(cg, sent, v_mid_hyps, beam_size, K);
 		std::vector<dynet::Expression> v_r1, v_r2;
 		for (auto& mid_hyp : v_mid_hyps){
+			cerr << "Decoded sentence: " << get_sentence(mid_hyp, (flag?td:sd)) << endl;		
+
 			// set the language-model reward for current sampled sentence from p_alm
 			auto r1 = p_alm->build_graph(cg, WordIdSentences(1, mid_hyp));
 			
@@ -424,5 +438,23 @@ MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq
 
 	return mono;
 }
+
+//---
+std::string get_sentence(const WordIdSentence& source, Dict& td){
+	WordId eos_sym = td.convert("</s>");
+
+	std::stringstream ss;
+	for (WordId w : source){
+		if (w == eos_sym) {
+			ss << "</s>";
+			break;// stop if seeing EOS marker!
+		}
+
+		ss << td.convert(w) << " ";
+	}
+
+	return ss.str();
+}
+//---
 
 
