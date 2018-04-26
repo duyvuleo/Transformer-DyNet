@@ -253,7 +253,7 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
                 , unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
                 , unsigned opt_type)
 {
-	cerr << "Performing round tripping learning..." << endl;
+	cerr << endl << "Performing round tripping learning..." << endl;
 
 	// get dicts
 	dynet::Dict& sd = v_tm_models[0]->get_source_dict();
@@ -316,7 +316,9 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 		// generate K translated sentences s_{mid,1},...,s_{mid,K} using beam search according to translation model P(.|sentA; mod_am_s2t).
 		std::vector<WordIdSentence> v_mid_hyps;
 		cerr << "Performing beam decoding..." << endl;
+		p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
 		p_tf_s2t->beam_decode(cg, sent, v_mid_hyps, beam_size, K);
+		p_tf_s2t->set_dropout(true);// enable dropout for training
 		std::vector<dynet::Expression> v_r1, v_r2;
 		for (auto& mid_hyp : v_mid_hyps){
 			cerr << "Decoded sentence: " << get_sentence(mid_hyp, (flag?td:sd)) << endl;		
@@ -363,14 +365,17 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 			// clear the graph first
 			cg.clear();
 
+			p_tf_s2t->set_dropout(false);// disable dropout for evaluaing on dev
+			p_tf_t2s->set_dropout(false);
+
 			/*
 			ModelStats dstats_s2t, dstats_t2s;
 			for (unsigned i = 0; i < dev_cor.size(); ++i) {
 				WordIdSentence ssent, tsent;
 				tie(ssent, tsent) = dev_cor[i]; 
 			
-				auto i_xent_s2t = p_tf_s2t->build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), &dstats_s2t);
-				auto i_xent_t2s = p_tf_t2s->build_graph(cg, WordIdSentences(1, tsent), WordIdSentences(1, ssent), &dstats_t2s);
+				auto i_xent_s2t = p_tf_s2t->build_graph(cg, WordIdSentences(1, ssent), WordIdSentences(1, tsent), &dstats_s2t, true);
+				auto i_xent_t2s = p_tf_t2s->build_graph(cg, WordIdSentences(1, tsent), WordIdSentences(1, ssent), &dstats_t2s, true);
 
 				dstats_s2t._scores[1] += dynet::as_scalar(cg.incremental_forward(i_xent_s2t));
 				dstats_t2s._scores[1] += dynet::as_scalar(cg.incremental_forward(i_xent_t2s));
@@ -387,6 +392,9 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 			cerr << "***DEV (t2s) [epoch=" << epoch_t2s + (float)id_t/(float)orders_t.size() << " eta=" << p_sgd_t2s->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_t2s.words_src_unk << " trg_unks=" << dstats_t2s.words_tgt_unk << " E=" << (dstats_t2s.loss / dstats_t2s.words_tgt) << " ppl=" << exp(dstats_t2s.loss / dstats_t2s.words_tgt) << endl;
 cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 			*/
+
+			p_tf_s2t->set_dropout(true);// enable dropout for next training
+			p_tf_t2s->set_dropout(true);
 
 			r = 0;
 		}
