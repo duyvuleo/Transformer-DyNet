@@ -1209,8 +1209,10 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 			for (auto vi = vocab.begin(); vi < vocab.begin() + beam_width; ++vi) {
 				//if (new_chart.size() < beam_width) {
 					Hypothesis hnew(*vi, hprev.cost - std::log(ydist[*vi]), hprev, aligns);
-					if (*vi == (unsigned int)eos_sym)
-						completed.push_back(hnew);
+					if (*vi == (unsigned int)eos_sym){
+						if (hnew.target.size() > 1) // to avoid bad sequences, e.g., <s> </s>
+							completed.push_back(hnew);
+					}
 					else
 						new_chart.push_back(hnew);
 				//} 
