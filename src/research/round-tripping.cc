@@ -40,9 +40,9 @@ typedef WordIdSentences MonoData;
 MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq_len=0, unsigned load_percent=100);
 
 // main round tripping function
-void run_round_tripping(transformer::TransformerModel& s2t_mod, transformer::TransformerModel& t2t_mod
+void run_round_tripping(std::vector<transformer::TransformerModel>& v_tm_models, std::vector<transformer::TransformerLModel>& v_alm_models
 		, const MonoData& mono_s, const MonoData& mono_t
-		, const WordIdCorpus& dev_cor /*for evaluation*/
+		, const WordIdCorpus& dev_cor, const WordIdCorpus& dev_cor_rev // for evaluation
 		, unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
 		, unsigned opt_type);
 
@@ -97,11 +97,11 @@ int main(int argc, char** argv) {
 	// hyper-parameters
 	unsigned K = vm["K"].as<unsigned>();
 	unsigned beam_size = vm["beam_size"].as<unsigned>();
-	float alpha = vm["alpha"].as<unsigned>();
-	float gamma_1 = vm["gamma_1"].as<unsigned>();
-	float gamma_2 = vm["gamma_2"].as<unsigned>();
+	float alpha = vm["alpha"].as<float>();
+	float gamma_1 = vm["gamma_1"].as<float>();
+	float gamma_2 = vm["gamma_2"].as<float>();
 	MAX_EPOCH = vm["epoch"].as<unsigned>();
-	DEV_ROUND = vm["dev_round"].as<unsigned>();
+	DEV_ROUND = vm["dev_round"].as<unsigned>();	
 
 	//--- load models
 	// Transformer Model recipes
@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
 			std::string model_file = model_path + "/model.params";
 			if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
 			{
-				cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
+				cerr << "Loading pre-trained model from file: " << model_file << "..." << endl;
 				v_tf_models.back()->initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
 			}
 			cerr << "Count of model parameters: " << v_tf_models.back()->get_model_parameters().parameter_count() << endl;
@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
 			std::string model_file = model_path + "/model.params";
 			if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
 			{
-				cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
+				cerr << "Loading pre-trained model from file: " << model_file << "..." << endl;
 				v_tf_lmodels.back()->initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
 			}
 			cerr << "Count of model parameters: " << v_tf_lmodels.back()->get_model_parameters().parameter_count() << endl;
@@ -220,31 +220,42 @@ int main(int argc, char** argv) {
 	// monolingual corpora
 	// Assume that these monolingual corpora use the same vocabularies with parallel corpus	used for training.
 	MonoData mono_cor_s, mono_cor_t;
-	cerr << "Reading monolingual source data from " << vm["mono_s"].as<string>() << "...\n";
+	cerr << endl << "Reading monolingual source data from " << vm["mono_s"].as<string>() << "...\n";
 	mono_cor_s = read_mono_data(v_tf_lmodels[0]->get_dict(), vm["mono_s"].as<string>(), vm["max-seq-len"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
 	cerr << "Reading monolingual target data from " << vm["mono_t"].as<string>() << "...\n";
 	mono_cor_t = read_mono_data(v_tf_lmodels[1]->get_dict(), vm["mono_t"].as<string>(), vm["max-seq-len"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
 
 	// development parallel data
 	WordIdCorpus devel_cor, devel_cor_rev;// integer-converted dev parallel data
-	cerr << "Reading dev parallel data from " << vm["devel"].as<std::string>() << "...\n";
+	cerr << endl << "Reading dev parallel data from " << vm["devel"].as<std::string>() << "...\n";
 	devel_cor = read_corpus(vm["devel"].as<std::string>(), &v_tf_models[0]->get_source_dict(), &v_tf_models[0]->get_target_dict(), false/*for development*/);
-	devel_cor_rev = read_corpus(vm["devel"].as<std::string>(), &v_tf_models[1]->get_source_dict(), &v_tf_models[1]->get_target_dict(), false/*for development*/);		
+	devel_cor_rev = read_corpus(vm["devel"].as<std::string>(), &v_tf_models[1]->get_source_dict(), &v_tf_models[1]->get_target_dict(), false/*for development*/, 0, false, true);		
 
-	//--- execute dual-learning
-	// FIXME
+	//--- execute round tripping
+	run_round_tripping(v_tf_models, v_tf_lmodels, 
+				mono_cor_s, mono_cor_t,
+				dev_cor, dev_cor_rev,
+				K, beam_size, alpha, gamma_1, gamma_2,
+				0/*use normal SGD*/);
+	
 	
 	// finished!
 	return EXIT_SUCCESS;
 }
 
-void run_round_tripping(transformer::TransformerModel& s2t_mod, transformer::TransformerModel& t2t_mod
-		, const MonoData& mono_s, const MonoData& mono_t
-		, const WordIdCorpus& dev_cor /*for evaluation*/
-		, unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
-		, unsigned opt_type)
+void run_round_tripping(std::vector<transformer::TransformerModel>& v_tm_models, std::vector<transformer::TransformerLModel>& v_alm_models
+                , const MonoData& mono_s, const MonoData& mono_t
+                , const WordIdCorpus& dev_cor, const WordIdCorpus& dev_cor_rev // for evaluation
+                , unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
+                , unsigned opt_type)
 {
-	// FIXME
+	// set up monolingual data
+	vector<unsigned> orders_s(mono_s.size());// IDs from mono_s
+	vector<unsigned> orders_t(mono_t.size());// IDs from mono_t
+	shuffle(orders_s.begin(), orders_s.end(), *rndeng);// to make it random
+	shuffle(orders_t.begin(), orders_t.end(), *rndeng);
+
+	// 
 }
 
 MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq_len, unsigned load_percent)
@@ -268,7 +279,5 @@ MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq
 
 	return mono;
 }
-
-
 
 
