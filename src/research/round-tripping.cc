@@ -313,81 +313,83 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 	while (epoch_s2t < MAX_EPOCH 
 		|| epoch_t2s < MAX_EPOCH)// FIXME: simple stopping criterion, another?
 	{
-		dynet::ComputationGraph cg; 
+		{// this block to prevent multiple graph creation which DyNet does not support yet!
+			dynet::ComputationGraph cg; 
 
-		if (id_s == orders_s.size()){
-			shuffle(orders_s.begin(), orders_s.end(), *rndeng);// to make it random
-			id_s = 0;// reset id
-			epoch_s2t++;// FIXME: adjust the learning rate if required?
-		}
-		if (id_t == orders_t.size()){
-			shuffle(orders_t.begin(), orders_t.end(), *rndeng);// to make it random
-			id_t = 0;// reset id
-			epoch_t2s++;// FIXME: adjust the learning rate if required?
-		}
+			if (id_s == orders_s.size()){
+				shuffle(orders_s.begin(), orders_s.end(), *rndeng);// to make it random
+				id_s = 0;// reset id
+				epoch_s2t++;// FIXME: adjust the learning rate if required?
+			}
+			if (id_t == orders_t.size()){
+				shuffle(orders_t.begin(), orders_t.end(), *rndeng);// to make it random
+				id_t = 0;// reset id
+				epoch_t2s++;// FIXME: adjust the learning rate if required?
+			}
 
-		// sample sentence sentA and sentB from mono_cor_s and mono_cor_s respectively
-		WordIdSentence sent;
-		if (flag){// sample from A
-			sent = mono_s[orders_s[id_s++]];
-			p_tf_s2t = v_tm_models[0].get();
-			p_tf_t2s = v_tm_models[1].get();
-			p_alm = v_alm_models[1].get();
-		}
-		else{// sample from B
-			sent = mono_t[orders_t[id_t++]];
-			p_tf_s2t = v_tm_models[1].get();
-			p_tf_t2s = v_tm_models[0].get();
-			p_alm = v_alm_models[0].get();
-		}
+			// sample sentence sentA and sentB from mono_cor_s and mono_cor_s respectively
+			WordIdSentence sent;
+			if (flag){// sample from A
+				sent = mono_s[orders_s[id_s++]];
+				p_tf_s2t = v_tm_models[0].get();
+				p_tf_t2s = v_tm_models[1].get();
+				p_alm = v_alm_models[1].get();
+			}
+			else{// sample from B
+				sent = mono_t[orders_t[id_t++]];
+				p_tf_s2t = v_tm_models[1].get();
+				p_tf_t2s = v_tm_models[0].get();
+				p_alm = v_alm_models[0].get();
+			}
 
-		//---
-		if (VERBOSE)
-			cerr << "Sampled sentence: " << get_sentence(sent, (flag?sd:td)) << endl;
-		//---
+			//---
+			if (VERBOSE)
+				cerr << "Sampled sentence: " << get_sentence(sent, (flag?sd:td)) << endl;
+			//---
 
-		// generate K translated sentences s_{mid,1},...,s_{mid,K} using beam search according to translation model P(.|sentA; mod_am_s2t).
-		std::vector<WordIdSentence> v_mid_hyps;
-		if (VERBOSE) cerr << "Performing beam decoding..." << endl;
-		p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
-		p_tf_s2t->beam_decode(cg, sent, v_mid_hyps, beam_size, K);
-		p_tf_s2t->set_dropout(true);// enable dropout for training
-		std::vector<dynet::Expression> v_r1, v_r2;
-		for (auto& mid_hyp : v_mid_hyps){
-			if (VERBOSE) cerr << "Decoded sentence: " << get_sentence(mid_hyp, (flag?td:sd)) << endl;		
+			// generate K translated sentences s_{mid,1},...,s_{mid,K} using beam search according to translation model P(.|sentA; mod_am_s2t).
+			std::vector<WordIdSentence> v_mid_hyps;
+			if (VERBOSE) cerr << "Performing beam decoding..." << endl;
+			p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
+			p_tf_s2t->beam_decode(cg, sent, v_mid_hyps, beam_size, K);
+			p_tf_s2t->set_dropout(true);// enable dropout for training
+			std::vector<dynet::Expression> v_r1, v_r2;
+			for (auto& mid_hyp : v_mid_hyps){
+				if (VERBOSE) cerr << "Decoded sentence: " << get_sentence(mid_hyp, (flag?td:sd)) << endl;		
 
-			// set the language-model reward for current sampled sentence from p_alm
-			auto r1 = p_alm->build_graph(cg, WordIdSentences(1, mid_hyp));
+				// set the language-model reward for current sampled sentence from p_alm
+				auto r1 = p_alm->build_graph(cg, WordIdSentences(1, mid_hyp));
 			
-			// set the communication reward for current sampled sentence from p_tf_t2s
-			auto r2 = p_tf_t2s->build_graph(cg, WordIdSentences(1, mid_hyp), WordIdSentences(1, sent));
+				// set the communication reward for current sampled sentence from p_tf_t2s
+				auto r2 = p_tf_t2s->build_graph(cg, WordIdSentences(1, mid_hyp), WordIdSentences(1, sent));
 			
-			// interpolate the rewards
-			auto r = alpha * r1 + (1.f - alpha) * r2;
-			v_r1.push_back(r * (p_tf_s2t->build_graph(cg, WordIdSentences(1, sent), WordIdSentences(1, mid_hyp))));
-			v_r2.push_back((1.f - alpha) * r2);
-		}
+				// interpolate the rewards
+				auto r = alpha * r1 + (1.f - alpha) * r2;
+				v_r1.push_back(r * (p_tf_s2t->build_graph(cg, WordIdSentences(1, sent), WordIdSentences(1, mid_hyp))));
+				v_r2.push_back((1.f - alpha) * r2);
+			}
 
-		// set total loss function
-		dynet::Expression i_loss_s2t = dynet::sum(v_r1) / K;// use dynet::average(v_r1) instead?
-		dynet::Expression i_loss_t2s = dynet::sum(v_r2) / K;// use dynet::average(v_r2) instead?
-		dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;
+			// set total loss function
+			dynet::Expression i_loss_s2t = dynet::sum(v_r1) / K;// use dynet::average(v_r1) instead?
+			dynet::Expression i_loss_t2s = dynet::sum(v_r2) / K;// use dynet::average(v_r2) instead?
+			dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;
 
-		// execute forward step
-		cg.incremental_forward(i_loss);		
-		//-----------------------------------
-		float loss = dynet::as_scalar(cg.get_value(i_loss)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s));
-		p_sgd_s2t->status(); //p_sgd_t2s->status();
-		cerr << "round=" << r << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "loss=" << loss << "; " << "loss_s2t=" << loss_s2t << "; " << "loss_t2s=" << loss_t2s << endl;
-		cerr << "-----------------------------------" << endl << endl;
-		//-----------------------------------
+			// execute forward step
+			cg.incremental_forward(i_loss);		
+			//-----------------------------------
+			float loss = dynet::as_scalar(cg.get_value(i_loss)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s));
+			p_sgd_s2t->status(); //p_sgd_t2s->status();
+			cerr << "round=" << r << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "loss=" << loss << "; " << "loss_s2t=" << loss_s2t << "; " << "loss_t2s=" << loss_t2s << endl;
+			cerr << "-----------------------------------" << endl << endl;
+			//-----------------------------------
 		
-		// execute backward step (including computation of derivatives)
-		cg.backward(i_loss);
+			// execute backward step (including computation of derivatives)
+			cg.backward(i_loss);
 
-		// update parameters
-		p_sgd_s2t->update();
-		p_sgd_t2s->update();		
+			// update parameters
+			p_sgd_s2t->update();
+			p_sgd_t2s->update();	
+		}	
 
 		// switch source and target roles
 		flag = !flag;
@@ -396,9 +398,6 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 
 		// evaluate over the development data to check the improvements (after a desired number of rounds)
 		if (r % DEV_ROUND){
-			// clear the graph first
-			cg.clear();
-
 			p_tf_s2t->set_dropout(false);// disable dropout for evaluaing on dev
 			p_tf_t2s->set_dropout(false);
 
