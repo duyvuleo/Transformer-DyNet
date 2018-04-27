@@ -284,9 +284,123 @@ struct Encoder{
 		return i_src;
 	}
 
+	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
+		, const std::vector<dynet::Expression>& v_soft_sources/*batched soft sources*/
+		, ModelStats* pstats=nullptr)
+	{
+		// compute embeddings
+		// get max length within a batch
+		unsigned bsize = v_soft_sources[0].dim().batch_elems();		
+		_batch_slen = v_soft_sources.size();
+
+		dynet::Expression i_src;
+		if (_p_tfc->_use_hybrid_model){
+			// first 2 layers (forward and backward)
+			// run a RNN backward and forward over the source sentence
+			// and stack the top-level hidden states from each model 
+			// and feed them into yet another forward RNN as 
+			// the representation at each position
+			// inspired from Google NMT system (https://arxiv.org/pdf/1609.08144.pdf)
+
+			std::vector<dynet::Expression> source_embeddings;   
+
+			// first RNN (forward)
+			std::vector<Expression> src_fwd(_batch_slen);
+			_v_p_src_rnns[0]->new_graph(cg);
+			_v_p_src_rnns[0]->start_new_sequence();
+			for (unsigned l = 0; l < _batch_slen; l++){
+				src_fwd[l] = _v_p_src_rnns[0]->add_input(v_soft_sources[l]);
+			}
+
+			// second RNN (backward)
+			std::vector<Expression> src_bwd(_batch_slen);
+			_v_p_src_rnns[1]->new_graph(cg);
+			_v_p_src_rnns[1]->start_new_sequence();
+			for (int l = _batch_slen - 1; l >= 0; --l) { // int instead of unsigned for negative value of l
+				// offset by one position to the right, to catch </s> and generally
+				// not duplicate the w_t already captured in src_fwd[t]
+				src_bwd[l] = _v_p_src_rnns[1]->add_input(v_soft_sources[l]);
+			}
+
+			// third RNN (yet another forward)
+			_v_p_src_rnns[2]->new_graph(cg);
+			_v_p_src_rnns[2]->start_new_sequence();
+			for (unsigned l = 0; l < _batch_slen; l++){
+				source_embeddings.push_back(_v_p_src_rnns[2]->add_input(dynet::concatenate(std::vector<dynet::Expression>({src_fwd[l], src_bwd[l]}))));
+			}
+			
+			i_src = dynet::concatenate_cols(source_embeddings);
+		}
+		else{
+			// source embeddings			
+			i_src = dynet::concatenate_cols(v_soft_sources);// ((num_units, Lx), batch_size)
+
+			i_src = i_src * _scale_emb;// scaled embeddings
+
+			// + postional encoding
+			if (_p_tfc->_position_encoding_flag == 0 || _p_tfc->_position_encoding_flag == 1){
+				if (_p_tfc->_position_encoding == 1){// learned positional embedding 
+					std::vector<dynet::Expression> pos_embeddings;  
+					std::vector<unsigned> positions(bsize);
+					for (unsigned l = 0; l < _batch_slen; l++){
+						for (unsigned bs = 0; bs < bsize; ++bs){
+							if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to (_p_tfc._max_length - 1).
+							else
+								positions[bs] = l;
+					}
+
+						pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+					}
+					dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// ((num_units, Lx), batch_size)
+
+					i_src = i_src + i_pos;
+				}
+				else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
+					dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_src.dim());
+
+					i_src = i_src + i_pos;
+				}
+				else if (_p_tfc->_position_encoding != 0) TRANSFORMER_RUNTIME_ASSERT("Unknown positional encoding type!");
+			}
+		}	
+
+		// dropout to the sums of the embeddings and the positional encodings
+		if (_p_tfc->_use_dropout && _p_tfc->_encoder_emb_dropout_rate > 0.f)
+#ifdef USE_COLWISE_DROPOUT
+			i_src = dynet::dropout_dim(i_src, 1/*col-major*/, _p_tfc->_encoder_emb_dropout_rate);// col-wise dropout
+#else
+			i_src = dynet::dropout(i_src, _p_tfc->_encoder_emb_dropout_rate);// full dropout
+#endif
+
+		// create maskings
+		std::vector<std::vector<float>> v_seq_masks(bsize, std::vector<float>(_batch_slen, 0.f));
+		_self_mask.create_seq_mask_expr(cg, v_seq_masks);
+#ifdef MULTI_HEAD_ATTENTION_PARALLEL
+		_self_mask.create_padding_positions_masks(_p_tfc->_nheads);
+#else
+		_self_mask.create_padding_positions_masks(1);
+#endif
+
+		return i_src;
+	}
+
 	dynet::Expression build_graph(dynet::ComputationGraph &cg, const WordIdSentences& ssents/*batch of sentences*/, ModelStats* pstats=nullptr){
 		// compute source (+ postion) embeddings
 		dynet::Expression i_src_rep = compute_embeddings_and_masks(cg, ssents, pstats);// ((num_units, Lx), batch_size)
+		
+		// compute stacked encoder layers
+		dynet::Expression i_enc_l_out = i_src_rep;
+		for (auto& enc : _v_enc_layers){
+			// stacking approach
+			i_enc_l_out = enc.build_graph(cg, i_enc_l_out, _self_mask);// each position in the encoder can attend to all positions in the previous layer of the encoder.
+		}
+
+		return i_enc_l_out;// ((num_units, Lx), batch_size)
+	}
+
+	dynet::Expression build_graph(dynet::ComputationGraph &cg, const std::vector<dynet::Expression>& v_soft_sources/*batched soft sources*/, ModelStats* pstats=nullptr){
+		// compute source (+ postion) embeddings
+		dynet::Expression i_src_rep = compute_embeddings_and_masks(cg, v_soft_sources, pstats);// ((num_units, Lx), batch_size)
 		
 		// compute stacked encoder layers
 		dynet::Expression i_enc_l_out = i_src_rep;
