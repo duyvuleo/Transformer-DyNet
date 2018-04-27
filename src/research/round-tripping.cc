@@ -380,7 +380,7 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 			float loss = dynet::as_scalar(cg.get_value(i_loss)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s));
 			p_sgd_s2t->status(); //p_sgd_t2s->status();
 			cerr << "round=" << r << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "loss=" << loss << "; " << "loss_s2t=" << loss_s2t << "; " << "loss_t2s=" << loss_t2s << endl;
-			cerr << "-----------------------------------" << endl << endl;
+			cerr << "-----------------------------------" << endl;
 			//-----------------------------------
 		
 			// execute backward step (including computation of derivatives)
@@ -397,12 +397,12 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 		if (id_s == id_t) r++;
 
 		// evaluate over the development data to check the improvements (after a desired number of rounds)
-		if (r % DEV_ROUND){
+		if (r % DEV_ROUND == 0){
 			p_tf_s2t->set_dropout(false);// disable dropout for evaluaing on dev
 			p_tf_t2s->set_dropout(false);
 
-			eval_on_dev_batch(*p_tf_s2t, dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
-			eval_on_dev_batch(*p_tf_t2s, dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
+			eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
+			eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
 
 			dstats_s2t.update_best_score(cpt_s2t);
 			dstats_t2s.update_best_score(cpt_t2s);
@@ -411,8 +411,8 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 			if (cpt_t2s == 0) p_tf_t2s->save_params_to_file(tfc_t2s._model_path + "/model.params.rt");
 
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-			cerr << "***DEV (s2t) [epoch=" << epoch_s2t + (float)id_s/(float)orders_s.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << dstats_s2t.get_score_string(false) << endl;
-			cerr << "***DEV (t2s) [epoch=" << epoch_t2s + (float)id_t/(float)orders_t.size() << " eta=" << p_sgd_t2s->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_t2s._words_src_unk << " trg_unks=" << dstats_t2s._words_tgt_unk << dstats_t2s.get_score_string(false) << endl;
+			cerr << "***DEV (s2t) [epoch=" << epoch_s2t + (float)id_s/(float)orders_s.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << " " << dstats_s2t.get_score_string(false) << endl;
+			cerr << "***DEV (t2s) [epoch=" << epoch_t2s + (float)id_t/(float)orders_t.size() << " eta=" << p_sgd_t2s->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_t2s._words_src_unk << " trg_unks=" << dstats_t2s._words_tgt_unk << " " << dstats_t2s.get_score_string(false) << endl;
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 
 			// FIXME: observe cpt_s2t and cpt_t2s
