@@ -137,6 +137,10 @@ struct Encoder{
 	// transformer config pointer
 	TransformerConfig* _p_tfc = nullptr;
 
+	dynet::Expression get_wrd_embeddings(dynet::ComputationGraph& cg, const std::vector<unsigned>& words){
+		return dynet::lookup(cg, _p_embed_s, words);
+	}
+
 	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
 		, const WordIdSentences& sents/*batch of sentences*/
 		, ModelStats* pstats=nullptr)
@@ -450,6 +454,10 @@ struct Decoder{
 		return dynet::parameter(cg, _p_embed_t);// target word embedding matrix (num_units x |V_T|)
 	}
 
+	dynet::Expression get_wrd_embeddings(dynet::ComputationGraph& cg, const std::vector<unsigned>& words){
+		return dynet::lookup(cg, _p_embed_t, words);
+	}
+
 	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
 		, const WordIdSentences& sents/*batch of target sentences*/)
 	{
@@ -567,6 +575,92 @@ struct Decoder{
 
 		return i_tgt;
 	}
+
+	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
+		, const std::vector<dynet::Expression>& v_soft_targets/*batch of soft word target embeddings*/)
+	{
+		// compute embeddings			
+		// get max length in a batch
+		unsigned bsize = v_soft_targets[0].dim().batch_elems();
+		_batch_tlen = v_soft_targets.size();
+		
+		dynet::Expression i_tgt;
+		if (_p_tfc->_use_hybrid_model){
+			// target embeddings via RNN
+			std::vector<dynet::Expression> target_embeddings; 
+			_p_tgt_rnn->new_graph(cg);
+			_p_tgt_rnn->start_new_sequence();
+			for (unsigned l = 0; l < _batch_tlen - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+				target_embeddings.push_back(_p_tgt_rnn->add_input(v_soft_targets[l]));
+			}
+
+			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
+		}
+		else{
+			i_tgt = dynet::concatenate_cols(v_soft_targets);// ((num_units, Ly), batch_size)
+
+			// scale
+			i_tgt = i_tgt * _scale_emb;// scaled embeddings
+
+			// + postional encoding
+			if (_p_tfc->_position_encoding_flag == 0 || _p_tfc->_position_encoding_flag == 2){
+				if (_p_tfc->_position_encoding == 1){// learned positional embedding 
+					std::vector<dynet::Expression> pos_embeddings;  
+					std::vector<unsigned> positions(bsize);
+					for (unsigned l = 0; l < _batch_tlen - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+						for (unsigned bs = 0; bs < bsize; ++bs){
+							if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
+							else
+								positions[bs] = l;
+					}
+
+						pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+					}
+					dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// ((num_units, Ly), batch_size)
+
+					i_tgt = i_tgt + i_pos;
+				}
+				else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
+					dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_tgt.dim());
+
+					i_tgt = i_tgt + i_pos;
+				}
+				else if (_p_tfc->_position_encoding != 0) TRANSFORMER_RUNTIME_ASSERT("Unknown positional encoding type!");
+			}
+		}
+
+		// dropout to the sums of the embeddings and the positional encodings
+		if (_p_tfc->_use_dropout && _p_tfc->_decoder_emb_dropout_rate > 0.f)
+#ifdef USE_COLWISE_DROPOUT
+			i_tgt = dynet::dropout_dim(i_tgt, 1/*col-major*/, _p_tfc->_decoder_emb_dropout_rate);// col-wise dropout
+#else
+			i_tgt = dynet::dropout(i_tgt, _p_tfc->_decoder_emb_dropout_rate);// full dropout		
+#endif
+
+		std::vector<std::vector<float>> v_seq_masks(bsize, std::vector<float>(_batch_tlen, 0.f));
+
+		// create maskings
+		// self-attention
+		// for future blinding
+		_self_mask.create_future_blinding_mask(cg, i_tgt.dim()[1]);
+
+		// for padding positions blinding
+		_self_mask.create_seq_mask_expr(cg, v_seq_masks);
+#ifdef MULTI_HEAD_ATTENTION_PARALLEL
+		_self_mask.create_padding_positions_masks(_p_tfc->_nheads);
+#else 
+		_self_mask.create_padding_positions_masks(1);
+#endif
+		// source-attention
+		_src_mask.create_seq_mask_expr(cg, v_seq_masks, false);
+#ifdef MULTI_HEAD_ATTENTION_PARALLEL
+		_src_mask.create_padding_positions_masks(_p_encoder->_self_mask._i_seq_mask, _p_tfc->_nheads);
+#else 
+		_src_mask.create_padding_positions_masks(_p_encoder->_self_mask._i_seq_mask, 1);
+#endif
+
+		return i_tgt;
+	}
 	
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& tsents/*batch of sentences*/
@@ -574,6 +668,23 @@ struct Decoder{
 	{		
 		// compute target (+ postion) embeddings
 		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, tsents);// ((num_units, Ly), batch_size)
+	
+		// compute the decoder representation		
+		dynet::Expression i_dec_l_out = i_tgt_rep;
+		for (auto& dec : _v_dec_layers){
+			// stacking approach
+			i_dec_l_out = dec.build_graph(cg, i_src_rep, i_dec_l_out, _self_mask, _src_mask);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
+		}
+	
+		return i_dec_l_out;// ((num_units, Ly), batch_size)
+	}
+
+	dynet::Expression build_graph(dynet::ComputationGraph &cg
+		, const std::vector<dynet::Expression>& v_soft_targets/*batch of expressions*/
+		, const dynet::Expression& i_src_rep)
+	{		
+		// compute target (+ postion) embeddings
+		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, v_soft_targets);// ((num_units, Ly), batch_size)
 	
 		// compute the decoder representation		
 		dynet::Expression i_dec_l_out = i_tgt_rep;
@@ -617,6 +728,9 @@ public:
 		, const WordIdSentences &partial_sents
 		, bool log_prob
 		, std::vector<dynet::Expression> &aligns);
+	dynet::Expression step_forward(dynet::ComputationGraph &cg
+		, const dynet::Expression& i_src_rep
+		, std::vector<Expression>& v_soft_targets);
 	void sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// random sampling
 	void sample(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets); // batched version of random sampling
 	void sample_sentences(dynet::ComputationGraph& cg
@@ -628,6 +742,7 @@ public:
 	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets);// batched version of greedy decoding
 	//void beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width);// beam search decoding (return one best hypo)
 	void beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentences &targets, unsigned beam_width, unsigned top_beams=1);// beam search decoding (return top_beams hypos)
+	void stochastic_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, unsigned length_ratio, std::vector<Expression>& v_soft_targets); // batched stochastic decoding
 
 	dynet::ParameterCollection& get_model_parameters();
 	void initialise_params_from_file(const std::string &params_file);
@@ -748,6 +863,30 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 		return dynet::log_softmax(i_r_t);
 	else
 		return dynet::softmax(i_r_t);
+}
+
+dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
+		, const dynet::Expression& i_src_rep
+		, std::vector<Expression>& v_soft_targets)
+{
+	// decode target
+	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, v_soft_targets, i_src_rep);// the whole matrix of context representation for every words in partial_sents is computed - which is also wasteful because we only need the representation of last comlumn?
+
+	// only consider the prediction of last column in the matrix	
+	dynet::Expression i_tgt_t;
+	if (_decoder.get()->_batch_tlen == 1) i_tgt_t = i_tgt_ctx;
+	else 
+		//i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
+		i_tgt_t = dynet::pick(i_tgt_ctx, (unsigned)(_decoder.get()->_batch_tlen - 1), 1);// shifted right, ((|V_T|, 1), batch_size)
+
+	// output linear projections (w/ bias)
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
+
+	// compute softmax prediction (note: return a batch of softmaxes)
+	return dynet::softmax(i_r_t);
 }
 
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
@@ -1152,6 +1291,43 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 	}
 
 	cg.clear();
+
+	_tfc._is_training = true;
+}
+
+void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, unsigned length_ratio, std::vector<Expression>& v_soft_targets) // batched stochastic decoding
+{
+	_tfc._is_training = false;
+
+	unsigned bsize = sources.size();
+	size_t max_src_len = sources[0].size();
+	for (unsigned bs = 1; bs < bsize; bs++) max_src_len = std::max(max_src_len, sources[bs].size());
+	size_t max_tgt_len = max_src_len * length_ratio;
+	
+	const int& sos_sym = _tfc._sm._kTGT_SOS;
+
+	// start of sentences
+	v_soft_targets.clear();
+	std::vector<unsigned> sos_targets(bsize, sos_sym); 
+	v_soft_targets.push_back(this->_decoder->get_wrd_embeddings(cg, sos_targets));
+
+	dynet::Expression i_src_rep = this->compute_source_rep(cg, sources);// batched
+	dynet::Expression i_tgt_emb = this->_decoder->get_wrd_embedding_matrix(cg);// hidden_dim x |VT|
+	
+	std::vector<dynet::Expression> aligns;// FIXME: unused
+	unsigned t = 0;
+	while (t < max_tgt_len) 
+	{
+		//cg.checkpoint(); // cannot do checkpointing here because the soft targets need to be memorized!
+			
+		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, v_soft_targets);// batched
+		v_soft_targets.push_back(i_tgt_emb * i_ydist/*hidden_dim x 1*/);
+
+		t += 1;
+		if (_tfc._position_encoding == 1 && (t >= _tfc._max_length || t >= max_tgt_len)) break;// to prevent over-length sample in learned positional encoding
+
+		//cg.revert();
+	}
 
 	_tfc._is_training = true;
 }
