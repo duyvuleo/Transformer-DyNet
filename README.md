@@ -532,6 +532,8 @@ Currently, this implementation supports single GPU only since DyNet has not full
 
 5. adaptive learning rate following original transformer's paper (need this?)
 
+6. hybrid architecture between Transformer and RNN-based Enc-Dec, RNMT+ as in https://arxiv.org/pdf/1804.09849.pdf (ACL2018)?
+
 6. other new ideas?
 
 ## Contacts
