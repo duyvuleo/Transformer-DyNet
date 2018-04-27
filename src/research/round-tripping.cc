@@ -331,15 +331,15 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 			WordIdSentence sent;
 			if (flag){// sample from A
 				sent = mono_s[orders_s[id_s++]];
-				p_tf_s2t = v_tm_models[0].get();
-				p_tf_t2s = v_tm_models[1].get();
-				p_alm = v_alm_models[1].get();
+				p_tf_s2t = v_tm_models[0;
+				p_tf_t2s = v_tm_models[1];
+				p_alm = v_alm_models[1];
 			}
 			else{// sample from B
 				sent = mono_t[orders_t[id_t++]];
-				p_tf_s2t = v_tm_models[1].get();
-				p_tf_t2s = v_tm_models[0].get();
-				p_alm = v_alm_models[0].get();
+				p_tf_s2t = v_tm_models[1];
+				p_tf_t2s = v_tm_models[0];
+				p_alm = v_alm_models[0];
 			}
 
 			//---
@@ -398,8 +398,8 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 
 		// evaluate over the development data to check the improvements (after a desired number of rounds)
 		if (r % DEV_ROUND == 0){
-			p_tf_s2t->set_dropout(false);// disable dropout for evaluaing on dev
-			p_tf_t2s->set_dropout(false);
+			v_tm_models[0]->set_dropout(false);// disable dropout for evaluaing on dev
+			v_tm_models[1]->set_dropout(false);
 
 			eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
 			eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
@@ -407,8 +407,8 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 			dstats_s2t.update_best_score(cpt_s2t);
 			dstats_t2s.update_best_score(cpt_t2s);
 
-			if (cpt_s2t == 0) p_tf_s2t->save_params_to_file(tfc_s2t._model_path + "/model.params.rt");
-			if (cpt_t2s == 0) p_tf_t2s->save_params_to_file(tfc_t2s._model_path + "/model.params.rt");
+			if (cpt_s2t == 0) v_tm_models[0]->save_params_to_file(tfc_s2t._model_path + "/model.params.rt");
+			if (cpt_t2s == 0) v_tm_models[1]->save_params_to_file(tfc_t2s._model_path + "/model.params.rt");
 
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 			cerr << "***DEV (s2t) [epoch=" << epoch_s2t + (float)id_s/(float)orders_s.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << " " << dstats_s2t.get_score_string(false) << endl;
@@ -417,8 +417,8 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 
 			// FIXME: observe cpt_s2t and cpt_t2s
 
-			p_tf_s2t->set_dropout(true);// enable dropout for next training
-			p_tf_t2s->set_dropout(true);
+			v_tm_models[0]->set_dropout(true);// enable dropout for next training
+			v_tm_models[1]->set_dropout(true);
 
 			r = 1;
 		}
