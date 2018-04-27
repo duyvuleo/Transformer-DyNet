@@ -55,12 +55,12 @@ dynet::Trainer* create_sgd_trainer(unsigned opt_type, float lr, dynet::Parameter
 MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq_len=0, unsigned load_percent=100);
 
 // main round tripping function
-void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerModel>>& v_tm_models, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_alm_models
-		, const MonoData& mono_s, const MonoData& mono_t
-		, const WordIdCorpus& dev_cor // for evaluation
-		, unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
-		, unsigned opt_type
-		, unsigned dev_eval_mea);
+void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
+	, dynet::Trainer*& p_sgd_s2t, dynet::Trainer*& p_sgd_t2s
+	, const MonoData& mono_s, const MonoData& mono_t
+	, const WordIdCorpus& dev_cor // for evaluation
+	, unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
+	, unsigned dev_eval_mea);
 
 int main(int argc, char** argv) {
 	dynet::initialize(argc, argv);
@@ -83,9 +83,9 @@ int main(int argc, char** argv) {
 		//-----------------------------------------	
 		("K", value<unsigned>()->default_value(2), "the K value for sampling K-best translations from transformer models")
 		("beam_size", value<unsigned>()->default_value(4), "the beam size of beam search decoding")
-		("alpha", value<float>()->default_value(0.05f), "the alpha hyper-parameter for balancing the rewards")
-		("gamma_1", value<float>()->default_value(0.001f), "the gamma 1 hyper-parameter for stochastic gradient update in tuning source-to-target transformer model")
-		("gamma_2", value<float>()->default_value(0.001f), "the gamma 2 hyper-parameter for stochastic gradient update in tuning target-to-source transformer model")
+		("alpha", value<float>()->default_value(0.1f), "the alpha hyper-parameter for balancing the rewards")
+		("gamma_1", value<float>()->default_value(0.01f), "the gamma 1 hyper-parameter for stochastic gradient update in tuning source-to-target transformer model")
+		("gamma_2", value<float>()->default_value(0.01f), "the gamma 2 hyper-parameter for stochastic gradient update in tuning target-to-source transformer model")
 		//-----------------------------------------
 		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES); default 0 (perplexity)")
 		//-----------------------------------------
@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
 
 	//--- load models
 	// Transformer Model recipes
-	std::vector<std::shared_ptr<transformer::TransformerModel>> v_tf_models;
+	std::vector<transformer::TransformerModel*> v_tf_models;
 	transformer::SentinelMarkers sm;// sentinel markers
 
 	std::vector<std::string> model_paths({vm["model-path-s2t"].as<std::string>(), vm["model-path-t2s"].as<std::string>()});		
@@ -176,8 +176,7 @@ int main(int argc, char** argv) {
 			tfc._model_path = model_path;
 
 			// load models
-			v_tf_models.push_back(std::shared_ptr<transformer::TransformerModel>());
-			v_tf_models.back().reset(new transformer::TransformerModel(tfc, sd, td));
+			v_tf_models.push_back(new transformer::TransformerModel(tfc, sd, td));
 			std::string model_file = model_path + "/model.params";
 			if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
 			{
@@ -190,7 +189,7 @@ int main(int argc, char** argv) {
 	}
 
 	// Transformer LModel recipes
-	std::vector<std::shared_ptr<transformer::TransformerLModel>> v_tf_lmodels;
+	std::vector<transformer::TransformerLModel*> v_tf_lmodels;
 	model_paths.clear();
 	model_paths.insert(model_paths.begin(), {vm["model-path-s"].as<std::string>(), vm["model-path-t"].as<std::string>()});
 	for (auto& model_path : model_paths){
@@ -223,8 +222,7 @@ int main(int argc, char** argv) {
 			tfc._use_dropout = false;
 
 			// load models
-			v_tf_lmodels.push_back(std::shared_ptr<transformer::TransformerLModel>());
-			v_tf_lmodels.back().reset(new transformer::TransformerLModel(tfc, d));
+			v_tf_lmodels.push_back(new transformer::TransformerLModel(tfc, d));
 			std::string model_file = model_path + "/model.params";
 			if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
 			{
@@ -249,25 +247,37 @@ int main(int argc, char** argv) {
 	cerr << endl << "Reading dev parallel data from " << vm["devel"].as<std::string>() << "...\n";
 	devel_cor = read_corpus(vm["devel"].as<std::string>(), &v_tf_models[0]->get_source_dict(), &v_tf_models[0]->get_target_dict(), false/*for development*/);
 
+	// set up optimizers 
+	unsigned opt_type = 0;// normal SGD
+	dynet::Trainer* p_sgd_s2t = create_sgd_trainer(opt_type, gamma_1, v_tf_models[0]->get_model_parameters());
+	dynet::Trainer* p_sgd_t2s = create_sgd_trainer(opt_type, gamma_2, v_tf_models[1]->get_model_parameters());
+
 	//--- execute round tripping
 	run_round_tripping(v_tf_models, v_tf_lmodels, 
+				p_sgd_s2t, p_sgd_t2s,
 				mono_cor_s, mono_cor_t,
 				devel_cor,
 				K, beam_size, alpha, gamma_1, gamma_2,
-				0,/*use normal SGD*/
 				vm["dev-eval-measure"].as<unsigned>());
-	
-	
+
+	// release memory
+	delete p_sgd_s2t;
+	delete p_sgd_t2s;
+	for (auto& mod : v_tf_models) delete mod;// FIXME: use std::shapred_ptr instead of raw pointers
+	for (auto& mod : v_tf_lmodels) delete mod;
+	v_tf_models.clear();
+	v_tf_lmodels.clear();
+		
 	// finished!
 	return EXIT_SUCCESS;
 }
 
-void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerModel>>& v_tm_models, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_alm_models
-                , const MonoData& mono_s, const MonoData& mono_t
-                , const WordIdCorpus& dev_cor // for evaluation
-                , unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
-                , unsigned opt_type
-		, unsigned dev_eval_mea)
+void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
+	, dynet::Trainer*& p_sgd_s2t, dynet::Trainer*& p_sgd_t2s
+	, const MonoData& mono_s, const MonoData& mono_t
+        , const WordIdCorpus& dev_cor // for evaluation
+        , unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
+	, unsigned dev_eval_mea)
 {
 	cerr << endl << "Performing round tripping learning..." << endl;
 
@@ -297,19 +307,24 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 	std::vector<std::vector<WordIdSentence> > dev_src_minibatch, dev_trg_minibatch;
 	create_minibatches(dev_cor, 1024/*set it by default*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 
-	// set up optimizers 
-	dynet::Trainer* p_sgd_s2t = create_sgd_trainer(opt_type, gamma_1, v_tm_models[0]->get_model_parameters());
-	dynet::Trainer* p_sgd_t2s = create_sgd_trainer(opt_type, gamma_2, v_tm_models[1]->get_model_parameters());
-
-	// pointers for switching between the models
-	transformer::TransformerModel *p_tf_s2t = nullptr, *p_tf_t2s = nullptr;
-	transformer::TransformerLModel *p_alm = nullptr;
+	unsigned cpt_s2t = 0, cpt_t2s = 0/*count of patience*/;
+	
+	eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
+	eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
+	
+	dstats_s2t.update_best_score(cpt_s2t);
+	dstats_t2s.update_best_score(cpt_t2s);
+	
+	cerr << "--------------------------------------------------------------------------------------------------------" << endl;
+	cerr << "Pre-trained model scores on dev data..." << endl;
+	cerr << "***DEV (s2t): " << "sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << " " << dstats_s2t.get_score_string(false) << endl;
+	cerr << "***DEV (t2s): " << "sents=" << dev_cor.size() << " src_unks=" << dstats_t2s._words_src_unk << " trg_unks=" << dstats_t2s._words_tgt_unk << " " << dstats_t2s.get_score_string(false) << endl;
+        cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 
 	// start the round tripping algorithm	
 	unsigned long id_s = 0, id_t = 0;
 	unsigned r = 1/*round*/, epoch_s2t = 0, epoch_t2s = 0;
 	bool flag = true;// role of source and target
-	unsigned cpt_s2t = 0, cpt_t2s = 0/*count of patience*/;
 	while (epoch_s2t < MAX_EPOCH 
 		|| epoch_t2s < MAX_EPOCH)// FIXME: simple stopping criterion, another?
 	{
@@ -327,27 +342,19 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 				epoch_t2s++;// FIXME: adjust the learning rate if required?
 			}
 
-			// sample sentence sentA and sentB from mono_cor_s and mono_cor_s respectively
-			WordIdSentence sent;
-			if (flag){// sample from A
-				sent = mono_s[orders_s[id_s++]];
-				p_tf_s2t = v_tm_models[0;
-				p_tf_t2s = v_tm_models[1];
-				p_alm = v_alm_models[1];
-			}
-			else{// sample from B
-				sent = mono_t[orders_t[id_t++]];
-				p_tf_s2t = v_tm_models[1];
-				p_tf_t2s = v_tm_models[0];
-				p_alm = v_alm_models[0];
-			}
+			auto& p_tf_s2t = flag?v_tm_models[0]:v_tm_models[1];
+			auto& p_tf_t2s = flag?v_tm_models[1]:v_tm_models[0];
+			auto& p_alm = flag?v_alm_models[1]:v_alm_models[0];
 
+			// sample sentence sentA and sentB from mono_cor_s and mono_cor_s respectively
+			WordIdSentence sent = flag?mono_s[orders_s[id_s++]]:mono_t[orders_t[id_t++]];
+		
 			//---
 			if (VERBOSE)
 				cerr << "Sampled sentence: " << get_sentence(sent, (flag?sd:td)) << endl;
 			//---
 
-			// generate K translated sentences s_{mid,1},...,s_{mid,K} using beam search according to translation model P(.|sentA; mod_am_s2t).
+			// generate K translated sentences using beam search according to source-to-target translation model.
 			std::vector<WordIdSentence> v_mid_hyps;
 			if (VERBOSE) cerr << "Performing beam decoding..." << endl;
 			p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
@@ -358,26 +365,26 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 				if (VERBOSE) cerr << "Decoded sentence: " << get_sentence(mid_hyp, (flag?td:sd)) << endl;		
 
 				// set the language-model reward for current sampled sentence from p_alm
-				auto r1 = p_alm->build_graph(cg, WordIdSentences(1, mid_hyp));
+				auto r1 = p_alm->build_graph(cg, WordIdSentences(1, mid_hyp)) / (mid_hyp.size() - 1);// -log-prob normalized by length
 			
 				// set the communication reward for current sampled sentence from p_tf_t2s
-				auto r2 = p_tf_t2s->build_graph(cg, WordIdSentences(1, mid_hyp), WordIdSentences(1, sent));
+				auto r2 = p_tf_t2s->build_graph(cg, WordIdSentences(1, mid_hyp), WordIdSentences(1, sent)) / (sent.size() - 1);// -log-prob normalized by length
 			
 				// interpolate the rewards
 				auto r = alpha * r1 + (1.f - alpha) * r2;
-				v_r1.push_back(r * (p_tf_s2t->build_graph(cg, WordIdSentences(1, sent), WordIdSentences(1, mid_hyp))));
+				v_r1.push_back(r * (p_tf_s2t->build_graph(cg, WordIdSentences(1, sent), WordIdSentences(1, mid_hyp)) / (mid_hyp.size() - 1)));// FIXME: beam_decode can produce this score, no need to re-compute it!
 				v_r2.push_back((1.f - alpha) * r2);
 			}
 
 			// set total loss function
 			dynet::Expression i_loss_s2t = dynet::sum(v_r1) / K;// use dynet::average(v_r1) instead?
 			dynet::Expression i_loss_t2s = dynet::sum(v_r2) / K;// use dynet::average(v_r2) instead?
-			dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;
+			dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;// final loss
 
 			// execute forward step
 			cg.incremental_forward(i_loss);		
 			//-----------------------------------
-			float loss = dynet::as_scalar(cg.get_value(i_loss)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s));
+			float loss = dynet::as_scalar(cg.get_value(i_loss.i)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t.i)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s.i));
 			p_sgd_s2t->status(); //p_sgd_t2s->status();
 			cerr << "round=" << r << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "loss=" << loss << "; " << "loss_s2t=" << loss_s2t << "; " << "loss_t2s=" << loss_t2s << endl;
 			cerr << "-----------------------------------" << endl;
@@ -397,10 +404,7 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 		if (id_s == id_t) r++;
 
 		// evaluate over the development data to check the improvements (after a desired number of rounds)
-		if (r % DEV_ROUND == 0){
-			v_tm_models[0]->set_dropout(false);// disable dropout for evaluaing on dev
-			v_tm_models[1]->set_dropout(false);
-
+		if (r % DEV_ROUND == 0){	
 			eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
 			eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
 
@@ -416,9 +420,7 @@ void run_round_tripping(std::vector<std::shared_ptr<transformer::TransformerMode
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 
 			// FIXME: observe cpt_s2t and cpt_t2s
-
-			v_tm_models[0]->set_dropout(true);// enable dropout for next training
-			v_tm_models[1]->set_dropout(true);
+			// ...
 
 			r = 1;
 		}
@@ -430,6 +432,8 @@ void eval_on_dev_batch(transformer::TransformerModel &tf,
 	transformer::ModelStats& dstats, 
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
 {
+	tf.set_dropout(false);// disable dropout for evaluaing on dev
+
 	if (dev_eval_mea == 0) // perplexity
 	{
 		double losses = 0.f;
@@ -447,6 +451,8 @@ void eval_on_dev_batch(transformer::TransformerModel &tf,
 	else{
 		// FIXME
 	}
+	
+	tf.set_dropout(true);
 }
 // ---
 
@@ -497,23 +503,21 @@ dynet::Trainer* create_sgd_trainer(unsigned opt_type, float lr, dynet::Parameter
 MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq_len, unsigned load_percent)
 {
 	MonoData mono = read_corpus(filepath, &d, true, max_seq_len);
-	
+
 	// limit the percent of training data to be used
-	if (load_percent < 100 
-		&& load_percent > 0)
+	if (load_percent < 100 && load_percent > 0)
 	{
 		cerr << "Only use " << load_percent << "% of " << mono.size() << " instances: ";
-		unsigned int rev_pos = load_percent * mono.size() / 100;
-		mono.erase(mono.begin() + rev_pos, mono.end());
-		cerr << mono.size() << " instances remaining!" << endl;
+	        unsigned int rev_pos = load_percent * mono.size() / 100;
+	        mono.erase(mono.begin() + rev_pos, mono.end());
+	        cerr << mono.size() << " instances remaining!" << endl;
 	}
 	else if (load_percent != 100){
 		cerr << "Invalid --mono-load-percent <num> used. <num> must be (0,100]" << endl;
-		cerr << "All data will be used!" << endl;
-		return mono;// return full
+	        cerr << "All data will be used!" << endl;
 	}
 
-	return mono;
+	return mono;// return full                                                                                                                                                                         }
 }
 
 //---
