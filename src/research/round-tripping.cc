@@ -30,6 +30,10 @@ using namespace boost::program_options;
 unsigned MAX_EPOCH = 10;
 unsigned DEV_ROUND = 25000;
 
+unsigned MINIBATCH_SIZE = 1024;
+
+unsigned SAMPLE_SIZE = 2;
+
 bool VERBOSE;
 
 int main_body(variables_map vm);
@@ -58,7 +62,7 @@ MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq
 void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
 	, dynet::Trainer*& p_sgd_s2t, dynet::Trainer*& p_sgd_t2s
 	, const MonoData& mono_s, const MonoData& mono_t
-	, const WordIdCorpus& dev_cor // for evaluation
+	, const WordIdCorpus& train_cor, const WordIdCorpus& dev_cor // for evaluation
 	, unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
 	, unsigned dev_eval_mea);
 
@@ -78,6 +82,8 @@ int main(int argc, char** argv) {
 		("model-path-t", value<std::string>()->default_value("."), "pre-trained path for the source language model will be loaded from this folder")
 		("devel,d", value<string>(), "file containing development parallel sentences, with "
 			"each line consisting of source ||| target.")
+		("train,t", value<string>(), "file containing real parallel sentences, with "
+			"each line consisting of source ||| target.")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sequence length loaded from mono data; none by default")
 		("mono-load-percent", value<unsigned>()->default_value(100), "limit the use of <num> percent of sequences in monolingual data; full by default")
 		//-----------------------------------------	
@@ -91,7 +97,9 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("mono_s", value<string>()->default_value(""), "File to read the monolingual source from")
 		("mono_t", value<string>()->default_value(""), "File to read the monolingual target from")
+		("sample_size", value<unsigned>()->default_value(SAMPLE_SIZE), "sampling size from monolingual source and target data")
 		//-----------------------------------------
+		("minibatch_size,b", value<unsigned>()->default_value(MINIBATCH_SIZE), "minibatch size for training and development data")
 		("epoch,e", value<unsigned>()->default_value(20), "number of training epochs, 50 by default")
 		("dev_round", value<unsigned>()->default_value(10000), "number of rounds for evaluating over development data, 25000 by default")
 		//-----------------------------------------
@@ -119,7 +127,9 @@ int main(int argc, char** argv) {
 	float gamma_1 = vm["gamma_1"].as<float>();
 	float gamma_2 = vm["gamma_2"].as<float>();
 	MAX_EPOCH = vm["epoch"].as<unsigned>();
-	DEV_ROUND = vm["dev_round"].as<unsigned>();	
+	DEV_ROUND = vm["dev_round"].as<unsigned>();
+	MINIBATCH_SIZE = vm["minibatch_size"].as<unsigned>();
+	SAMPLE_SIZE = vm["sample_size"].as<unsigned>();
 
 	//--- load models
 	// Transformer Model recipes
@@ -242,9 +252,14 @@ int main(int argc, char** argv) {
 	cerr << "Reading monolingual target data from " << vm["mono_t"].as<string>() << "...\n";
 	mono_cor_t = read_mono_data(v_tf_lmodels[1]->get_dict(), vm["mono_t"].as<string>(), vm["max-seq-len"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
 
+	// real train parallel data
+	WordIdCorpus train_cor;// integer-converted training parallel data
+	cerr << endl << "Reading real training parallel data from " << vm["train"].as<std::string>() << "...\n";
+	train_cor = read_corpus(vm["train"].as<std::string>(), &v_tf_models[0]->get_source_dict(), &v_tf_models[0]->get_target_dict(), true/*for training*/);
+
 	// development parallel data
 	WordIdCorpus devel_cor;// integer-converted dev parallel data
-	cerr << endl << "Reading dev parallel data from " << vm["devel"].as<std::string>() << "...\n";
+	cerr << endl << "Reading development parallel data from " << vm["devel"].as<std::string>() << "...\n";
 	devel_cor = read_corpus(vm["devel"].as<std::string>(), &v_tf_models[0]->get_source_dict(), &v_tf_models[0]->get_target_dict(), false/*for development*/);
 
 	// set up optimizers 
@@ -258,7 +273,7 @@ int main(int argc, char** argv) {
 	run_round_tripping(v_tf_models, v_tf_lmodels, 
 				p_sgd_s2t, p_sgd_t2s,
 				mono_cor_s, mono_cor_t,
-				devel_cor,
+				train_cor, devel_cor,
 				K, beam_size, alpha, gamma_1, gamma_2,
 				vm["dev-eval-measure"].as<unsigned>());
 
@@ -277,7 +292,7 @@ int main(int argc, char** argv) {
 void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
 	, dynet::Trainer*& p_sgd_s2t, dynet::Trainer*& p_sgd_t2s
 	, const MonoData& mono_s, const MonoData& mono_t
-        , const WordIdCorpus& dev_cor // for evaluation
+        , const WordIdCorpus& train_cor, const WordIdCorpus& dev_cor // for evaluation
         , unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
 	, unsigned dev_eval_mea)
 {
@@ -305,7 +320,19 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 	get_dev_stats(dev_cor, tfc_s2t, dstats_s2t);
 	get_dev_stats(dev_cor, tfc_t2s, dstats_t2s, true);
 
-	// create minibatches for development data
+	// create minibatches for training and development data
+	// train
+	std::vector<std::vector<WordIdSentence> > train_src_minibatch, train_trg_minibatch;
+	create_minibatches(train_cor, 1024/*set it by default*/, train_src_minibatch, train_trg_minibatch);// on train
+	std::vector<size_t> train_ids_minibatch;
+	// create a sentence list for this train minibatch
+	train_ids_minibatch.resize(train_src_minibatch.size());
+	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
+	// shuffle minibatches
+	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+	unsigned tid = 0;
+
+	// dev
 	std::vector<std::vector<WordIdSentence> > dev_src_minibatch, dev_trg_minibatch;
 	create_minibatches(dev_cor, 1024/*set it by default*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 
@@ -324,6 +351,8 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
         cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 
 	// start the round tripping algorithm	
+	bool sample_flag = true;
+	unsigned sample_size = SAMPLE_SIZE;
 	unsigned long id_s = 0, id_t = 0;
 	unsigned r = 1/*round*/, epoch_s2t = 0, epoch_t2s = 0;
 	bool flag = true;// role of source and target
@@ -344,51 +373,61 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 				epoch_t2s++;// FIXME: adjust the learning rate if required?
 			}
 
+			if (tid >= train_ids_minibatch.size()){
+				tid = 0;
+				std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+			}
+
 			transformer::TransformerModel*& p_tf_s2t = flag?v_tm_models[0]:v_tm_models[1];
 			transformer::TransformerModel*& p_tf_t2s = flag?v_tm_models[1]:v_tm_models[0];
 			transformer::TransformerLModel*& p_alm = flag?v_alm_models[1]:v_alm_models[0];
 
-			// sample sentence sentA and sentB from mono_cor_s and mono_cor_s respectively
-			WordIdSentence sent = flag?mono_s[orders_s[id_s++]]:mono_t[orders_t[id_t++]];
-		
-			//---
-			if (VERBOSE)
-				cerr << "Sampled sentence: " << get_sentence(sent, (flag?sd:td)) << endl;
-			//---
-
-			// generate K translated sentences using beam search according to source-to-target translation model.
-			std::vector<WordIdSentence> v_mid_hyps;
-			if (VERBOSE) cerr << "Performing beam decoding..." << endl;
-			p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
-			p_tf_s2t->beam_decode(cg, sent, v_mid_hyps, beam_size, K);
-			p_tf_s2t->set_dropout(true);// enable dropout for training
-			std::vector<dynet::Expression> v_r1, v_r2;
-			unsigned bad_hyp_c = 0;
-			for (auto& mid_hyp : v_mid_hyps){//FIXME: use batch of k-best source-target pair
-				if (VERBOSE) cerr << "Decoded sentence: " << get_sentence(mid_hyp, (flag?td:sd)) << endl;		
-
-				if (mid_hyp.size() == 2){
-					bad_hyp_c++;
-					continue;
-				}
-
-				// set the language-model reward for current sampled sentence from p_alm
-				auto r1 = p_alm->build_graph(cg, WordIdSentences(1, mid_hyp)) / (mid_hyp.size() - 1);// -log-prob normalized by length
-			
-				// set the communication reward for current sampled sentence from p_tf_t2s
-				auto r2 = p_tf_t2s->build_graph(cg, WordIdSentences(1, mid_hyp), WordIdSentences(1, sent)) / (sent.size() - 1);// -log-prob normalized by length
-			
-				// interpolate the rewards
-				auto r = alpha * r1 + (1.f - alpha) * r2;
-				v_r1.push_back(r * (p_tf_s2t->build_graph(cg, WordIdSentences(1, sent), WordIdSentences(1, mid_hyp)) / (mid_hyp.size() - 1)));// FIXME: beam_decode can produce this score, no need to re-compute it!
-				v_r2.push_back((1.f - alpha) * r2);
+			// sample sentences from real parallel data
+			WordIdSentences r_src_sents, r_trg_sents;
+			if (sample_flag){
+				r_src_sents = flag?train_src_minibatch[train_ids_minibatch[tid]]:train_trg_minibatch[train_ids_minibatch[tid]];
+				r_trg_sents = flag?train_trg_minibatch[train_ids_minibatch[tid]]:train_src_minibatch[train_ids_minibatch[tid]];
+				tid++;
 			}
 
-			if (K == bad_hyp_c) continue;
+			// sample sentences from monolingual source and target data respectively
+			if (r_src_sents.size() > 0) sample_size = r_src_sents.size();
+			for (unsigned sid = 0; sid < sample_size; sid++){
+		       		auto& sent = flag?mono_s[orders_s[id_s++]]:mono_t[orders_t[id_t++]];
+		
+				//---
+				if (VERBOSE)
+					cerr << "Sampled sentence from monolingual data: " << get_sentence(sent, (flag?sd:td)) << endl;
+				//---
+				
+				// generate K translated sentences using beam search according to source-to-target translation model.
+				if (VERBOSE) cerr << "Performing beam decoding..." << endl;
+				p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
+				std::vector<WordIdSentence> trg_sents;
+				p_tf_s2t->beam_decode(cg, sent, trg_sents, beam_size, K);
+				p_tf_s2t->set_dropout(true);// enable dropout for training
+
+				// mix-up with real training data
+				for (auto& tsent : trg_sents){
+					if (tsent.size() > 2) { // good hypothesis
+						r_src_sents.push_back(sent);
+						r_trg_sents.push_back(tsent);
+					}
+				}
+			}
+					
+			// set the language-model reward for current sampled sentences from p_alm
+			auto reward_lm = p_alm->build_graph(cg, r_trg_sents);
+			
+			// set the communication reward for current sampled sentences from p_tf_t2s
+			auto reward_rev = p_tf_t2s->build_graph(cg, r_trg_sents, r_src_sents);
+			
+			// interpolate the rewards
+			auto reward = alpha * reward_lm + (1.f - alpha) * reward_rev;
+			auto i_loss_s2t = reward * (p_tf_s2t->build_graph(cg, r_src_sents, r_trg_sents));// need averaging?
+			auto i_loss_t2s = (1.f - alpha) * reward_rev;// need averaging?
 
 			// set total loss function
-			dynet::Expression i_loss_s2t = 0.f * dynet::sum(v_r1) / K;// use dynet::average(v_r1) instead?
-			dynet::Expression i_loss_t2s = dynet::sum(v_r2) / K;// use dynet::average(v_r2) instead?
 			dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;// final loss
 
 			// execute forward step
