@@ -354,7 +354,7 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 	bool sample_flag = true;
 	unsigned sample_size = SAMPLE_SIZE;
 	unsigned long id_s = 0, id_t = 0;
-	unsigned r = 1/*round*/, epoch_s2t = 0, epoch_t2s = 0;
+	unsigned r = 1/*round*/, epoch_s2t = 0, epoch_t2s = 0, total_round = 0;
 	bool flag = true;// role of source and target
 	while (epoch_s2t < MAX_EPOCH 
 		|| epoch_t2s < MAX_EPOCH)// FIXME: simple stopping criterion, another?
@@ -440,7 +440,7 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 			//-----------------------------------
 			float loss = dynet::as_scalar(cg.get_value(i_loss.i)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t.i)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s.i));
 			p_sgd_s2t->status(); //p_sgd_t2s->status();
-			cerr << "round=" << r << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "loss=" << loss << "; " << "loss_s2t=" << loss_s2t << "; " << "loss_t2s=" << loss_t2s << endl;
+			cerr << "round=" << total_round << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "loss=" << loss << "; " << "loss_s2t=" << loss_s2t << "; " << "loss_t2s=" << loss_t2s << endl;
 			cerr << "-----------------------------------" << endl;
 			//-----------------------------------
 		
@@ -455,10 +455,13 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 		// switch source and target roles
 		flag = !flag;
 
-		if (id_s == id_t) r++;
+		if (id_s == id_t){
+			r++;
+			total_round++;
+		}
 
 		// evaluate over the development data to check the improvements (after a desired number of rounds)
-		if (r % DEV_ROUND == 0){	
+		if (r % DEV_ROUND == 0){			
 			eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
 			eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
 
