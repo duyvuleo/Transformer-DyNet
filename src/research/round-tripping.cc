@@ -30,7 +30,7 @@ using namespace boost::program_options;
 unsigned MAX_EPOCH = 10;
 unsigned DEV_ROUND = 25000;
 
-unsigned MINIBATCH_SIZE = 1024;
+unsigned MINIBATCH_SIZE = 512;
 
 unsigned SAMPLE_SIZE = 2;
 
@@ -384,7 +384,7 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 
 			// sample sentences from real parallel data
 			WordIdSentences r_src_sents, r_trg_sents;
-			if (sample_flag){
+			if (sample_flag){// TODO: this is to simulate the warm-up strategy. This flag may be disabled after several iterations. 
 				r_src_sents = flag?train_src_minibatch[train_ids_minibatch[tid]]:train_trg_minibatch[train_ids_minibatch[tid]];
 				r_trg_sents = flag?train_trg_minibatch[train_ids_minibatch[tid]]:train_src_minibatch[train_ids_minibatch[tid]];
 				tid++;
@@ -409,6 +409,11 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 
 				// mix-up with real training data
 				for (auto& tsent : trg_sents){
+					//---
+					if (VERBOSE)
+						cerr << "Decoded sentence: " << get_sentence(tsent, (flag?td:sd)) << endl;
+					//---
+
 					if (tsent.size() > 2) { // good hypothesis
 						r_src_sents.push_back(sent);
 						r_trg_sents.push_back(tsent);
