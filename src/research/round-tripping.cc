@@ -83,9 +83,9 @@ int main(int argc, char** argv) {
 		//-----------------------------------------	
 		("K", value<unsigned>()->default_value(2), "the K value for sampling K-best translations from transformer models")
 		("beam_size", value<unsigned>()->default_value(4), "the beam size of beam search decoding")
-		("alpha", value<float>()->default_value(0.1f), "the alpha hyper-parameter for balancing the rewards")
-		("gamma_1", value<float>()->default_value(0.01f), "the gamma 1 hyper-parameter for stochastic gradient update in tuning source-to-target transformer model")
-		("gamma_2", value<float>()->default_value(0.01f), "the gamma 2 hyper-parameter for stochastic gradient update in tuning target-to-source transformer model")
+		("alpha", value<float>()->default_value(0.01f), "the alpha hyper-parameter for balancing the rewards")
+		("gamma_1", value<float>()->default_value(0.001f), "the gamma 1 hyper-parameter for stochastic gradient update in tuning source-to-target transformer model")
+		("gamma_2", value<float>()->default_value(0.001f), "the gamma 2 hyper-parameter for stochastic gradient update in tuning target-to-source transformer model")
 		//-----------------------------------------
 		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES); default 0 (perplexity)")
 		//-----------------------------------------
@@ -249,8 +249,10 @@ int main(int argc, char** argv) {
 
 	// set up optimizers 
 	unsigned opt_type = 0;// normal SGD
-	dynet::Trainer* p_sgd_s2t = create_sgd_trainer(opt_type, gamma_1, v_tf_models[0]->get_model_parameters());
-	dynet::Trainer* p_sgd_t2s = create_sgd_trainer(opt_type, gamma_2, v_tf_models[1]->get_model_parameters());
+	dynet::ParameterCollection& mod_s2t = (*v_tf_models[0]).get_model_parameters();
+	dynet::ParameterCollection& mod_t2s = (*v_tf_models[1]).get_model_parameters();
+	dynet::Trainer* p_sgd_s2t = create_sgd_trainer(opt_type, gamma_1, mod_s2t);
+	dynet::Trainer* p_sgd_t2s = create_sgd_trainer(opt_type, gamma_2, mod_t2s);
 
 	//--- execute round tripping
 	run_round_tripping(v_tf_models, v_tf_lmodels, 
@@ -342,9 +344,9 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 				epoch_t2s++;// FIXME: adjust the learning rate if required?
 			}
 
-			auto& p_tf_s2t = flag?v_tm_models[0]:v_tm_models[1];
-			auto& p_tf_t2s = flag?v_tm_models[1]:v_tm_models[0];
-			auto& p_alm = flag?v_alm_models[1]:v_alm_models[0];
+			transformer::TransformerModel*& p_tf_s2t = flag?v_tm_models[0]:v_tm_models[1];
+			transformer::TransformerModel*& p_tf_t2s = flag?v_tm_models[1]:v_tm_models[0];
+			transformer::TransformerLModel*& p_alm = flag?v_alm_models[1]:v_alm_models[0];
 
 			// sample sentence sentA and sentB from mono_cor_s and mono_cor_s respectively
 			WordIdSentence sent = flag?mono_s[orders_s[id_s++]]:mono_t[orders_t[id_t++]];
@@ -361,8 +363,14 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 			p_tf_s2t->beam_decode(cg, sent, v_mid_hyps, beam_size, K);
 			p_tf_s2t->set_dropout(true);// enable dropout for training
 			std::vector<dynet::Expression> v_r1, v_r2;
-			for (auto& mid_hyp : v_mid_hyps){
+			unsigned bad_hyp_c = 0;
+			for (auto& mid_hyp : v_mid_hyps){//FIXME: use batch of k-best source-target pair
 				if (VERBOSE) cerr << "Decoded sentence: " << get_sentence(mid_hyp, (flag?td:sd)) << endl;		
+
+				if (mid_hyp.size() == 2){
+					bad_hyp_c++;
+					continue;
+				}
 
 				// set the language-model reward for current sampled sentence from p_alm
 				auto r1 = p_alm->build_graph(cg, WordIdSentences(1, mid_hyp)) / (mid_hyp.size() - 1);// -log-prob normalized by length
@@ -376,8 +384,10 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 				v_r2.push_back((1.f - alpha) * r2);
 			}
 
+			if (K == bad_hyp_c) continue;
+
 			// set total loss function
-			dynet::Expression i_loss_s2t = dynet::sum(v_r1) / K;// use dynet::average(v_r1) instead?
+			dynet::Expression i_loss_s2t = 0.f * dynet::sum(v_r1) / K;// use dynet::average(v_r1) instead?
 			dynet::Expression i_loss_t2s = dynet::sum(v_r2) / K;// use dynet::average(v_r2) instead?
 			dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;// final loss
 
@@ -415,8 +425,8 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 			if (cpt_t2s == 0) v_tm_models[1]->save_params_to_file(tfc_t2s._model_path + "/model.params.rt");
 
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-			cerr << "***DEV (s2t) [epoch=" << epoch_s2t + (float)id_s/(float)orders_s.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << " " << dstats_s2t.get_score_string(false) << endl;
-			cerr << "***DEV (t2s) [epoch=" << epoch_t2s + (float)id_t/(float)orders_t.size() << " eta=" << p_sgd_t2s->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_t2s._words_src_unk << " trg_unks=" << dstats_t2s._words_tgt_unk << " " << dstats_t2s.get_score_string(false) << endl;
+			cerr << "***DEV (s2t) [epoch=" << epoch_s2t + (float)id_s/(float)orders_s.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << " " << dstats_s2t.get_score_string() << endl;
+			cerr << "***DEV (t2s) [epoch=" << epoch_t2s + (float)id_t/(float)orders_t.size() << " eta=" << p_sgd_t2s->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_t2s._words_src_unk << " trg_unks=" << dstats_t2s._words_tgt_unk << " " << dstats_t2s.get_score_string() << endl;
 			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 
 			// FIXME: observe cpt_s2t and cpt_t2s
