@@ -323,7 +323,7 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 	// create minibatches for training and development data
 	// train
 	std::vector<std::vector<WordIdSentence> > train_src_minibatch, train_trg_minibatch;
-	create_minibatches(train_cor, 1024/*set it by default*/, train_src_minibatch, train_trg_minibatch);// on train
+	create_minibatches(train_cor, MINIBATCH_SIZE, train_src_minibatch, train_trg_minibatch);// on train
 	std::vector<size_t> train_ids_minibatch;
 	// create a sentence list for this train minibatch
 	train_ids_minibatch.resize(train_src_minibatch.size());
@@ -334,7 +334,7 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 
 	// dev
 	std::vector<std::vector<WordIdSentence> > dev_src_minibatch, dev_trg_minibatch;
-	create_minibatches(dev_cor, 1024/*set it by default*/, dev_src_minibatch, dev_trg_minibatch);// on dev
+	create_minibatches(dev_cor, 1024/*for faster eval by default*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 
 	unsigned cpt_s2t = 0, cpt_t2s = 0/*count of patience*/;
 	
@@ -360,8 +360,6 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 		|| epoch_t2s < MAX_EPOCH)// FIXME: simple stopping criterion, another?
 	{
 		{// this block to prevent multiple graph creation which DyNet does not support yet!
-			dynet::ComputationGraph cg; 
-
 			if (id_s == orders_s.size()){
 				shuffle(orders_s.begin(), orders_s.end(), *rndeng);// to make it random
 				id_s = 0;// reset id
@@ -391,7 +389,8 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 			}
 
 			// sample sentences from monolingual source and target data respectively
-			if (r_src_sents.size() > 0) sample_size = r_src_sents.size();
+			if (r_src_sents.size() > 0) sample_size = r_src_sents.size() / K;// real ~ synthetic
+			if (sample_size < 1) sample_size = 1;
 			for (unsigned sid = 0; sid < sample_size; sid++){
 		       		auto& sent = flag?mono_s[orders_s[id_s++]]:mono_t[orders_t[id_t++]];
 		
@@ -404,6 +403,7 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 				if (VERBOSE) cerr << "Performing beam decoding..." << endl;
 				p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
 				std::vector<WordIdSentence> trg_sents;
+				dynet::ComputationGraph cg;	
 				p_tf_s2t->beam_decode(cg, sent, trg_sents, beam_size, K);
 				p_tf_s2t->set_dropout(true);// enable dropout for training
 
@@ -420,36 +420,41 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 					}
 				}
 			}
-					
-			// set the language-model reward for current sampled sentences from p_alm
-			auto reward_lm = p_alm->build_graph(cg, r_trg_sents);
-			
-			// set the communication reward for current sampled sentences from p_tf_t2s
-			auto reward_rev = p_tf_t2s->build_graph(cg, r_trg_sents, r_src_sents);
-			
-			// interpolate the rewards
-			auto reward = alpha * reward_lm + (1.f - alpha) * reward_rev;
-			auto i_loss_s2t = reward * (p_tf_s2t->build_graph(cg, r_src_sents, r_trg_sents));// need averaging?
-			auto i_loss_t2s = (1.f - alpha) * reward_rev;// need averaging?
 
-			// set total loss function
-			dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;// final loss
+			if (r_src_sents.size() > 0 && r_trg_sents.size() > 0){				
+				dynet::ComputationGraph cg;
+				ModelStats stat1, stat2;
+	
+				// set the language-model reward for current sampled sentences from p_alm
+				auto reward_lm = p_alm->build_graph(cg, r_trg_sents);
+			
+				// set the communication reward for current sampled sentences from p_tf_t2s
+				auto reward_rev = p_tf_t2s->build_graph(cg, r_trg_sents, r_src_sents, &stat1);
+			
+				// interpolate the rewards
+				auto reward = alpha * reward_lm + (1.f - alpha) * reward_rev;// FIXME: the resulting reward is very big?
+				auto i_loss_s2t = reward * (p_tf_s2t->build_graph(cg, r_src_sents, r_trg_sents, &stat2));// need averaging?
+				auto i_loss_t2s = (1.f - alpha) * reward_rev;// need averaging?
 
-			// execute forward step
-			cg.incremental_forward(i_loss);		
-			//-----------------------------------
-			float loss = dynet::as_scalar(cg.get_value(i_loss.i)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t.i)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s.i));
-			p_sgd_s2t->status(); //p_sgd_t2s->status();
-			cerr << "round=" << total_round << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "loss=" << loss << "; " << "loss_s2t=" << loss_s2t << "; " << "loss_t2s=" << loss_t2s << endl;
-			cerr << "-----------------------------------" << endl;
-			//-----------------------------------
+				// set total loss function
+				dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;// final loss
+
+				// execute forward step
+				cg.incremental_forward(i_loss);		
+				//-----------------------------------
+				float loss = dynet::as_scalar(cg.get_value(i_loss.i)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t.i)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s.i));
+				p_sgd_s2t->status(); //p_sgd_t2s->status();
+				cerr << "round=" << total_round << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "xent=" << loss / (stat1._words_tgt + stat2._words_tgt) << "; " << "xent_s2t=" << loss_s2t / stat2._words_tgt << "; " << "xent_t2s=" << loss_t2s / stat1._words_tgt << endl;
+				cerr << "-----------------------------------" << endl;
+				//-----------------------------------
 		
-			// execute backward step (including computation of derivatives)
-			cg.backward(i_loss);
+				// execute backward step (including computation of derivatives)
+				cg.backward(i_loss);
 
-			// update parameters
-			p_sgd_s2t->update();
-			p_sgd_t2s->update();	
+				// update parameters
+				p_sgd_s2t->update();
+				p_sgd_t2s->update();	
+			}
 		}	
 
 		// switch source and target roles
