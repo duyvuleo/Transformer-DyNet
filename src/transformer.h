@@ -842,15 +842,18 @@ public:
 		, const dynet::Expression& i_src_rep
 		, const WordIdSentence &partial_sent
 		, bool log_prob
-		, std::vector<dynet::Expression> &aligns);// forward step to get softmax scores
+		, std::vector<dynet::Expression> &aligns
+		, float sm_temp=1.f);// forward step to get softmax scores
 	dynet::Expression step_forward(dynet::ComputationGraph &cg
 		, const dynet::Expression& i_src_rep
 		, const WordIdSentences &partial_sents
 		, bool log_prob
-		, std::vector<dynet::Expression> &aligns);
+		, std::vector<dynet::Expression> &aligns
+		, float sm_temp=1.f);
 	dynet::Expression step_forward(dynet::ComputationGraph &cg
 		, const dynet::Expression& i_src_rep
-		, std::vector<Expression>& v_soft_targets);
+		, std::vector<Expression>& v_soft_targets
+		, float sm_temp=1.f);
 	void sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// random sampling
 	void sample(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets); // batched version of random sampling
 	void sample_sentences(dynet::ComputationGraph& cg
@@ -924,7 +927,8 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	, const dynet::Expression& i_src_rep
 	, const WordIdSentence &partial_sent
 	, bool log_prob
-	, std::vector<dynet::Expression> &aligns)
+	, std::vector<dynet::Expression> &aligns
+	, float sm_temp)
 {
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
@@ -947,9 +951,9 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 
 	// compute softmax prediction
 	if (log_prob)
-		return dynet::log_softmax(i_r_t);
+		return dynet::log_softmax(i_r_t / sm_temp);// log_softmax w/ temperature
 	else
-		return dynet::softmax(i_r_t);
+		return dynet::softmax(i_r_t / sm_temp);// softmax w/ temperature
 }
 
 // batched version
@@ -957,7 +961,8 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	, const dynet::Expression& i_src_rep
 	, const WordIdSentences &partial_sents
 	, bool log_prob
-	, std::vector<dynet::Expression> &aligns)
+	, std::vector<dynet::Expression> &aligns
+	, float sm_temp)
 {
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
@@ -980,14 +985,15 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 
 	// compute softmax prediction (note: return a batch of softmaxes)
 	if (log_prob)
-		return dynet::log_softmax(i_r_t);
+		return dynet::log_softmax(i_r_t / sm_temp);// log_softmax w/ temperature
 	else
-		return dynet::softmax(i_r_t);
+		return dynet::softmax(i_r_t / sm_temp);// softmax w/ temperature
 }
 
 dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 		, const dynet::Expression& i_src_rep
-		, std::vector<Expression>& v_soft_targets)
+		, std::vector<Expression>& v_soft_targets
+		, float sm_temp)
 {
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
@@ -1006,7 +1012,7 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 
 	// compute softmax prediction (note: return a batch of softmaxes)
-	return dynet::softmax(i_r_t);
+	return dynet::softmax(i_r_t / sm_temp);// softmax w/ temperature
 }
 
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg

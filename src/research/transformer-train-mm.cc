@@ -78,14 +78,14 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints, 
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo,
-	const MMFeatureConfig& mm_fea_cfg/*feature config for moment matching*/);// support batching
+	MMFeatures& mm_feas/*features for moment matching*/);// support batching
 // ---
 
 // ---
-dynet::Expression& compute_mm_score(dynet::ComputationGraph& cg, 
+dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), batch_size * |S|)*/,
 	const WordIdSentences& ssents, 
 	const WordIdSentences& samples, 
-	const MMFeatureConfig& mm_fea_cfg);
+	MMFeatures& mm_feas);
 // ---
 
 // ---
@@ -381,7 +381,7 @@ int main(int argc, char** argv) {
 
 	if (vm["dev-eval-measure"].as<unsigned>() > 4) TRANSFORMER_RUNTIME_ASSERT("Unknown dev-eval-measure type (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES)!");
 
-	MMFeatureConfig mm_fea_cfg/*feature config for moment matching*/;
+	MMFeatures* p_mm_fea_cfg/*feature config for moment matching*/ = new MMFeatures_NMT(NUM_SAMPLES, true, 1.2f, false, "", false, "", 0, false);// features for NMT for now
 	// FIXME: read in feature configuration for moment matching
 	// ...
 
@@ -394,11 +394,12 @@ int main(int argc, char** argv) {
 		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
 		, vm["average-checkpoints"].as<unsigned>()
 		, vm["dev-eval-measure"].as<unsigned>(), vm["dev-eval-infer-algo"].as<unsigned>()
-		, mm_fea_cfg);
+		, *p_mm_fea_cfg);
 
 	// clean up
 	cerr << "Cleaning up..." << endl;
 	delete p_sgd_trainer;
+	delete p_mm_fea_cfg;
 	// transformer object will be automatically cleaned, no action required!
 
 	return EXIT_SUCCESS;
@@ -666,17 +667,27 @@ void eval_on_dev(transformer::TransformerModel &tf,
 // ---
 
 // ---
-dynet::Expression& compute_mm_score(dynet::ComputationGraph& cg, 
+dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), batch_size * |S|)*/,
 	const WordIdSentences& ssents, 
 	const WordIdSentences& samples, 
-	const MMFeatureConfig& mm_fea_cfg)
+	MMFeatures& mm_feas)
 {
-	dynet::Expression i_mm_score;
-
-	// FIXME: add the computation here!
-	// ...
+	std::vector<float> scores;
+	mm_feas.compute_feature_scores(ssents, samples, scores);
 	
-	return i_mm_score;
+	// compute moment matching: <\hat{\Phi}(x) - \bar{\Phi}, \Phi(x) - \bar{\Phi}>
+	dynet::Expression i_phi_x = dynet::input(cg, dynet::Dim({(unsigned)scores.size(), mm_feas._num_samples}, (unsigned)ssents.size()), scores);// ((|F|, |S|), batch_size)
+	dynet::Expression i_phi_x_csum = dynet::cumsum(i_phi_x, 1);// ((|F|, 1), batch_size)
+	i_phi_x_csum = dynet::concatenate_cols(std::vector<dynet::Expression>(mm_feas._num_samples, i_phi_x_csum));// ((|F|, |S|), batch_size)
+	dynet::Expression i_phi_hat = (i_phi_x_csum - i_phi_x) / (mm_feas._num_samples - 1);// ((|F|, |S|), batch_size)
+	i_phi_x = dynet::reshape(i_phi_x, dynet::Dim({(unsigned)scores.size(), 1}, samples.size()));// ((|F|, 1), batch_size * |S|)
+	i_phi_hat = dynet::reshape(i_phi_hat, dynet::Dim({(unsigned)scores.size(), 1}, samples.size()));// ((|F|, 1), batch_size * |S|)
+	dynet::Expression i_mm = dynet::dot_product(i_phi_hat - i_phi_bar, i_phi_x - i_phi_bar);// ((1, 1), |S| * batch_size)
+	
+	//std::vector<float> v_tmp(samples.size(), 1.f);
+	//return dynet::input(cg, dynet::Dim({1, 1}, (unsigned)scores.size()), v_tmp);// for debugging only
+
+	return i_mm;
 }
 // ---
 
@@ -688,7 +699,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints,
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo, 
-	const MMFeatureConfig& mm_fea_cfg/*feature config for moment matching*/)
+	MMFeatures& mm_feas/*feature config for moment matching*/)
 {
 	// get current configuration
 	const transformer::TransformerConfig& tfc = tf.get_config();
@@ -707,7 +718,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	create_minibatches(devel_cor, minibatch_size, dev_src_minibatch, dev_trg_minibatch);// on dev
 	// create a sentence list for this train minibatch
 	train_ids_minibatch.resize(train_src_minibatch.size());
-	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
+	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);	
 
 	// TODO: how to set this flag properly to interchange between standard and reinforced CE losses?
 	bool interleave = false;
@@ -722,6 +733,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	// shuffle minibatches
 	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+
+	// pre-compute mm scores
+	std::vector<float> v_pre_mm_scores;
+	mm_feas.compute_feature_scores(train_src_minibatch[train_ids_minibatch[0]], train_trg_minibatch[train_ids_minibatch[0]], v_pre_mm_scores);
 
 	unsigned sid = 0, id = 0, last_print = 0;
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
@@ -765,7 +780,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 			// get samples from the current model
 			auto& ssents = train_src_minibatch[train_ids_minibatch[id]];
-			auto& tsents = train_trg_minibatch[train_ids_minibatch[id]];
+			auto& tsents = train_trg_minibatch[train_ids_minibatch[id]];// unused if computing reinforced CE loss
 
 			dynet::Expression i_xent;
 			transformer::ModelStats ctstats;
@@ -783,9 +798,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				}
 
 				// compute moment matching scores
-				dynet::Expression i_mm_score = compute_mm_score(cg, ssents, samples, mm_fea_cfg);// shape=((1,1), batch_size)
+				dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), mm_feas._num_samples}, (unsigned)ssents.size()), v_pre_mm_scores);
+				dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, mm_feas);// shape=((1,1), batch_size)
 				
-				i_xent = tf.build_graph(cg, ssents_ext, samples, i_mm_score, &ctstats);// reinforced CE loss
+				i_xent = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
 			}
 	
 			if (PRINT_GRAPHVIZ) {
