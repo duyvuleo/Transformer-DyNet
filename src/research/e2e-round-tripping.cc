@@ -1,14 +1,4 @@
-/*
- * This is an implementation of the following work:
- * Dual Learning for Machine Translation
- * Yingce Xia, Di He, Tao Qin, Liwei Wang, Nenghai Yu, Tie-Yan Liu, Wei-Ying Ma
- * https://papers.nips.cc/paper/6469-dual-learning-for-machine-translation.pdf
- * Developed by Cong Duy Vu Hoang (vhoang2@student.unimelb.edu.au)
- * Date: April 2018
- *
-*/
-
-// We call this framework as "round tripping" instead of "dual learning". 
+// Implementation for end-to-end round tripping framework
 
 #include "../transformer.h" // transformer
 #include "../transformer-lm.h" // transformer-based lm
@@ -59,11 +49,11 @@ dynet::Trainer* create_sgd_trainer(unsigned opt_type, float lr, dynet::Parameter
 MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq_len=0, unsigned load_percent=100);
 
 // main round tripping function
-void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
+void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
 	, dynet::Trainer*& p_sgd_s2t, dynet::Trainer*& p_sgd_t2s
 	, const MonoData& mono_s, const MonoData& mono_t
 	, const WordIdCorpus& train_cor, const WordIdCorpus& dev_cor // for evaluation
-	, unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
+	, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
 	, unsigned dev_eval_mea);
 
 int main(int argc, char** argv) {
@@ -87,8 +77,6 @@ int main(int argc, char** argv) {
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sequence length loaded from mono data; none by default")
 		("mono-load-percent", value<unsigned>()->default_value(100), "limit the use of <num> percent of sequences in monolingual data; full by default")
 		//-----------------------------------------	
-		("K", value<unsigned>()->default_value(2), "the K value for sampling K-best translations from transformer models")
-		("beam_size", value<unsigned>()->default_value(4), "the beam size of beam search decoding")
 		("alpha", value<float>()->default_value(0.01f), "the alpha hyper-parameter for balancing the rewards")
 		("gamma_1", value<float>()->default_value(0.001f), "the gamma 1 hyper-parameter for stochastic gradient update in tuning source-to-target transformer model")
 		("gamma_2", value<float>()->default_value(0.001f), "the gamma 2 hyper-parameter for stochastic gradient update in tuning target-to-source transformer model")
@@ -121,8 +109,6 @@ int main(int argc, char** argv) {
 	VERBOSE = vm.count("verbose");
 
 	// hyper-parameters
-	unsigned K = vm["K"].as<unsigned>();
-	unsigned beam_size = vm["beam_size"].as<unsigned>();
 	float alpha = vm["alpha"].as<float>();
 	float gamma_1 = vm["gamma_1"].as<float>();
 	float gamma_2 = vm["gamma_2"].as<float>();
@@ -270,11 +256,11 @@ int main(int argc, char** argv) {
 	dynet::Trainer* p_sgd_t2s = create_sgd_trainer(opt_type, gamma_2, mod_t2s);
 
 	//--- execute round tripping
-	run_round_tripping(v_tf_models, v_tf_lmodels, 
+	run_e2e_round_tripping(v_tf_models, v_tf_lmodels, 
 				p_sgd_s2t, p_sgd_t2s,
 				mono_cor_s, mono_cor_t,
 				train_cor, devel_cor,
-				K, beam_size, alpha, gamma_1, gamma_2,
+				alpha, gamma_1, gamma_2,
 				vm["dev-eval-measure"].as<unsigned>());
 
 	// release memory
@@ -289,11 +275,11 @@ int main(int argc, char** argv) {
 	return EXIT_SUCCESS;
 }
 
-void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
+void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
 	, dynet::Trainer*& p_sgd_s2t, dynet::Trainer*& p_sgd_t2s
 	, const MonoData& mono_s, const MonoData& mono_t
         , const WordIdCorpus& train_cor, const WordIdCorpus& dev_cor // for evaluation
-        , unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
+        , float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
 	, unsigned dev_eval_mea)
 {
 	cerr << endl << "Performing round tripping learning..." << endl;
@@ -389,73 +375,10 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 			}
 
 			// sample sentences from monolingual source and target data respectively
-			if (r_src_sents.size() > 0) sample_size = r_src_sents.size() / K;// real ~ synthetic
-			if (sample_size < 1) sample_size = 1;
-			for (unsigned sid = 0; sid < sample_size; sid++){
-		       		auto& sent = flag?mono_s[orders_s[id_s++]]:mono_t[orders_t[id_t++]];
-		
-				//---
-				if (VERBOSE)
-					cerr << "Sampled sentence from monolingual data: " << get_sentence(sent, (flag?sd:td)) << endl;
-				//---
-				
-				// generate K translated sentences using beam search according to source-to-target translation model.
-				if (VERBOSE) cerr << "Performing beam decoding..." << endl;
-				p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
-				std::vector<WordIdSentence> trg_sents;
-				dynet::ComputationGraph cg;	
-				p_tf_s2t->beam_decode(cg, sent, trg_sents, beam_size, K);
-				p_tf_s2t->set_dropout(true);// enable dropout for training
-
-				// mix-up with real training data
-				for (auto& tsent : trg_sents){
-					//---
-					if (VERBOSE)
-						cerr << "Decoded sentence: " << get_sentence(tsent, (flag?td:sd)) << endl;
-					//---
-
-					if (tsent.size() > 2) { // good hypothesis
-						r_src_sents.push_back(sent);
-						r_trg_sents.push_back(tsent);
-					}
-				}
-			}
-
-			if (r_src_sents.size() > 0 && r_trg_sents.size() > 0){				
-				dynet::ComputationGraph cg;
-				
-				ModelStats stat1, stat2;
-	
-				// set the language-model reward for current sampled sentences from p_alm
-				auto reward_lm = p_alm->build_graph(cg, r_trg_sents);
+			// FIXME
 			
-				// set the communication reward for current sampled sentences from p_tf_t2s
-				auto reward_rev = p_tf_t2s->build_graph(cg, r_trg_sents, r_src_sents, &stat1);
-			
-				// interpolate the rewards
-				auto reward = alpha * reward_lm + (1.f - alpha) * reward_rev;// FIXME: the resulting reward is very big?
-				auto i_loss_s2t = reward * (p_tf_s2t->build_graph(cg, r_src_sents, r_trg_sents, &stat2));// need averaging?
-				auto i_loss_t2s = (1.f - alpha) * reward_rev;// need averaging?
-
-				// set total loss function
-				dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;// final loss
-
-				// execute forward step
-				cg.incremental_forward(i_loss);		
-				//-----------------------------------
-				float loss = dynet::as_scalar(cg.get_value(i_loss.i)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t.i)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s.i));
-				p_sgd_s2t->status(); //p_sgd_t2s->status();
-				cerr << "round=" << total_round << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "xent=" << loss / (stat1._words_tgt + stat2._words_tgt) << "; " << "xent_s2t=" << loss_s2t / stat2._words_tgt << "; " << "xent_t2s=" << loss_t2s / stat1._words_tgt << endl;
-				cerr << "-----------------------------------" << endl;
-				//-----------------------------------
-		
-				// execute backward step (including computation of derivatives)
-				cg.backward(i_loss);
-
-				// update parameters
-				p_sgd_s2t->update();
-				p_sgd_t2s->update();	
-			}
+			// compute losses
+			// FIXME
 		}	
 
 		// switch source and target roles
