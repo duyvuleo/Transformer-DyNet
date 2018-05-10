@@ -264,6 +264,84 @@ struct LMDecoder{
 		return i_tgt;
 	}
 
+	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
+		, const std::vector<dynet::Expression>& v_soft_targets/*batch of soft sentences*/)
+	{
+		// compute embeddings			
+		// get max length in a batch
+		// get max length in a batch
+		unsigned bsize = v_soft_targets[0].dim().batch_elems();
+		_batch_tlen = v_soft_targets.size();
+
+		dynet::Expression i_tgt;
+		if (_p_tfc->_use_hybrid_model){
+			// target embeddings via RNN
+			std::vector<dynet::Expression> target_embeddings; 
+			_p_tgt_rnn->new_graph(cg);
+			_p_tgt_rnn->start_new_sequence();
+			for (unsigned l = 0; l < _batch_tlen - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+				target_embeddings.push_back(_p_tgt_rnn->add_input(v_soft_targets[l]));
+			}
+
+			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
+		}
+		else{
+			// target embeddings
+			i_tgt = dynet::concatenate_cols(v_soft_targets);// ((num_units, Ly), batch_size)
+
+			// scale
+			i_tgt = i_tgt * _scale_emb;// scaled embeddings
+
+			// + postional encoding			
+			if (_p_tfc->_position_encoding == 1){// learned positional embedding 
+				std::vector<dynet::Expression> pos_embeddings;  
+				std::vector<unsigned> positions(bsize);
+				for (unsigned l = 0; l < _batch_tlen - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+					for (unsigned bs = 0; bs < bsize; ++bs){
+						if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
+						else
+							positions[bs] = l;
+				}
+
+					pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+				}
+				dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
+
+				i_tgt = i_tgt + i_pos;
+			}
+			else if (_p_tfc->_position_encoding == 2){// sinusoidal positional encoding
+				dynet::Expression i_pos = make_sinusoidal_position_encoding(cg, i_tgt.dim());
+
+				i_tgt = i_tgt + i_pos;
+			}
+			else if (_p_tfc->_position_encoding != 0) TRANSFORMER_RUNTIME_ASSERT("Unknown positional encoding type!");
+		}
+
+		// dropout to the sums of the embeddings and the positional encodings
+		if (_p_tfc->_use_dropout && _p_tfc->_decoder_emb_dropout_rate > 0.f)
+#ifdef USE_COLWISE_DROPOUT
+			i_tgt = dynet::dropout_dim(i_tgt, 1/*col-major*/, _p_tfc->_decoder_emb_dropout_rate);// col-wise dropout
+#else
+			i_tgt = dynet::dropout(i_tgt, _p_tfc->_decoder_emb_dropout_rate);// full dropout		
+#endif
+
+		// create maskings
+		std::vector<std::vector<float>> v_seq_masks(bsize, std::vector<float>(_batch_tlen, 0.f));
+		// self-attention
+		// for future blinding
+		_self_mask.create_future_blinding_mask(cg, i_tgt.dim()[1]);
+
+		// for padding positions blinding
+		_self_mask.create_seq_mask_expr(cg, v_seq_masks);
+#ifdef MULTI_HEAD_ATTENTION_PARALLEL
+		_self_mask.create_padding_positions_masks(_p_tfc->_nheads);
+#else 
+		_self_mask.create_padding_positions_masks(1);
+#endif
+
+		return i_tgt;
+	}
+
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& tsents/*batch of sentences*/)
 	{		
@@ -278,6 +356,22 @@ struct LMDecoder{
 	
 		return i_dec_l_out;// ((num_units, Ly), batch_size)
 	}
+
+	dynet::Expression build_graph(dynet::ComputationGraph &cg
+		, const std::vector<dynet::Expression>& v_soft_tsents/*batch of soft sentences*/)
+	{		
+		// compute target (+ postion) embeddings
+		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, v_soft_tsents);// ((num_units, Ly), batch_size)
+			
+		dynet::Expression i_dec_l_out = i_tgt_rep;
+		for (auto dec : _v_dec_layers){
+			// stacking approach
+			i_dec_l_out = dec.build_graph(cg, i_dec_l_out, _self_mask);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
+		}
+	
+		return i_dec_l_out;// ((num_units, Ly), batch_size)
+	}
+
 };
 typedef std::shared_ptr<LMDecoder> LMDecoderPointer;
 //---
@@ -297,6 +391,9 @@ public:
 		, const WordIdSentences& sents/*batched*/
 		, ModelStats* pstats=nullptr
 		, bool is_eval_on_dev=false);	
+	dynet::Expression build_graph(dynet::ComputationGraph &cg
+		, const std::vector<dynet::Expression>& v_soft_sents/*batched*/
+		, bool is_eval_on_dev=false);
 	dynet::Expression step_forward(dynet::ComputationGraph &cg
 		, const WordIdSentences &partial_sents/*batched*/
 		, bool log_prob
@@ -420,6 +517,48 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 		v_errors.push_back(i_err);
 	}
 
+	dynet::Expression i_tloss = dynet::sum_batches(dynet::sum(v_errors));
+
+	return i_tloss;
+}
+
+dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
+	, const std::vector<dynet::Expression>& v_soft_ssents
+	, bool is_eval_on_dev)
+{	
+	// decode target
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, v_soft_ssents);// ((num_units, Ly), batch_size)
+
+	// get losses	
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = _decoder.get()->get_wrd_embedding_matrix(cg);// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+
+	// compute the logit and linear projections
+	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, dynet::transpose(i_Wo_emb_tgt), i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
+
+	std::vector<dynet::Expression> v_errors;
+	unsigned tlen = _decoder.get()->_batch_tlen;
+	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
+		// get the prediction at timestep t
+		//dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
+		dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// ((|V_T|, 1), batch_size)
+
+		// log_softmax and loss
+		dynet::Expression i_err;
+		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
+		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
+			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
+			dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
+			dynet::Expression i_pre_loss = (v_soft_ssents[t+1] * i_Wo_emb_tgt) * (-i_log_softmax);
+			dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
+			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
+		}
+		else 
+			i_err = (dynet::transpose(v_soft_ssents[t+1]) * i_Wo_emb_tgt) *  (-dynet::log_softmax(i_r_t));
+
+		v_errors.push_back(i_err);
+	}
+	
 	dynet::Expression i_tloss = dynet::sum_batches(dynet::sum(v_errors));
 
 	return i_tloss;
