@@ -829,22 +829,36 @@ public:
 		, const WordIdSentences& tsents/*batched*/
 		, ModelStats* pstats=nullptr
 		, bool is_eval_on_dev=false);
+	dynet::Expression build_graph(dynet::ComputationGraph &cg
+		, const WordIdSentences& ssents
+		, const WordIdSentences& tsents
+		, const dynet::Expression& i_rl // additional reward for current loss, usually with shape=((1, 1), batch_size)
+		, ModelStats* pstats=nullptr
+		, bool is_eval_on_dev=false);
+	dynet::Expression build_graph(dynet::ComputationGraph &cg
+		, const std::vector<dynet::Expression>& v_soft_ssents/*batched*/
+		, const WordIdSentences& tsents/*batched*/
+		, ModelStats* pstats=nullptr
+		, bool is_eval_on_dev=false);
 	// for decoding
 	dynet::Expression compute_source_rep(dynet::ComputationGraph &cg
-		, const WordIdSentences& ssents/*pseudo batch*/);// source representation
+		, const WordIdSentences& ssents);// source representation given real sources
 	dynet::Expression step_forward(dynet::ComputationGraph & cg
 		, const dynet::Expression& i_src_rep
 		, const WordIdSentence &partial_sent
 		, bool log_prob
-		, std::vector<dynet::Expression> &aligns);// forward step to get softmax scores
+		, std::vector<dynet::Expression> &aligns
+		, float sm_temp=1.f);// forward step to get softmax scores
 	dynet::Expression step_forward(dynet::ComputationGraph &cg
 		, const dynet::Expression& i_src_rep
 		, const WordIdSentences &partial_sents
 		, bool log_prob
-		, std::vector<dynet::Expression> &aligns);
+		, std::vector<dynet::Expression> &aligns
+		, float sm_temp=1.f);
 	dynet::Expression step_forward(dynet::ComputationGraph &cg
 		, const dynet::Expression& i_src_rep
-		, std::vector<Expression>& v_soft_targets);
+		, std::vector<Expression>& v_soft_targets
+		, float sm_temp=1.f);
 	void sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// random sampling
 	void sample(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets); // batched version of random sampling
 	void sample_sentences(dynet::ComputationGraph& cg
@@ -918,7 +932,8 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	, const dynet::Expression& i_src_rep
 	, const WordIdSentence &partial_sent
 	, bool log_prob
-	, std::vector<dynet::Expression> &aligns)
+	, std::vector<dynet::Expression> &aligns
+	, float sm_temp)
 {
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
@@ -941,9 +956,9 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 
 	// compute softmax prediction
 	if (log_prob)
-		return dynet::log_softmax(i_r_t);
+		return dynet::log_softmax(i_r_t / sm_temp);// log_softmax w/ temperature
 	else
-		return dynet::softmax(i_r_t);
+		return dynet::softmax(i_r_t / sm_temp);// softmax w/ temperature
 }
 
 // batched version
@@ -951,7 +966,8 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	, const dynet::Expression& i_src_rep
 	, const WordIdSentences &partial_sents
 	, bool log_prob
-	, std::vector<dynet::Expression> &aligns)
+	, std::vector<dynet::Expression> &aligns
+	, float sm_temp)
 {
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
@@ -974,14 +990,15 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 
 	// compute softmax prediction (note: return a batch of softmaxes)
 	if (log_prob)
-		return dynet::log_softmax(i_r_t);
+		return dynet::log_softmax(i_r_t / sm_temp);// log_softmax w/ temperature
 	else
-		return dynet::softmax(i_r_t);
+		return dynet::softmax(i_r_t / sm_temp);// softmax w/ temperature
 }
 
 dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 		, const dynet::Expression& i_src_rep
-		, std::vector<Expression>& v_soft_targets)
+		, std::vector<Expression>& v_soft_targets
+		, float sm_temp)
 {
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
@@ -1000,7 +1017,7 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 
 	// compute softmax prediction (note: return a batch of softmaxes)
-	return dynet::softmax(i_r_t);
+	return dynet::softmax(i_r_t / sm_temp);// softmax w/ temperature
 }
 
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
@@ -1087,7 +1104,198 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
 		}
 		else 
+			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);// ((1, 1), batch_size)
+
+		v_errors.push_back(i_err);
+	}
+#endif
+
+	dynet::Expression i_tloss = dynet::sum_batches(dynet::sum(v_errors));
+
+	return i_tloss;
+}
+
+dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
+	, const WordIdSentences& ssents
+	, const WordIdSentences& tsents
+	, const dynet::Expression& i_rl // additional reward for current loss, usually with shape=((1, 1), batch_size)
+	, ModelStats* pstats
+	, bool is_eval_on_dev)
+{
+	// encode source
+	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, pstats);// ((num_units, Lx), batch_size)
+	
+	// decode target
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// ((num_units, Ly), batch_size)
+
+	// get losses	
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+
+// both of the followings work well!
+#ifndef USE_LINEAR_TRANSFORMATION_BROADCASTING 
+	// Note: can be more efficient if using direct computing for i_tgt_ctx (e.g., use affine_transform)
+	std::vector<dynet::Expression> v_errors;
+	unsigned tlen = _decoder.get()->_batch_tlen;
+	std::vector<unsigned> next_words(tsents.size());
+	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
+		for(size_t bs = 0; bs < tsents.size(); bs++){
+			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
+			if (tsents[bs].size() > t && pstats)
+				pstats->_words_tgt++;
+				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) pstats->_words_tgt_unk++;
+			}
+		}
+
+		// compute the logit
+		//dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {t});// shifted right
+		dynet::Expression i_tgt_t = dynet::pick(i_tgt_ctx, t, 1);// shifted right, ((|V_T|, 1), batch_size)
+
+		// output linear projections
+		dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
+	
+		// log_softmax and loss
+		dynet::Expression i_err;
+		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
+		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
+			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
+			dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
+			dynet::Expression i_pre_loss = -dynet::pick(i_log_softmax, next_words);
+			dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
+			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
+		}
+		else 
 			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
+
+		v_errors.push_back(i_err);
+	}
+#else // Note: this way is much faster!
+	// compute the logit and linear projections
+	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
+
+	std::vector<dynet::Expression> v_errors;
+	unsigned tlen = _decoder.get()->_batch_tlen;
+	std::vector<unsigned> next_words(tsents.size());
+	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
+		for(size_t bs = 0; bs < tsents.size(); bs++){
+			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
+			if (tsents[bs].size() > t && pstats) {
+				pstats->_words_tgt++;
+				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) pstats->_words_tgt_unk++;
+			}
+		}
+
+		// get the prediction at timestep t
+		//dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
+		dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// shifted right, ((|V_T|, 1), batch_size)
+	
+		// log_softmax and loss
+		dynet::Expression i_err;
+		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
+		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
+			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
+			dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
+			dynet::Expression i_pre_loss = -dynet::pick(i_log_softmax, next_words);
+			dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
+			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;// ((1, 1), batch_size)
+		}
+		else 
+			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);// ((1, 1), batch_size)
+
+		v_errors.push_back(i_err);
+	}
+#endif
+
+	dynet::Expression i_tloss = dynet::sum_batches(dynet::cmult(dynet::sum(v_errors), i_rl));// reinforced loss
+
+	return i_tloss;
+}
+
+dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
+	, const std::vector<dynet::Expression>& v_soft_ssents/*batched*/
+	, const WordIdSentences& tsents/*batched*/
+	, ModelStats* pstats
+	, bool is_eval_on_dev)
+{
+	// encode source
+	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, v_soft_ssents, pstats);// ((num_units, Lx), batch_size)
+	
+	// decode target
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// ((num_units, Ly), batch_size)
+
+	// get losses	
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+
+// both of the followings work well!
+#ifndef USE_LINEAR_TRANSFORMATION_BROADCASTING 
+	// Note: can be more efficient if using direct computing for i_tgt_ctx (e.g., use affine_transform)
+	std::vector<dynet::Expression> v_errors;
+	unsigned tlen = _decoder.get()->_batch_tlen;
+	std::vector<unsigned> next_words(tsents.size());
+	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
+		for(size_t bs = 0; bs < tsents.size(); bs++){
+			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
+			if (tsents[bs].size() > t && pstats)
+				pstats->_words_tgt++;
+				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) pstats->_words_tgt_unk++;
+			}
+		}
+
+		// compute the logit
+		//dynet::Expression i_tgt_t = dynet::select_cols(i_tgt_ctx, {t});// shifted right
+		dynet::Expression i_tgt_t = dynet::pick(i_tgt_ctx, t, 1);// shifted right, ((|V_T|, 1), batch_size)
+
+		// output linear projections
+		dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
+	
+		// log_softmax and loss
+		dynet::Expression i_err;
+		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
+		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
+			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
+			dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
+			dynet::Expression i_pre_loss = -dynet::pick(i_log_softmax, next_words);
+			dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
+			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
+		}
+		else 
+			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
+
+		v_errors.push_back(i_err);
+	}
+#else // Note: this way is much faster!
+	// compute the logit and linear projections
+	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
+
+	std::vector<dynet::Expression> v_errors;
+	unsigned tlen = _decoder.get()->_batch_tlen;
+	std::vector<unsigned> next_words(tsents.size());
+	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
+		for(size_t bs = 0; bs < tsents.size(); bs++){
+			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
+			if (tsents[bs].size() > t && pstats) {
+				pstats->_words_tgt++;
+				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) pstats->_words_tgt_unk++;
+			}
+		}
+
+		// get the prediction at timestep t
+		//dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
+		dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// shifted right, ((|V_T|, 1), batch_size)
+	
+		// log_softmax and loss
+		dynet::Expression i_err;
+		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
+		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
+			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
+			dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
+			dynet::Expression i_pre_loss = -dynet::pick(i_log_softmax, next_words);
+			dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
+			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
+		}
+		else 
+			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);// ((1, 1), batch_size)
 
 		v_errors.push_back(i_err);
 	}
@@ -1435,7 +1643,7 @@ void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const Word
 		//cg.checkpoint(); // cannot do checkpointing here because the soft targets need to be memorized!
 			
 		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, v_soft_targets);// batched
-		v_soft_targets.push_back(i_tgt_emb * i_ydist/*hidden_dim x 1*/);
+		v_soft_targets.push_back(i_tgt_emb/*H x |V|*/ * i_ydist/*|V|*/);// H x 1
 
 		t += 1;
 		if (_tfc._position_encoding == 1 && (t >= _tfc._max_length || t >= max_tgt_len)) break;// to prevent over-length sample in learned positional encoding

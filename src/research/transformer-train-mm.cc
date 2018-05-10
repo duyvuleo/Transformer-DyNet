@@ -1,9 +1,7 @@
-/* This is an implementation of Transformer architecture from https://arxiv.org/abs/1706.03762 (Attention is All You need).
-* Developed by Cong Duy Vu Hoang
-* Updated: 1 Nov 2017
-*/
+// Transformer enhanced with moment matching training technique
 
-#include "transformer.h"
+#include "../transformer.h"
+#include "mm-features.h"
 
 // STL
 #include <iostream>
@@ -47,6 +45,8 @@ bool SWITCH_TO_ADAM = false;
 bool USE_SMALLER_MINIBATCH = false;
 unsigned NUM_RESETS = 1;
 
+unsigned NUM_SAMPLES = 2;
+
 bool VERBOSE = false;
 
 // ---
@@ -77,7 +77,15 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints, 
-	unsigned dev_eval_mea, unsigned dev_eval_infer_algo);// support batching
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo,
+	MMFeatures& mm_feas/*features for moment matching*/);// support batching
+// ---
+
+// ---
+dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), batch_size * |S|)*/,
+	const WordIdSentences& ssents, 
+	const WordIdSentences& samples, 
+	MMFeatures& mm_feas);
 // ---
 
 // ---
@@ -137,6 +145,8 @@ int main(int argc, char** argv) {
 		("decoder-sublayer-dropout-p", value<float>()->default_value(0.1f), "use dropout for sub-layer's output in decoder; 0.1 by default")
 		("attention-dropout-p", value<float>()->default_value(0.1f), "use dropout for attention; 0.1 by default")
 		("ff-dropout-p", value<float>()->default_value(0.1f), "use dropout for feed-forward layer; 0.1 by default")
+		//-----------------------------------------
+		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
 		//-----------------------------------------
 		("use-label-smoothing", "use label smoothing for cross entropy; no by default")
 		("label-smoothing-weight", value<float>()->default_value(0.1f), "impose label smoothing weight in objective function; 0.1 by default")
@@ -224,6 +234,7 @@ int main(int argc, char** argv) {
 	USE_SMALLER_MINIBATCH = vm.count("use-smaller-minibatch");
 	NUM_RESETS = vm["num-resets"].as<unsigned>();
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
+	NUM_SAMPLES = vm["num-samples"].as<unsigned>();
 
 	// get and check model path
 	std::string model_path = vm["model-path"].as<std::string>();
@@ -370,6 +381,10 @@ int main(int argc, char** argv) {
 
 	if (vm["dev-eval-measure"].as<unsigned>() > 4) TRANSFORMER_RUNTIME_ASSERT("Unknown dev-eval-measure type (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES)!");
 
+	MMFeatures* p_mm_fea_cfg/*feature config for moment matching*/ = new MMFeatures_NMT(NUM_SAMPLES, true, 1.2f, false, "", false, "", 0, false);// features for NMT for now
+	// FIXME: read in feature configuration for moment matching
+	// ...
+
 	// train transformer model
 	run_train(tf
 		, train_cor, devel_cor
@@ -378,11 +393,13 @@ int main(int argc, char** argv) {
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
 		, vm["average-checkpoints"].as<unsigned>()
-		, vm["dev-eval-measure"].as<unsigned>(), vm["dev-eval-infer-algo"].as<unsigned>());
+		, vm["dev-eval-measure"].as<unsigned>(), vm["dev-eval-infer-algo"].as<unsigned>()
+		, *p_mm_fea_cfg);
 
 	// clean up
 	cerr << "Cleaning up..." << endl;
 	delete p_sgd_trainer;
+	delete p_mm_fea_cfg;
 	// transformer object will be automatically cleaned, no action required!
 
 	return EXIT_SUCCESS;
@@ -588,7 +605,7 @@ void eval_on_dev(transformer::TransformerModel &tf,
 void eval_on_dev(transformer::TransformerModel &tf, 
 	const std::vector<WordIdSentences> &dev_src_minibatch, const std::vector<WordIdSentences> &dev_tgt_minibatch,  
 	transformer::ModelStats& dstats, 
-	unsigned dev_eval_mea, unsigned dev_eval_infer_algo) // batched version of eval_on_dev
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo) // batched version
 {
 	if (dev_eval_mea == 0) // perplexity
 	{
@@ -604,7 +621,7 @@ void eval_on_dev(transformer::TransformerModel &tf,
 
 		dstats._scores[1] = losses;
 	}
-	else{ // MT measure (BLEU/NIST, METEOR, WER, RIBES)
+	else{
 		// create evaluators
 		std::string spec;
 		if (dev_eval_mea == 1) spec = "BLEU";
@@ -650,13 +667,39 @@ void eval_on_dev(transformer::TransformerModel &tf,
 // ---
 
 // ---
+dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), batch_size * |S|)*/,
+	const WordIdSentences& ssents, 
+	const WordIdSentences& samples, 
+	MMFeatures& mm_feas)
+{
+	std::vector<float> scores;
+	mm_feas.compute_feature_scores(ssents, samples, scores);
+	
+	// compute moment matching: <\hat{\Phi}(x) - \bar{\Phi}, \Phi(x) - \bar{\Phi}>
+	dynet::Expression i_phi_x = dynet::input(cg, dynet::Dim({(unsigned)scores.size(), mm_feas._num_samples}, (unsigned)ssents.size()), scores);// ((|F|, |S|), batch_size)
+	dynet::Expression i_phi_x_csum = dynet::cumsum(i_phi_x, 1);// ((|F|, 1), batch_size)
+	i_phi_x_csum = dynet::concatenate_cols(std::vector<dynet::Expression>(mm_feas._num_samples, i_phi_x_csum));// ((|F|, |S|), batch_size)
+	dynet::Expression i_phi_hat = (i_phi_x_csum - i_phi_x) / (mm_feas._num_samples - 1);// ((|F|, |S|), batch_size)
+	i_phi_x = dynet::reshape(i_phi_x, dynet::Dim({(unsigned)scores.size(), 1}, samples.size()));// ((|F|, 1), batch_size * |S|)
+	i_phi_hat = dynet::reshape(i_phi_hat, dynet::Dim({(unsigned)scores.size(), 1}, samples.size()));// ((|F|, 1), batch_size * |S|)
+	dynet::Expression i_mm = dynet::dot_product(i_phi_hat - i_phi_bar, i_phi_x - i_phi_bar);// ((1, 1), |S| * batch_size)
+	
+	//std::vector<float> v_tmp(samples.size(), 1.f);
+	//return dynet::input(cg, dynet::Dim({1, 1}, (unsigned)scores.size()), v_tmp);// for debugging only
+
+	return i_mm;
+}
+// ---
+
+// ---
 void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
 	dynet::Trainer*& p_sgd, 
 	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints,
-	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
+	unsigned dev_eval_mea, unsigned dev_eval_infer_algo, 
+	MMFeatures& mm_feas/*feature config for moment matching*/)
 {
 	// get current configuration
 	const transformer::TransformerConfig& tfc = tf.get_config();
@@ -675,7 +718,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	create_minibatches(devel_cor, minibatch_size, dev_src_minibatch, dev_trg_minibatch);// on dev
 	// create a sentence list for this train minibatch
 	train_ids_minibatch.resize(train_src_minibatch.size());
-	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
+	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);	
+
+	// TODO: how to set this flag properly to interchange between standard and reinforced CE losses?
+	bool interleave = false;
   
 	// model stats on dev
 	transformer::ModelStats dstats(dev_eval_mea);
@@ -687,6 +733,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	// shuffle minibatches
 	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+
+	// pre-compute mm scores
+	std::vector<float> v_pre_mm_scores;
+	mm_feas.compute_feature_scores(train_src_minibatch[train_ids_minibatch[0]], train_trg_minibatch[train_ids_minibatch[0]], v_pre_mm_scores);
 
 	unsigned sid = 0, id = 0, last_print = 0;
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
@@ -727,9 +777,32 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				cg.set_immediate_compute(true);
 				cg.set_check_validity(true);
 			}
-	
+
+			// get samples from the current model
+			auto& ssents = train_src_minibatch[train_ids_minibatch[id]];
+			auto& tsents = train_trg_minibatch[train_ids_minibatch[id]];// unused if computing reinforced CE loss
+
+			dynet::Expression i_xent;
 			transformer::ModelStats ctstats;
-			Expression i_xent = tf.build_graph(cg, train_src_minibatch[train_ids_minibatch[id]], train_trg_minibatch[train_ids_minibatch[id]], &ctstats);
+			if (interleave)
+				i_xent = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
+			else{
+				WordIdSentences ssents_ext, samples;
+				for (auto& ssent : ssents){
+					WordIdSentences results;
+					std::vector<float> v_probs;// unused for now!
+					tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs);
+
+					ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
+					samples.insert(samples.end(), results.begin(), results.end());
+				}
+
+				// compute moment matching scores
+				dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), mm_feas._num_samples}, (unsigned)ssents.size()), v_pre_mm_scores);
+				dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, mm_feas);// shape=((1,1), batch_size)
+				
+				i_xent = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
+			}
 	
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -743,7 +816,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			cg.forward(i_objective);
 
 			// grab the parts of the objective
-			float loss = dynet::as_scalar(cg.get_value(i_xent.i));
+			float loss = as_scalar(cg.get_value(i_xent.i));
 			if (!is_valid(loss)){
 				std::cerr << "***Warning***: nan or -nan values occurred!" << std::endl;
 				++id;

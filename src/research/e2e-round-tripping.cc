@@ -1,14 +1,4 @@
-/*
- * This is an implementation of the following work:
- * Dual Learning for Machine Translation
- * Yingce Xia, Di He, Tao Qin, Liwei Wang, Nenghai Yu, Tie-Yan Liu, Wei-Ying Ma
- * https://papers.nips.cc/paper/6469-dual-learning-for-machine-translation.pdf
- * Developed by Cong Duy Vu Hoang (vhoang2@student.unimelb.edu.au)
- * Date: April 2018
- *
-*/
-
-// We call this framework as "round tripping" instead of "dual learning". 
+// Implementation for end-to-end round tripping framework
 
 #include "../transformer.h" // transformer
 #include "../transformer-lm.h" // transformer-based lm
@@ -32,7 +22,8 @@ unsigned DEV_ROUND = 25000;
 
 unsigned MINIBATCH_SIZE = 512;
 
-unsigned SAMPLE_SIZE = 2;
+unsigned TREPORT = 100;
+unsigned DREPORT = 10000;
 
 bool VERBOSE;
 
@@ -59,11 +50,11 @@ dynet::Trainer* create_sgd_trainer(unsigned opt_type, float lr, dynet::Parameter
 MonoData read_mono_data(dynet::Dict& d, const string &filepath, unsigned max_seq_len=0, unsigned load_percent=100);
 
 // main round tripping function
-void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
+void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
 	, dynet::Trainer*& p_sgd_s2t, dynet::Trainer*& p_sgd_t2s
 	, const MonoData& mono_s, const MonoData& mono_t
 	, const WordIdCorpus& train_cor, const WordIdCorpus& dev_cor // for evaluation
-	, unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
+	, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
 	, unsigned dev_eval_mea);
 
 int main(int argc, char** argv) {
@@ -84,11 +75,10 @@ int main(int argc, char** argv) {
 			"each line consisting of source ||| target.")
 		("train,t", value<string>(), "file containing real parallel sentences, with "
 			"each line consisting of source ||| target.")
-		("max-seq-len", value<unsigned>()->default_value(0), "limit the sequence length loaded from parallel and mono data; none by default")
+		("max-seq-len", value<unsigned>()->default_value(0), "limit the sequence length loaded from parallel data; none by default")
+		("max-seq-len-mono", value<unsigned>()->default_value(0), "limit the sequence length loaded from mono data; none by default")
 		("mono-load-percent", value<unsigned>()->default_value(100), "limit the use of <num> percent of sequences in monolingual data; full by default")
 		//-----------------------------------------	
-		("K", value<unsigned>()->default_value(2), "the K value for sampling K-best translations from transformer models")
-		("beam_size", value<unsigned>()->default_value(4), "the beam size of beam search decoding")
 		("alpha", value<float>()->default_value(0.01f), "the alpha hyper-parameter for balancing the rewards")
 		("gamma_1", value<float>()->default_value(0.001f), "the gamma 1 hyper-parameter for stochastic gradient update in tuning source-to-target transformer model")
 		("gamma_2", value<float>()->default_value(0.001f), "the gamma 2 hyper-parameter for stochastic gradient update in tuning target-to-source transformer model")
@@ -97,11 +87,9 @@ int main(int argc, char** argv) {
 		//-----------------------------------------
 		("mono_s", value<string>()->default_value(""), "File to read the monolingual source from")
 		("mono_t", value<string>()->default_value(""), "File to read the monolingual target from")
-		("sample_size", value<unsigned>()->default_value(SAMPLE_SIZE), "sampling size from monolingual source and target data")
 		//-----------------------------------------
 		("minibatch_size,b", value<unsigned>()->default_value(MINIBATCH_SIZE), "minibatch size for training and development data")
 		("epoch,e", value<unsigned>()->default_value(20), "number of training epochs, 50 by default")
-		("dev_round", value<unsigned>()->default_value(10000), "number of rounds for evaluating over development data, 25000 by default")
 		//-----------------------------------------
 		("verbose,v", "be extremely chatty")
 	;
@@ -121,15 +109,11 @@ int main(int argc, char** argv) {
 	VERBOSE = vm.count("verbose");
 
 	// hyper-parameters
-	unsigned K = vm["K"].as<unsigned>();
-	unsigned beam_size = vm["beam_size"].as<unsigned>();
 	float alpha = vm["alpha"].as<float>();
 	float gamma_1 = vm["gamma_1"].as<float>();
 	float gamma_2 = vm["gamma_2"].as<float>();
 	MAX_EPOCH = vm["epoch"].as<unsigned>();
-	DEV_ROUND = vm["dev_round"].as<unsigned>();
 	MINIBATCH_SIZE = vm["minibatch_size"].as<unsigned>();
-	SAMPLE_SIZE = vm["sample_size"].as<unsigned>();
 
 	//--- load models
 	// Transformer Model recipes
@@ -248,9 +232,9 @@ int main(int argc, char** argv) {
 	// Assume that these monolingual corpora use the same vocabularies with parallel corpus	used for training.
 	MonoData mono_cor_s, mono_cor_t;
 	cerr << endl << "Reading monolingual source data from " << vm["mono_s"].as<string>() << "...\n";
-	mono_cor_s = read_mono_data(v_tf_lmodels[0]->get_dict(), vm["mono_s"].as<string>(), vm["max-seq-len"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
+	mono_cor_s = read_mono_data(v_tf_lmodels[0]->get_dict(), vm["mono_s"].as<string>(), vm["max-seq-len-mono"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
 	cerr << "Reading monolingual target data from " << vm["mono_t"].as<string>() << "...\n";
-	mono_cor_t = read_mono_data(v_tf_lmodels[1]->get_dict(), vm["mono_t"].as<string>(), vm["max-seq-len"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
+	mono_cor_t = read_mono_data(v_tf_lmodels[1]->get_dict(), vm["mono_t"].as<string>(), vm["max-seq-len-mono"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
 
 	// real train parallel data
 	WordIdCorpus train_cor;// integer-converted training parallel data
@@ -270,11 +254,11 @@ int main(int argc, char** argv) {
 	dynet::Trainer* p_sgd_t2s = create_sgd_trainer(opt_type, gamma_2, mod_t2s);
 
 	//--- execute round tripping
-	run_round_tripping(v_tf_models, v_tf_lmodels, 
+	run_e2e_round_tripping(v_tf_models, v_tf_lmodels, 
 				p_sgd_s2t, p_sgd_t2s,
 				mono_cor_s, mono_cor_t,
 				train_cor, devel_cor,
-				K, beam_size, alpha, gamma_1, gamma_2,
+				alpha, gamma_1, gamma_2,
 				vm["dev-eval-measure"].as<unsigned>());
 
 	// release memory
@@ -289,11 +273,11 @@ int main(int argc, char** argv) {
 	return EXIT_SUCCESS;
 }
 
-void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
+void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models, std::vector<transformer::TransformerLModel*>& v_alm_models
 	, dynet::Trainer*& p_sgd_s2t, dynet::Trainer*& p_sgd_t2s
 	, const MonoData& mono_s, const MonoData& mono_t
         , const WordIdCorpus& train_cor, const WordIdCorpus& dev_cor // for evaluation
-        , unsigned K, unsigned beam_size, float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
+        , float alpha, float gamma_1, float gamma_2 /*hyper-parameters of round tripping framework*/
 	, unsigned dev_eval_mea)
 {
 	cerr << endl << "Performing round tripping learning..." << endl;
@@ -305,14 +289,6 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 	// configs
 	const transformer::TransformerConfig& tfc_s2t = v_tm_models[0]->get_config();
 	const transformer::TransformerConfig& tfc_t2s = v_tm_models[1]->get_config();
-
-	// set up monolingual data
-	vector<unsigned> orders_s(mono_s.size());// IDs from mono_s
-	vector<unsigned> orders_t(mono_t.size());// IDs from mono_t
-	std::iota(orders_s.begin(), orders_s.end(), 0);
-	std::iota(orders_t.begin(), orders_t.end(), 0);
-	shuffle(orders_s.begin(), orders_s.end(), *rndeng);// to make it random
-	shuffle(orders_t.begin(), orders_t.end(), *rndeng);
 
 	// model stats on dev
 	transformer::ModelStats dstats_s2t(dev_eval_mea);
@@ -328,13 +304,22 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 	// create a sentence list for this train minibatch
 	train_ids_minibatch.resize(train_src_minibatch.size());
 	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);
-	// shuffle minibatches
-	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);// shuffle minibatches
 	unsigned tid = 0;
-
 	// dev
 	std::vector<std::vector<WordIdSentence> > dev_src_minibatch, dev_trg_minibatch;
 	create_minibatches(dev_cor, 1024/*for faster eval by default*/, dev_src_minibatch, dev_trg_minibatch);// on dev
+
+	// create minibatches for monolingual data
+	std::vector<std::vector<WordIdSentence> > mono_s_minibatch, mono_t_minibatch;
+	create_minibatches(mono_s, MINIBATCH_SIZE, mono_s_minibatch);// for source mono
+	create_minibatches(mono_t, MINIBATCH_SIZE, mono_t_minibatch);// for target mono
+	std::vector<size_t> mono_s_ids_minibatch, mono_t_ids_minibatch;
+	std::iota(mono_s_ids_minibatch.begin(), mono_s_ids_minibatch.end(), 0);
+	std::shuffle(mono_s_ids_minibatch.begin(), mono_s_ids_minibatch.end(), *dynet::rndeng);// shuffle minibatches
+	std::iota(mono_t_ids_minibatch.begin(), mono_t_ids_minibatch.end(), 0);
+	std::shuffle(mono_t_ids_minibatch.begin(), mono_t_ids_minibatch.end(), *dynet::rndeng);// shuffle minibatches
+	unsigned long id_s = 0, id_t = 0;
 
 	unsigned cpt_s2t = 0, cpt_t2s = 0/*count of patience*/;
 	
@@ -351,141 +336,175 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
         cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 
 	// start the round tripping algorithm	
-	bool sample_flag = true;
-	unsigned sample_size = SAMPLE_SIZE;
-	unsigned long id_s = 0, id_t = 0;
-	unsigned r = 1/*round*/, epoch_s2t = 0, epoch_t2s = 0, total_round = 0;
+	unsigned report_every_i = TREPORT;
+	unsigned dev_every_i_reports = DREPORT;
+	unsigned max_epochs = MAX_EPOCH;
+	float len_ratio = 1.f, sigma = 1.f;
+	bool switchoff_flag = false;
+	unsigned epoch_s = 0, epoch_t = 0, total_round = 0, epoch = 0;
+	unsigned sid = 0, last_print = 0;
 	bool flag = true;// role of source and target
-	while (epoch_s2t < MAX_EPOCH 
-		|| epoch_t2s < MAX_EPOCH)// FIXME: simple stopping criterion, another?
+	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
+	while (epoch < max_epochs)// FIXME: simple stopping criterion, another?
 	{
-		{// this block to prevent multiple graph creation which DyNet does not support yet!
-			if (id_s == orders_s.size()){
-				shuffle(orders_s.begin(), orders_s.end(), *rndeng);// to make it random
-				id_s = 0;// reset id
-				epoch_s2t++;// FIXME: adjust the learning rate if required?
+		transformer::ModelStats stats4sup, stats4unsup;
+		float total_loss = 0.f;
+		
+		for (unsigned iter = 0; iter < dev_every_i_reports;) {
+			if (tid == train_ids_minibatch.size()) { 
+				//timing
+				cerr << "***Epoch " << epoch << " is finished. ";
+				timer_epoch.show();
+
+				epoch++;
+
+				tid = 0; sid = 0; last_print = 0;
+
+				// learning rate scheduler 1: after lr_epochs, for every next epoch, the learning rate will be decreased by a factor of eta_decay.
+				// FIXME 
+
+				if (epoch >= max_epochs) break;
+
+				// shuffle the access order
+				cerr << "***SHUFFLE parallel data" << endl;
+				std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);				
+
+				timer_epoch.reset();
 			}
-			if (id_t == orders_t.size()){
-				shuffle(orders_t.begin(), orders_t.end(), *rndeng);// to make it random
-				id_t = 0;// reset id
-				epoch_t2s++;// FIXME: adjust the learning rate if required?
+			
+			if (id_s == mono_s_ids_minibatch.size()) { 
+				//timing
+				cerr << "***Epoch " << epoch_s << " is finished. " << endl;
+
+				epoch_s++;
+
+				id_s = 0;
+
+				// shuffle the access order
+				cerr << "***SHUFFLE monolingual source data" << endl;
+				std::shuffle(mono_s_ids_minibatch.begin(), mono_s_ids_minibatch.end(), *dynet::rndeng);				
 			}
 
-			if (tid >= train_ids_minibatch.size()){
-				tid = 0;
-				std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+			if (id_t == mono_t_ids_minibatch.size()) { 
+				//timing
+				cerr << "***Epoch " << epoch_t << " is finished. " << endl;
+
+				epoch_t++;
+
+				id_t = 0;
+
+				// shuffle the access order
+				cerr << "***SHUFFLE monolingual target data" << endl;
+				std::shuffle(mono_t_ids_minibatch.begin(), mono_t_ids_minibatch.end(), *dynet::rndeng);				
 			}
 
+			// get appropriate pointers
 			transformer::TransformerModel*& p_tf_s2t = flag?v_tm_models[0]:v_tm_models[1];
 			transformer::TransformerModel*& p_tf_t2s = flag?v_tm_models[1]:v_tm_models[0];
 			transformer::TransformerLModel*& p_alm = flag?v_alm_models[1]:v_alm_models[0];
 
-			// sample sentences from real parallel data
-			WordIdSentences r_src_sents, r_trg_sents;
-			if (sample_flag){// TODO: this is to simulate the warm-up strategy. This flag may be disabled after several iterations. 
-				r_src_sents = flag?train_src_minibatch[train_ids_minibatch[tid]]:train_trg_minibatch[train_ids_minibatch[tid]];
-				r_trg_sents = flag?train_trg_minibatch[train_ids_minibatch[tid]]:train_src_minibatch[train_ids_minibatch[tid]];
-				tid++;
+			// dynamic computation graph
+			dynet::ComputationGraph cg;
+
+			// sample from real parallel data
+			WordIdSentences& ssents = flag?train_src_minibatch[train_ids_minibatch[tid]]:train_trg_minibatch[train_ids_minibatch[tid]];
+			WordIdSentences& tsents = flag?train_trg_minibatch[train_ids_minibatch[tid]]:train_src_minibatch[train_ids_minibatch[tid]];
+
+			// sample from monolingual data
+			WordIdSentences& ssents_mono = flag?mono_s_minibatch[mono_s_ids_minibatch[id_s++]]:mono_t_minibatch[mono_t_ids_minibatch[id_t++]];
+
+			// supervised CE loss
+			transformer::ModelStats sstats;
+			dynet::Expression i_loss_sup = p_tf_s2t->build_graph(cg, ssents, tsents, &sstats);
+
+			// unsupervised CE loss 
+			std::vector<dynet::Expression> v_soft_targets;
+			transformer::ModelStats tstats;
+			p_tf_s2t->stochastic_decode(cg, ssents_mono, len_ratio, v_soft_targets);
+			dynet::Expression i_loss_unsup = alpha * p_tf_t2s->build_graph(cg, v_soft_targets, ssents_mono, &tstats) + (1.f - alpha) * p_alm->build_graph(cg, v_soft_targets);
+
+			// final objective
+			dynet::Expression i_objective = i_loss_sup + sigma * i_loss_unsup;
+
+			// perform forward computation for aggregate objective
+			cg.incremental_forward(i_objective);
+
+			// grab the parts of the objective
+			float objective = dynet::as_scalar(cg.get_value(i_objective.i));
+			float loss_sup = dynet::as_scalar(cg.get_value(i_loss_sup.i));
+			float loss_unsup = dynet::as_scalar(cg.get_value(i_loss_unsup.i));
+
+			total_loss += objective;
+			stats4sup._scores[1] += loss_sup;
+			stats4sup._words_src += sstats._words_src;
+			stats4sup._words_src_unk += sstats._words_src_unk;  
+			stats4sup._words_tgt += sstats._words_tgt;
+			stats4sup._words_tgt_unk += sstats._words_tgt_unk; 
+			stats4unsup._scores[1] += loss_unsup;
+			stats4unsup._words_src += tstats._words_src;
+			stats4unsup._words_src_unk += tstats._words_src_unk;  
+			stats4unsup._words_tgt += tstats._words_tgt;
+			stats4unsup._words_tgt_unk += tstats._words_tgt_unk;
+
+			// execute backward step (including computation of derivatives)
+			cg.backward(i_objective);
+
+			// update parameters
+			p_sgd_s2t->update();
+			p_sgd_t2s->update();
+
+			sid += train_trg_minibatch[train_ids_minibatch[tid]].size();
+			iter += train_trg_minibatch[train_ids_minibatch[tid]].size();
+
+			// switch source and target roles
+			flag = !flag;
+			if (flag)
+				total_round++;
+
+			if (sid / report_every_i != last_print 
+				|| iter >= dev_every_i_reports
+				|| tid + 1 == train_ids_minibatch.size())
+			{
+				last_print = sid / report_every_i;
+
+				float elapsed = timer_iteration.elapsed();
+
+				p_sgd_s2t->status();// p_sgd_t2s->status();
+				cerr << "[supervised CE loss] ";
+				cerr << "sents=" << sid << " ";
+				cerr << "src_unks=" << stats4sup._words_src_unk << " trg_unks=" << stats4sup._words_tgt_unk << " " << stats4sup.get_score_string() << endl;
+				cerr << "[unsupervised CE loss] ";
+				cerr << "src_unks=" << stats4unsup._words_src_unk << " trg_unks=" << stats4unsup._words_tgt_unk << " " << stats4unsup.get_score_string() << endl;
+				cerr << "total_loss=" << total_loss << endl;
+				cerr << "elapsed time=" << elapsed << endl;
 			}
-
-			// sample sentences from monolingual source and target data respectively
-			if (r_src_sents.size() > 0) sample_size = r_src_sents.size() / K;// real ~ synthetic
-			if (sample_size < 1) sample_size = 1;
-			for (unsigned sid = 0; sid < sample_size; sid++){
-		       		auto& sent = flag?mono_s[orders_s[id_s++]]:mono_t[orders_t[id_t++]];
-		
-				//---
-				if (VERBOSE)
-					cerr << "Sampled sentence from monolingual data: " << get_sentence(sent, (flag?sd:td)) << endl;
-				//---
-				
-				// generate K translated sentences using beam search according to source-to-target translation model.
-				if (VERBOSE) cerr << "Performing beam decoding..." << endl;
-				p_tf_s2t->set_dropout(false);// disable dropout for performing beam search
-				std::vector<WordIdSentence> trg_sents;
-				dynet::ComputationGraph cg;	
-				p_tf_s2t->beam_decode(cg, sent, trg_sents, beam_size, K);
-				p_tf_s2t->set_dropout(true);// enable dropout for training
-
-				// mix-up with real training data
-				for (auto& tsent : trg_sents){
-					//---
-					if (VERBOSE)
-						cerr << "Decoded sentence: " << get_sentence(tsent, (flag?td:sd)) << endl;
-					//---
-
-					if (tsent.size() > 2) { // good hypothesis
-						r_src_sents.push_back(sent);
-						r_trg_sents.push_back(tsent);
-					}
-				}
-			}
-
-			if (r_src_sents.size() > 0 && r_trg_sents.size() > 0){				
-				dynet::ComputationGraph cg;
-				
-				ModelStats stat1, stat2;
-	
-				// set the language-model reward for current sampled sentences from p_alm
-				//auto reward_lm = p_alm->build_graph(cg, r_trg_sents);
-			
-				// set the communication reward for current sampled sentences from p_tf_t2s
-				auto reward_rev = p_tf_t2s->build_graph(cg, r_trg_sents, r_src_sents, &stat1);
-			
-				// interpolate the rewards
-				//auto reward = alpha * reward_lm + (1.f - alpha) * reward_rev;// FIXME: the resulting reward is very big?
-				auto i_loss_s2t = /*reward **/ (p_tf_s2t->build_graph(cg, r_src_sents, r_trg_sents, &stat2));// need averaging?
-				auto i_loss_t2s = (1.f - alpha) * reward_rev;// need averaging?
-
-				// set total loss function
-				dynet::Expression i_loss = i_loss_s2t + i_loss_t2s;// final loss
-
-				// execute forward step
-				cg.incremental_forward(i_loss);		
-				//-----------------------------------
-				float loss = dynet::as_scalar(cg.get_value(i_loss.i)), loss_s2t = dynet::as_scalar(cg.get_value(i_loss_s2t.i)), loss_t2s = dynet::as_scalar(cg.get_value(i_loss_t2s.i));
-				p_sgd_s2t->status(); //p_sgd_t2s->status();
-				cerr << "round=" << total_round << "; " << "id_s=" << id_s << "; " << "id_t=" << id_t << "; " << "xent=" << loss / (stat1._words_tgt + stat2._words_tgt) << "; " << "xent_s2t=" << loss_s2t / stat2._words_tgt << "; " << "xent_t2s=" << loss_t2s / stat1._words_tgt << endl;
-				cerr << "-----------------------------------" << endl;
-				//-----------------------------------
-		
-				// execute backward step (including computation of derivatives)
-				cg.backward(i_loss);
-
-				// update parameters
-				p_sgd_s2t->update();
-				p_sgd_t2s->update();	
-			}
-		}	
-
-		// switch source and target roles
-		flag = !flag;
-		if (flag){
-			r++;
-			total_round++;
+			   		 
+			++tid; 
 		}
 
-		// evaluate over the development data to check the improvements (after a desired number of rounds)
-		if (r % DEV_ROUND == 0){			
-			eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
-			eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
+		timer_iteration.reset();
 
-			dstats_s2t.update_best_score(cpt_s2t);
-			dstats_t2s.update_best_score(cpt_t2s);
+		// evaluate over the development data to check the improvements (after a desired number of rounds)		
+		eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
+		eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
 
-			if (cpt_s2t == 0) v_tm_models[0]->save_params_to_file(tfc_s2t._model_path + "/model.params.rt");
-			if (cpt_t2s == 0) v_tm_models[1]->save_params_to_file(tfc_t2s._model_path + "/model.params.rt");
+		dstats_s2t.update_best_score(cpt_s2t);
+		dstats_t2s.update_best_score(cpt_t2s);
 
-			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-			cerr << "***DEV (s2t) [epoch=" << epoch_s2t + (float)id_s/(float)orders_s.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << " " << dstats_s2t.get_score_string() << endl;
-			cerr << "***DEV (t2s) [epoch=" << epoch_t2s + (float)id_t/(float)orders_t.size() << " eta=" << p_sgd_t2s->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_t2s._words_src_unk << " trg_unks=" << dstats_t2s._words_tgt_unk << " " << dstats_t2s.get_score_string() << endl;
-			cerr << "--------------------------------------------------------------------------------------------------------" << endl;
+		if (cpt_s2t == 0) v_tm_models[0]->save_params_to_file(tfc_s2t._model_path + "/model.params.e2e-rt");
+		if (cpt_t2s == 0) v_tm_models[1]->save_params_to_file(tfc_t2s._model_path + "/model.params.e2e-rt");
 
-			// FIXME: observe cpt_s2t and cpt_t2s
-			// ...
+		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
+		cerr << "***DEV (s2t) [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << " " << dstats_s2t.get_score_string() << " ";
+		if (cpt_s2t > 0) cerr << "(not improved, best score on dev so far: " << dstats_s2t.get_score_string(false) << ") " << endl;
+		cerr << "***DEV (t2s) [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd_t2s->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_t2s._words_src_unk << " trg_unks=" << dstats_t2s._words_tgt_unk << " " << dstats_t2s.get_score_string() << " ";
+		if (cpt_t2s > 0) cerr << "(not improved, best score on dev so far: " << dstats_t2s.get_score_string(false) << ") " << endl;
+		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 
-			r = 1;
-		}
+		// FIXME: observe cpt_s2t and cpt_t2s to adjust the learning rates
+		// ...
+		
+		timer_iteration.reset();
 	}
 }
 
