@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
 			"each line consisting of source ||| target.")
 		("train,t", value<string>(), "file containing real parallel sentences, with "
 			"each line consisting of source ||| target.")
-		("max-seq-len", value<unsigned>()->default_value(0), "limit the sequence length loaded from mono data; none by default")
+		("max-seq-len", value<unsigned>()->default_value(0), "limit the sequence length loaded from parallel and mono data; none by default")
 		("mono-load-percent", value<unsigned>()->default_value(100), "limit the use of <num> percent of sequences in monolingual data; full by default")
 		//-----------------------------------------	
 		("K", value<unsigned>()->default_value(2), "the K value for sampling K-best translations from transformer models")
@@ -255,7 +255,7 @@ int main(int argc, char** argv) {
 	// real train parallel data
 	WordIdCorpus train_cor;// integer-converted training parallel data
 	cerr << endl << "Reading real training parallel data from " << vm["train"].as<std::string>() << "...\n";
-	train_cor = read_corpus(vm["train"].as<std::string>(), &v_tf_models[0]->get_source_dict(), &v_tf_models[0]->get_target_dict(), true/*for training*/);
+	train_cor = read_corpus(vm["train"].as<std::string>(), &v_tf_models[0]->get_source_dict(), &v_tf_models[0]->get_target_dict(), true/*for training*/, vm["max-seq-len"].as<unsigned>());
 
 	// development parallel data
 	WordIdCorpus devel_cor;// integer-converted dev parallel data
@@ -426,14 +426,14 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 				ModelStats stat1, stat2;
 	
 				// set the language-model reward for current sampled sentences from p_alm
-				auto reward_lm = p_alm->build_graph(cg, r_trg_sents);
+				//auto reward_lm = p_alm->build_graph(cg, r_trg_sents);
 			
 				// set the communication reward for current sampled sentences from p_tf_t2s
 				auto reward_rev = p_tf_t2s->build_graph(cg, r_trg_sents, r_src_sents, &stat1);
 			
 				// interpolate the rewards
-				auto reward = alpha * reward_lm + (1.f - alpha) * reward_rev;// FIXME: the resulting reward is very big?
-				auto i_loss_s2t = reward * (p_tf_s2t->build_graph(cg, r_src_sents, r_trg_sents, &stat2));// need averaging?
+				//auto reward = alpha * reward_lm + (1.f - alpha) * reward_rev;// FIXME: the resulting reward is very big?
+				auto i_loss_s2t = /*reward **/ (p_tf_s2t->build_graph(cg, r_src_sents, r_trg_sents, &stat2));// need averaging?
 				auto i_loss_t2s = (1.f - alpha) * reward_rev;// need averaging?
 
 				// set total loss function
@@ -460,7 +460,7 @@ void run_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_models
 		// switch source and target roles
 		flag = !flag;
 
-		if (id_s == id_t){
+		if (flag){
 			r++;
 			total_round++;
 		}
