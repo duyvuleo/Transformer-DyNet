@@ -743,7 +743,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			cg.forward(i_objective);
 
 			// grab the parts of the objective
-			float loss = as_scalar(cg.get_value(i_xent.i));
+			float loss = dynet::as_scalar(cg.get_value(i_xent.i));
 			if (!is_valid(loss)){
 				std::cerr << "***Warning***: nan or -nan values occurred!" << std::endl;
 				++id;
