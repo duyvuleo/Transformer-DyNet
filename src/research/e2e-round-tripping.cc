@@ -342,7 +342,7 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 	float len_ratio = 1.f, sigma = 1.f;
 	bool switchoff_flag = false;
 	unsigned epoch_s = 0, epoch_t = 0, total_round = 0, epoch = 0;
-	unsigned sid = 0, id = 0, last_print = 0;
+	unsigned sid = 0, last_print = 0;
 	bool flag = true;// role of source and target
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
 	while (epoch < max_epochs)// FIXME: simple stopping criterion, another?
@@ -358,7 +358,7 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 
 				epoch++;
 
-				id = 0; sid = 0; last_print = 0;
+				tid = 0; sid = 0; last_print = 0;
 
 				// learning rate scheduler 1: after lr_epochs, for every next epoch, the learning rate will be decreased by a factor of eta_decay.
 				// FIXME 
@@ -378,6 +378,8 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 
 				epoch_s++;
 
+				id_s = 0;
+
 				// shuffle the access order
 				cerr << "***SHUFFLE monolingual source data" << endl;
 				std::shuffle(mono_s_ids_minibatch.begin(), mono_s_ids_minibatch.end(), *dynet::rndeng);				
@@ -388,6 +390,8 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 				cerr << "***Epoch " << epoch_t << " is finished. " << endl;
 
 				epoch_t++;
+
+				id_t = 0;
 
 				// shuffle the access order
 				cerr << "***SHUFFLE monolingual target data" << endl;
@@ -407,7 +411,7 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 			WordIdSentences& tsents = flag?train_trg_minibatch[train_ids_minibatch[tid]]:train_src_minibatch[train_ids_minibatch[tid]];
 
 			// sample from monolingual data
-			WordIdSentences& ssents_mono = flag?mono_s_minibatch[mono_s_ids_minibatch[id_s]]:mono_t_minibatch[mono_t_ids_minibatch[id_t]];
+			WordIdSentences& ssents_mono = flag?mono_s_minibatch[mono_s_ids_minibatch[id_s++]]:mono_t_minibatch[mono_t_ids_minibatch[id_t++]];
 
 			// supervised CE loss
 			transformer::ModelStats sstats;
@@ -449,8 +453,8 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 			p_sgd_s2t->update();
 			p_sgd_t2s->update();
 
-			sid += train_trg_minibatch[train_ids_minibatch[id]].size();
-			iter += train_trg_minibatch[train_ids_minibatch[id]].size();
+			sid += train_trg_minibatch[train_ids_minibatch[tid]].size();
+			iter += train_trg_minibatch[train_ids_minibatch[tid]].size();
 
 			// switch source and target roles
 			flag = !flag;
@@ -459,7 +463,7 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 
 			if (sid / report_every_i != last_print 
 				|| iter >= dev_every_i_reports
-				|| id + 1 == train_ids_minibatch.size())
+				|| tid + 1 == train_ids_minibatch.size())
 			{
 				last_print = sid / report_every_i;
 
@@ -475,7 +479,7 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 				cerr << "elapsed time=" << elapsed << endl;
 			}
 			   		 
-			++id;
+			++tid; 
 		}
 
 		timer_iteration.reset();
@@ -487,8 +491,8 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 		dstats_s2t.update_best_score(cpt_s2t);
 		dstats_t2s.update_best_score(cpt_t2s);
 
-		if (cpt_s2t == 0) v_tm_models[0]->save_params_to_file(tfc_s2t._model_path + "/model.params.rt");
-		if (cpt_t2s == 0) v_tm_models[1]->save_params_to_file(tfc_t2s._model_path + "/model.params.rt");
+		if (cpt_s2t == 0) v_tm_models[0]->save_params_to_file(tfc_s2t._model_path + "/model.params.e2e-rt");
+		if (cpt_t2s == 0) v_tm_models[1]->save_params_to_file(tfc_t2s._model_path + "/model.params.e2e-rt");
 
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 		cerr << "***DEV (s2t) [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd_s2t->learning_rate << "]" << " sents=" << dev_cor.size() << " src_unks=" << dstats_s2t._words_src_unk << " trg_unks=" << dstats_s2t._words_tgt_unk << " " << dstats_s2t.get_score_string() << " ";
@@ -497,7 +501,7 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 		if (cpt_t2s > 0) cerr << "(not improved, best score on dev so far: " << dstats_t2s.get_score_string(false) << ") " << endl;
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 
-		// FIXME: observe cpt_s2t and cpt_t2s
+		// FIXME: observe cpt_s2t and cpt_t2s to adjust the learning rates
 		// ...
 		
 		timer_iteration.reset();

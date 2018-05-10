@@ -1643,7 +1643,7 @@ void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const Word
 		//cg.checkpoint(); // cannot do checkpointing here because the soft targets need to be memorized!
 			
 		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, v_soft_targets);// batched
-		v_soft_targets.push_back(i_tgt_emb * i_ydist/*hidden_dim x 1*/);
+		v_soft_targets.push_back(i_tgt_emb/*H x |V|*/ * i_ydist/*|V|*/);// H x 1
 
 		t += 1;
 		if (_tfc._position_encoding == 1 && (t >= _tfc._max_length || t >= max_tgt_len)) break;// to prevent over-length sample in learned positional encoding
