@@ -1620,6 +1620,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, unsigned length_ratio, std::vector<Expression>& v_soft_targets) // batched stochastic decoding
 {
 	_tfc._is_training = false;
+	set_dropout(false);
 
 	unsigned bsize = sources.size();
 	size_t max_src_len = sources[0].size();
@@ -1651,6 +1652,7 @@ void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const Word
 		//cg.revert();
 	}
 
+	set_dropout(true);
 	_tfc._is_training = true;
 }
 

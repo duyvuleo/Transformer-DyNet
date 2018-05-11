@@ -549,7 +549,7 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
 			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
 			dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
-			dynet::Expression i_pre_loss = (v_soft_ssents[t+1] * i_Wo_emb_tgt) * (-i_log_softmax);
+			dynet::Expression i_pre_loss = (dynet::transpose(v_soft_ssents[t+1]) * i_Wo_emb_tgt) * (-i_log_softmax);
 			dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
 			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
 		}
