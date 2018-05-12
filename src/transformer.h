@@ -137,6 +137,10 @@ struct Encoder{
 	// transformer config pointer
 	TransformerConfig* _p_tfc = nullptr;
 
+	dynet::Expression get_wrd_embedding_matrix(dynet::ComputationGraph &cg){
+		return dynet::parameter(cg, _p_embed_s);// target word embedding matrix (num_units x |V_S|)
+	}
+	
 	dynet::Expression get_wrd_embeddings(dynet::ComputationGraph& cg, const std::vector<unsigned>& words){
 		return dynet::lookup(cg, _p_embed_s, words);
 	}
@@ -333,7 +337,9 @@ struct Encoder{
 		}
 		else{
 			// source embeddings			
-			i_src = dynet::concatenate_cols(v_soft_sources);// ((num_units, Lx), batch_size)
+			//i_src = dynet::concatenate_cols(v_soft_sources);// ((num_units, Lx), batch_size)
+			i_src = dynet::concatenate_cols(v_soft_sources);// ((|V_S|, Lx), batch_size)
+			i_src = this->get_wrd_embedding_matrix(cg)/*num_units x |V_S|*/ * i_src;// ((num_units, Lx), batch_size)
 
 			i_src = i_src * _scale_emb;// scaled embeddings
 
@@ -711,7 +717,9 @@ struct Decoder{
 			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
 		}
 		else{
-			i_tgt = dynet::concatenate_cols(v_soft_targets);// ((num_units, Ly), batch_size)
+			//i_tgt = dynet::concatenate_cols(v_soft_targets);// ((num_units, Ly), batch_size)
+			i_tgt = dynet::concatenate_cols(v_soft_targets);// ((|V_T|, Ly), batch_size)
+			i_tgt = this->get_wrd_embedding_matrix(cg)/*(num_units, |V_T|)*/ * i_tgt;// ((num_units, Ly), batch_size)
 
 			// scale
 			i_tgt = i_tgt * _scale_emb;// scaled embeddings
@@ -1635,7 +1643,7 @@ void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const Word
 	v_soft_targets.push_back(this->_decoder->get_wrd_embeddings(cg, sos_targets));
 
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, sources);// batched
-	dynet::Expression i_tgt_emb = this->_decoder->get_wrd_embedding_matrix(cg);// hidden_dim x |VT|
+	//dynet::Expression i_tgt_emb = this->_decoder->get_wrd_embedding_matrix(cg);// hidden_dim x |VT|
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	unsigned t = 0;
@@ -1644,7 +1652,8 @@ void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const Word
 		//cg.checkpoint(); // cannot do checkpointing here because the soft targets need to be memorized!
 			
 		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, v_soft_targets);// batched
-		v_soft_targets.push_back(i_tgt_emb/*H x |V|*/ * i_ydist/*|V|*/);// H x 1
+		//v_soft_targets.push_back(i_tgt_emb/*H x |V|*/ * i_ydist/*|V|*/);// H x 1
+		v_soft_targets.push_back(i_ydist);// |V| x 1
 
 		t += 1;
 		if (_tfc._position_encoding == 1 && (t >= _tfc._max_length || t >= max_tgt_len)) break;// to prevent over-length sample in learned positional encoding
