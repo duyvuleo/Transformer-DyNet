@@ -1639,8 +1639,9 @@ void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const Word
 
 	// start of sentences
 	v_soft_targets.clear();
-	std::vector<unsigned> sos_targets(bsize, sos_sym); 
-	v_soft_targets.push_back(this->_decoder->get_wrd_embeddings(cg, sos_targets));
+	//std::vector<unsigned> sos_targets(bsize, sos_sym); 
+	//v_soft_targets.push_back(this->_decoder->get_wrd_embeddings(cg, sos_targets));
+	v_soft_targets.push_back(one_hot(cg, _tfc._tgt_vocab_size, std::vector<unsigned>(bsize, sos_sym)));// |V| x 1
 
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, sources);// batched
 	//dynet::Expression i_tgt_emb = this->_decoder->get_wrd_embedding_matrix(cg);// hidden_dim x |VT|

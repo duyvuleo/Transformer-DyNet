@@ -25,6 +25,13 @@ std::vector<dynet::Expression> split_batch(const dynet::Expression& x, unsigned 
 dynet::Expression make_time_distributed(const dynet::Expression& x);
 dynet::Expression make_reverse_time_distributed(const dynet::Expression& x, unsigned int seq_len, unsigned int b_);
 
+// temporarily added here (latest committed dynet already has these!)
+Expression one_hot(ComputationGraph& g, unsigned int d, unsigned int idx,
+                   Device *device = dynet::default_device);
+Expression one_hot(ComputationGraph& g, unsigned int d,
+                   const std::vector<unsigned int>& ids,
+                   Device *device = dynet::default_device);
+
 dynet::Expression arange(dynet::ComputationGraph &cg, unsigned begin, unsigned end, bool log_transform, std::vector<float> *aux_mem) 
 {
 	aux_mem->clear();
@@ -175,5 +182,24 @@ void ParameterInitLeCunUniform::initialize_params(Tensor & values) const {
 	float s = scale * std::sqrt(3.f / fan_in);
 	TensorTools::randomize_uniform(values, -s, s);
 }
-// --- 
+// ---
+
+
+// ---
+Expression one_hot(ComputationGraph& g, unsigned int d, unsigned int idx, Device *device) {
+  Dim dim({d});
+  vector<unsigned int> ids = {idx};
+  vector<float> data = {1.0};
+  return Expression(&g, g.add_input(dim, ids, data, device, 0.0));
+}
+Expression one_hot(ComputationGraph& g, unsigned int d, const std::vector<unsigned int>& ids, Device *device) {
+  unsigned batch_size = ids.size();
+  Dim dim({d}, batch_size);
+  vector<unsigned int> flat_ids(batch_size);
+  for (unsigned int b=0; b<batch_size; b++)
+    flat_ids[b] = b * d + ids[b];
+  vector<float> data(batch_size, 1.0);
+  return Expression(&g, g.add_input(dim, flat_ids, data, device, 0.0));
+}
+// ---
 
