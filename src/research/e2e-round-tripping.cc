@@ -12,9 +12,16 @@
 #include <boost/program_options/variables_map.hpp>
 #include <boost/algorithm/string.hpp>
 
+// MTEval
+#include <mteval/utils.h>
+#include <mteval/Evaluator.h>
+#include <mteval/EvaluatorFactory.h>
+#include <mteval/Statistics.h>
+
 using namespace std;
 using namespace dynet;
 using namespace transformer;
+using namespace MTEval;
 using namespace boost::program_options;
 
 unsigned MAX_EPOCH = 10;
@@ -78,6 +85,7 @@ int main(int argc, char** argv) {
 			"each line consisting of source ||| target.")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sequence length loaded from parallel data; none by default")
 		("max-seq-len-mono", value<unsigned>()->default_value(0), "limit the sequence length loaded from mono data; none by default")
+		("train-percent", value<unsigned>()->default_value(100), "limit the use of <num> percent of sequences in ral parallel data; full by default")
 		("mono-load-percent", value<unsigned>()->default_value(100), "limit the use of <num> percent of sequences in monolingual data; full by default")
 		//-----------------------------------------
 		("len-ratio", value<float>()->default_value(1.f), "the empirical length ratio between source and target sequences (len_target = len_ratio * len_source) ; 1.0 be default")
@@ -196,7 +204,7 @@ int main(int argc, char** argv) {
 	// Transformer LModel recipes
 	std::vector<transformer::TransformerLModel*> v_tf_lmodels;
 	model_paths.clear();
-	model_paths.insert(model_paths.begin(), {vm["model-path-s"].as<std::string>(), vm["model-path-t"].as<std::string>()});
+	//model_paths.insert(model_paths.begin(), {vm["model-path-s"].as<std::string>(), vm["model-path-t"].as<std::string>()});
 	for (auto& model_path : model_paths){
 		std::string config_file = model_path + "/model.config";// configuration file path
 		struct stat sb;
@@ -243,14 +251,28 @@ int main(int argc, char** argv) {
 	// Assume that these monolingual corpora use the same vocabularies with parallel corpus	used for training.
 	MonoData mono_cor_s, mono_cor_t;
 	cerr << endl << "Reading monolingual source data from " << vm["mono-s"].as<string>() << "...\n";
-	mono_cor_s = read_mono_data(v_tf_lmodels[0]->get_dict(), vm["mono-s"].as<string>(), vm["max-seq-len-mono"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
+	mono_cor_s = read_mono_data(v_tf_models[0]->get_source_dict(), vm["mono-s"].as<string>(), vm["max-seq-len-mono"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
 	cerr << "Reading monolingual target data from " << vm["mono-t"].as<string>() << "...\n";
-	mono_cor_t = read_mono_data(v_tf_lmodels[1]->get_dict(), vm["mono-t"].as<string>(), vm["max-seq-len-mono"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
+	mono_cor_t = read_mono_data(v_tf_models[0]->get_target_dict(), vm["mono-t"].as<string>(), vm["max-seq-len-mono"].as<unsigned>(), vm["mono-load-percent"].as<unsigned>());
 
 	// real train parallel data
 	WordIdCorpus train_cor;// integer-converted training parallel data
 	cerr << endl << "Reading real training parallel data from " << vm["train"].as<std::string>() << "...\n";
 	train_cor = read_corpus(vm["train"].as<std::string>(), &v_tf_models[0]->get_source_dict(), &v_tf_models[0]->get_target_dict(), true/*for training*/, vm["max-seq-len"].as<unsigned>());
+	// limit the percent of training data to be used
+	unsigned train_percent = vm["train-percent"].as<unsigned>();
+	if (train_percent < 100 
+		&& train_percent > 0)
+	{
+		cerr << "Only use " << train_percent << "% of " << train_cor.size() << " training instances: ";
+		unsigned int rev_pos = train_percent * train_cor.size() / 100;
+		train_cor.erase(train_cor.begin() + rev_pos, train_cor.end());
+		cerr << train_cor.size() << " instances remaining!" << endl;
+	}
+	else if (train_percent != 100){
+		cerr << "Invalid --train-percent <num> used. <num> must be (0,100]" << endl;
+		return EXIT_FAILURE;
+	}
 
 	// development parallel data
 	WordIdCorpus devel_cor;// integer-converted dev parallel data
@@ -259,6 +281,7 @@ int main(int argc, char** argv) {
 
 	// set up optimizers 
 	unsigned opt_type = 0;// normal SGD
+	//signed opt_type = 4;// Adam
 	dynet::ParameterCollection& mod_s2t = (*v_tf_models[0]).get_model_parameters();
 	dynet::ParameterCollection& mod_t2s = (*v_tf_models[1]).get_model_parameters();
 	dynet::Trainer* p_sgd_s2t = create_sgd_trainer(opt_type, gamma_1, mod_s2t);
@@ -319,7 +342,7 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 	unsigned tid = 0;
 	// dev
 	std::vector<std::vector<WordIdSentence> > dev_src_minibatch, dev_trg_minibatch;
-	create_minibatches(dev_cor, MINIBATCH_SIZE, dev_src_minibatch, dev_trg_minibatch);// on dev
+	create_minibatches(dev_cor, 1024/*faster, MINIBATCH_SIZE*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 
 	// create minibatches for monolingual data
 	std::vector<std::vector<WordIdSentence> > mono_s_minibatch, mono_t_minibatch;
@@ -334,8 +357,8 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 
 	unsigned cpt_s2t = 0, cpt_t2s = 0/*count of patience*/;
 	
-	eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
-	eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
+	eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, dev_eval_mea, 1);// batched version (2-3 times faster)
+	eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, dev_eval_mea, 1);// batched version (2-3 times faster)
 	
 	dstats_s2t.update_best_score(cpt_s2t);
 	dstats_t2s.update_best_score(cpt_t2s);
@@ -411,7 +434,7 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 			// get appropriate pointers
 			transformer::TransformerModel*& p_tf_s2t = flag?v_tm_models[0]:v_tm_models[1];
 			transformer::TransformerModel*& p_tf_t2s = flag?v_tm_models[1]:v_tm_models[0];
-			transformer::TransformerLModel*& p_alm = flag?v_alm_models[1]:v_alm_models[0];
+			//transformer::TransformerLModel*& p_alm = flag?v_alm_models[1]:v_alm_models[0];
 
 			// dynamic computation graph
 			dynet::ComputationGraph cg;
@@ -432,15 +455,14 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 			//cerr << "unsupervised CE loss" << endl;
 			std::vector<dynet::Expression> v_soft_targets;
 			transformer::ModelStats tstats;
-			//cerr << "stochastic decoding" << endl;
+
+			//cerr << "stochastic decoding" << endl;			
 			p_tf_s2t->stochastic_decode(cg, ssents_mono, len_ratio, v_soft_targets);
 			//cerr << "#soft_targets=" << v_soft_targets.size() << endl;
-			//cerr << "loss_t2s" << endl;
-			dynet::Expression i_loss_t2s = p_tf_t2s->build_graph(cg, v_soft_targets, ssents_mono, &tstats);
-			//cerr << "loss_t" << endl;
-			//dynet::Expression i_loss_t = p_alm->build_graph(cg, v_soft_targets);
-			dynet::Expression i_loss_unsup = alpha * i_loss_t2s;// + (1.f - alpha) * i_loss_t;//alpha * p_tf_t2s->build_graph(cg, v_soft_targets, ssents_mono, &tstats) + (1.f - alpha) * p_alm->build_graph(cg, v_soft_targets);
-
+			//
+			//cerr << "loss_unsup" << endl;
+			dynet::Expression i_loss_unsup = p_tf_t2s->build_graph(cg, v_soft_targets, ssents_mono, &tstats);
+			
 			// final objective
 			//cerr << "i_objective" << endl;
 			dynet::Expression i_objective = i_loss_sup + sigma * i_loss_unsup;
@@ -483,6 +505,7 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 
 			// switch source and target roles
 			flag = !flag;
+			len_ratio = 1.f / len_ratio;
 			if (flag)
 				total_round++;
 
@@ -510,8 +533,8 @@ void run_e2e_round_tripping(std::vector<transformer::TransformerModel*>& v_tm_mo
 		timer_iteration.reset();
 
 		// evaluate over the development data to check the improvements (after a desired number of rounds)		
-		eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, 0, 0);// batched version (2-3 times faster)
-		eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, 0, 0);// batched version (2-3 times faster)
+		eval_on_dev_batch(*v_tm_models[0], dev_src_minibatch, dev_trg_minibatch, dstats_s2t, dev_eval_mea, 1);// batched version (2-3 times faster)
+		eval_on_dev_batch(*v_tm_models[1], dev_trg_minibatch, dev_src_minibatch, dstats_t2s, dev_eval_mea, 1);// batched version (2-3 times faster)
 
 		dstats_s2t.update_best_score(cpt_s2t);
 		dstats_t2s.update_best_score(cpt_t2s);
@@ -557,7 +580,47 @@ void eval_on_dev_batch(transformer::TransformerModel &tf,
 		dstats._scores[1] = losses;
 	}
 	else{
-		// FIXME
+		// create evaluators
+		std::string spec;
+		if (dev_eval_mea == 1) spec = "BLEU";
+		else if (dev_eval_mea == 2) spec = "NIST";
+		else if (dev_eval_mea == 3) spec = "WER";
+		else if (dev_eval_mea == 4) spec = "RIBES";
+		std::shared_ptr<MTEval::Evaluator> evaluator(MTEval::EvaluatorFactory::create(spec));
+		std::vector<MTEval::Sample> v_samples;
+		for (unsigned i = 0; i < dev_src_minibatch.size(); ++i) {
+			WordIdSentences ssents, tsents;
+			ssents = dev_src_minibatch[i];
+			tsents = dev_tgt_minibatch[i];
+		
+			// batched inference/decoding
+			dynet::ComputationGraph cg;
+			WordIdSentences thyps;// raw translation (w/o scores)
+			if (dev_eval_infer_algo == 0)// random sampling
+				tf.sample(cg, ssents, thyps);// fastest with bad translations
+			else if (dev_eval_infer_algo == 1)// greedy decoding
+				tf.greedy_decode(cg, ssents, thyps);// faster with relatively good translations
+			else// beam search decoding
+			{
+				// FIXME: current version of beam search does not support batched decoding yet!
+				TRANSFORMER_RUNTIME_ASSERT("Current version of beam search does not support batched decoding yet!");
+			}
+		
+			// collect statistics for mteval
+			for (unsigned h = 0; h < tsents.size(); h++){
+				v_samples.push_back(MTEval::Sample({thyps[h], {tsents[h]/*, tsent2, tsent3, tsent4*/}}));// multiple references are supported as well!
+				evaluator->prepare(v_samples.back());
+			}
+		}
+		
+		// analyze the evaluation score
+		MTEval::Statistics eval_stats;
+		for (unsigned i = 0; i < v_samples.size(); ++i) {			
+			eval_stats += evaluator->map(v_samples[i]);
+		}
+
+		dstats._scores[1] = evaluator->integrate(eval_stats);
+		
 	}
 	
 	tf.set_dropout(true);
