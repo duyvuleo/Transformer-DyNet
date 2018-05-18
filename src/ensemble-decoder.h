@@ -210,13 +210,16 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
 	
 	// compute source representation
-	std::vector<dynet::Expression> v_src_reps;
+	std::vector<dynet::Expression> v_src_reps(v_models.size()), v_i_Wo_bias(v_models.size()), v_i_Wo_emb_tgt(v_models.size());
+	unsigned m = 0;
 	for (auto & tf : v_models){
 		// compute source representation
-		v_src_reps.push_back(tf.get()->compute_source_rep(cg, WordIdSentences(1, sent_src)/*pseudo batch (1)*/));
+		v_src_reps[m] = tf.get()->compute_source_rep(cg, WordIdSentences(1, sent_src)/*pseudo batch (1)*/);
 
 		// prepare recipe for output layer
-		tf.get()->prepare_output_layer(cg);
+		tf.get()->prepare_output_layer(cg, v_i_Wo_bias[m], v_i_Wo_emb_tgt[m]);
+
+		m++;
 	}
 
 	// the n-best hypotheses
@@ -247,7 +250,7 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 			// perform the forward step on all models
 			std::vector<dynet::Expression> i_softmaxes, i_aligns;
 			for(int j : boost::irange(0, (int)v_models.size())){
-				i_softmaxes.push_back(v_models[j].get()->step_forward(cg, v_src_reps[j]
+				i_softmaxes.push_back(v_models[j].get()->step_forward(cg, v_src_reps[j], v_i_Wo_bias[j], v_i_Wo_emb_tgt[j]
 					, sent
 					, _ensemble_operation == "logsum"
 					, i_aligns));
@@ -373,13 +376,16 @@ std::vector<BatchedEnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet:
 	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
 	  
 	// compute source representation
-	std::vector<dynet::Expression> v_src_reps;// batched
+	std::vector<dynet::Expression> v_src_reps(v_models.size()), v_i_Wo_bias(v_models.size()), v_i_Wo_emb_tgt(v_models.size());
+	unsigned m = 0;
 	for (auto & tf : v_models){
 		// compute source representation
-		v_src_reps.push_back(tf.get()->compute_source_rep(cg, sent_src_batch));
+		v_src_reps[m] = tf.get()->compute_source_rep(cg, sent_src_batch);
 
 		// prepare recipe for output layer
-		tf.get()->prepare_output_layer(cg);
+		tf.get()->prepare_output_layer(cg, v_i_Wo_bias[m], v_i_Wo_emb_tgt[m]);
+
+		m++;
 	}
 
 	// the n-best hypotheses
