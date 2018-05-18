@@ -212,7 +212,11 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 	// compute source representation
 	std::vector<dynet::Expression> v_src_reps;
 	for (auto & tf : v_models){
+		// compute source representation
 		v_src_reps.push_back(tf.get()->compute_source_rep(cg, WordIdSentences(1, sent_src)/*pseudo batch (1)*/));
+
+		// prepare recipe for output layer
+		tf.get()->prepare_output_layer(cg);
 	}
 
 	// the n-best hypotheses
@@ -371,7 +375,11 @@ std::vector<BatchedEnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet:
 	// compute source representation
 	std::vector<dynet::Expression> v_src_reps;// batched
 	for (auto & tf : v_models){
+		// compute source representation
 		v_src_reps.push_back(tf.get()->compute_source_rep(cg, sent_src_batch));
+
+		// prepare recipe for output layer
+		tf.get()->prepare_output_layer(cg);
 	}
 
 	// the n-best hypotheses
