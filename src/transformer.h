@@ -339,7 +339,7 @@ struct Encoder{
 			// source embeddings			
 			//i_src = dynet::concatenate_cols(v_soft_sources);// ((num_units, Lx), batch_size)
 			i_src = dynet::concatenate_cols(v_soft_sources);// ((|V_S|, Lx), batch_size)
-			i_src = this->get_wrd_embedding_matrix(cg)/*num_units x |V_S|*/ * i_src;// ((num_units, Lx), batch_size) - FIXME: repeated call of get_wrd_embedding_matrix()?
+			i_src = this->get_wrd_embedding_matrix(cg)/*num_units x |V_S|*/ * i_src;// ((num_units, Lx), batch_size)
 
 			i_src = i_src * _scale_emb;// scaled embeddings
 
@@ -696,7 +696,7 @@ struct Decoder{
 		return i_tgt;
 	}
 
-	// this function applies for (stochastic) decoding only
+	// this applies for stochastic decoding only!
 	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
 		, const std::vector<dynet::Expression>& v_soft_targets/*batch of soft word target embeddings*/)
 	{
@@ -711,15 +711,16 @@ struct Decoder{
 			std::vector<dynet::Expression> target_embeddings; 
 			_p_tgt_rnn->new_graph(cg);
 			_p_tgt_rnn->start_new_sequence();
-			for (unsigned l = 0; l < _batch_tlen; l++)
+			for (unsigned l = 0; l < _batch_tlen; l++){
 				target_embeddings.push_back(_p_tgt_rnn->add_input(v_soft_targets[l]));
+			}
 
 			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
 		}
 		else{
 			//i_tgt = dynet::concatenate_cols(v_soft_targets);// ((num_units, Ly), batch_size)
 			i_tgt = dynet::concatenate_cols(v_soft_targets);// ((|V_T|, Ly), batch_size)
-			i_tgt = this->get_wrd_embedding_matrix(cg)/*(num_units, |V_T|)*/ * i_tgt;// ((num_units, Ly), batch_size) - FIXME: repeated call of get_wrd_embedding_matrix()?
+			i_tgt = this->get_wrd_embedding_matrix(cg)/*(num_units, |V_T|)*/ * i_tgt;// ((num_units, Ly), batch_size)
 
 			// scale
 			i_tgt = i_tgt * _scale_emb;// scaled embeddings
@@ -848,26 +849,23 @@ public:
 		, const WordIdSentences& tsents/*batched*/
 		, ModelStats* pstats=nullptr
 		, bool is_eval_on_dev=false);
-	void prepare_output_layer(dynet::ComputationGraph &cg
-		, dynet::Expression& i_Wo_bias
-		, dynet::Expression& i_Wo_emb_tgt);
 	// for decoding
 	dynet::Expression compute_source_rep(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents);// source representation given real sources
 	dynet::Expression step_forward(dynet::ComputationGraph & cg
-		, const dynet::Expression& i_src_rep, const dynet::Expression& i_Wo_bias, const dynet::Expression& i_Wo_emb_tgt
+		, const dynet::Expression& i_src_rep
 		, const WordIdSentence &partial_sent
 		, bool log_prob
 		, std::vector<dynet::Expression> &aligns
 		, float sm_temp=1.f);// forward step to get softmax scores
 	dynet::Expression step_forward(dynet::ComputationGraph &cg
-		, const dynet::Expression& i_src_rep, const dynet::Expression& i_Wo_bias, const dynet::Expression& i_Wo_emb_tgt
+		, const dynet::Expression& i_src_rep
 		, const WordIdSentences &partial_sents
 		, bool log_prob
 		, std::vector<dynet::Expression> &aligns
 		, float sm_temp=1.f);
 	dynet::Expression step_forward(dynet::ComputationGraph &cg
-		, const dynet::Expression& i_src_rep, const dynet::Expression& i_Wo_bias, const dynet::Expression& i_Wo_emb_tgt
+		, const dynet::Expression& i_src_rep
 		, std::vector<Expression>& v_soft_targets
 		, float sm_temp=1.f);
 	void sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// random sampling
@@ -939,16 +937,8 @@ dynet::Expression TransformerModel::compute_source_rep(dynet::ComputationGraph &
 	return _encoder.get()->build_graph(cg, ssents);// ((num_units, Lx), batch_size)
 }
 
-void TransformerModel::prepare_output_layer(dynet::ComputationGraph &cg
-	, dynet::Expression& i_Wo_bias
-	, dynet::Expression& i_Wo_emb_tgt)
-{
-	i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
-	i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
-}
-
 dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
-	, const dynet::Expression& i_src_rep, const dynet::Expression& i_Wo_bias, const dynet::Expression& i_Wo_emb_tgt
+	, const dynet::Expression& i_src_rep
 	, const WordIdSentence &partial_sent
 	, bool log_prob
 	, std::vector<dynet::Expression> &aligns
@@ -965,7 +955,9 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 		//i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sent.size() - 1)});
 		i_tgt_t = dynet::pick(i_tgt_ctx, (unsigned)(partial_sent.size() - 1), 1);// shifted right, ((|V_T|, 1), batch_size)
 
-	// output linear projections (w/ bias)	
+	// output linear projections (w/ bias)
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 
 	// FIXME: get the alignments for visualisation
@@ -980,7 +972,7 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 
 // batched version
 dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
-	, const dynet::Expression& i_src_rep, const dynet::Expression& i_Wo_bias, const dynet::Expression& i_Wo_emb_tgt
+	, const dynet::Expression& i_src_rep
 	, const WordIdSentences &partial_sents
 	, bool log_prob
 	, std::vector<dynet::Expression> &aligns
@@ -998,6 +990,8 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 		i_tgt_t = dynet::pick(i_tgt_ctx, (unsigned)(_decoder.get()->_batch_tlen - 1), 1);// shifted right, ((|V_T|, 1), batch_size)
 
 	// output linear projections (w/ bias)
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 
 	// FIXME: get the alignments for visualisation
@@ -1011,7 +1005,7 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 }
 
 dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
-		, const dynet::Expression& i_src_rep, const dynet::Expression& i_Wo_bias, const dynet::Expression& i_Wo_emb_tgt
+		, const dynet::Expression& i_src_rep
 		, std::vector<Expression>& v_soft_targets
 		, float sm_temp)
 {
@@ -1027,6 +1021,8 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 		i_tgt_t = dynet::pick(i_tgt_ctx, (unsigned)(_decoder.get()->_batch_tlen - 1), 1);// shifted right, ((|V_T|, 1), batch_size)
 
 	// output linear projections (w/ bias)
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
 
 	// compute softmax prediction (note: return a batch of softmaxes)
@@ -1045,11 +1041,10 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// ((num_units, Ly), batch_size)
 
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
-
 	// get losses	
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+
 // both of the followings work well!
 #ifndef USE_LINEAR_TRANSFORMATION_BROADCASTING 
 	// Note: can be more efficient if using direct computing for i_tgt_ctx (e.g., use affine_transform)
@@ -1142,11 +1137,10 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// ((num_units, Ly), batch_size)
 
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
+	// get losses	
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 
-	// get losses		
 // both of the followings work well!
 #ifndef USE_LINEAR_TRANSFORMATION_BROADCASTING 
 	// Note: can be more efficient if using direct computing for i_tgt_ctx (e.g., use affine_transform)
@@ -1227,7 +1221,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 }
 
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
-	, const std::vector<dynet::Expression>& v_soft_ssents/*batched*/
+	, const std::vector<dynet::Expression>& v_soft_ssents/*batched soft sources*/
 	, const WordIdSentences& tsents/*batched*/
 	, ModelStats* pstats
 	, bool is_eval_on_dev)
@@ -1238,11 +1232,10 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// ((num_units, Ly), batch_size)
 
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
-
 	// get losses	
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+
 // both of the followings work well!
 #ifndef USE_LINEAR_TRANSFORMATION_BROADCASTING 
 	// Note: can be more efficient if using direct computing for i_tgt_ctx (e.g., use affine_transform)
@@ -1333,12 +1326,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 	target.clear();
 	target.push_back(sos_sym); 
 
-	// compute source representation
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
-
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
 
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	std::stringstream ss;
@@ -1348,7 +1336,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 	{
 		cg.checkpoint();
 				
-		dynet::Expression ydist = this->step_forward(cg, i_src_rep, i_Wo_bias, i_Wo_emb_tgt, target, false, aligns);
+		dynet::Expression ydist = this->step_forward(cg, i_src_rep, target, false, aligns);
 	
 		auto dist = dynet::as_vector(cg.incremental_forward(ydist));
 		double p = rand01();
@@ -1392,12 +1380,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentences
 	targets.clear();
 	targets.resize(bsize, WordIdSentence(1, sos_sym)); 
 
-	// compute source representation
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, sources);// batched
-
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
 
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	unsigned t = 0;
@@ -1405,7 +1388,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentences
 	{
 		cg.checkpoint();
 				
-		dynet::Expression ydist = this->step_forward(cg, i_src_rep, i_Wo_bias, i_Wo_emb_tgt, targets, false, aligns);// batched
+		dynet::Expression ydist = this->step_forward(cg, i_src_rep, targets, false, aligns);// batched
 		auto dist = dynet::as_vector(cg.incremental_forward(ydist));// bsize * TARGET_VOCAB_SIZE
 
 		for (unsigned bs = 0 ; bs < bsize; bs++){
@@ -1458,12 +1441,7 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 	const int& sos_sym = _tfc._sm._kTGT_SOS;
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
 	
-	// compute source representation
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(num_samples, source));
-	
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 
@@ -1479,7 +1457,7 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 	{
 		cg.checkpoint();
 	
-		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, i_Wo_bias, i_Wo_emb_tgt, samples, false, aligns);// batched, ((TARGET_VOCAB_SIZE, 1), num_samples)
+		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, samples, false, aligns);// batched, ((TARGET_VOCAB_SIZE, 1), num_samples)
 	
 		auto ydist = dynet::as_vector(cg.incremental_forward(i_ydist));// (num_samples * TARGET_VOCAB_SIZE)
 		for (unsigned s = 0 ; s < num_samples; s++){
@@ -1538,12 +1516,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 	target.clear();
 	target.push_back(sos_sym); 
 
-	// compute source representation
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
-
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	unsigned t = 0;
@@ -1551,7 +1524,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 	{
 		cg.checkpoint();
 			
-		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, i_Wo_bias, i_Wo_emb_tgt, target, false, aligns);
+		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, target, false, aligns);
 		auto ydist = dynet::as_vector(cg.incremental_forward(i_ydist));
 	
 		// find the argmax next word (greedy)
@@ -1600,12 +1573,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 	targets.clear();
 	targets.resize(bsize, WordIdSentence(1, sos_sym)); 
 
-	// compute source representation
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, sources);// batched
-
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	unsigned t = 0;
@@ -1613,7 +1581,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 	{
 		cg.checkpoint();
 			
-		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, i_Wo_bias, i_Wo_emb_tgt, targets, false, aligns);// batched
+		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, targets, false, aligns);// batched
 		auto ydist = dynet::as_vector(cg.incremental_forward(i_ydist));// bsize * TARGET_VOCAB_SIZE
 	
 		// find the argmax next word (greedy)
@@ -1676,13 +1644,8 @@ void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const Word
 	//v_soft_targets.push_back(this->_decoder->get_wrd_embeddings(cg, sos_targets));
 	v_soft_targets.push_back(one_hot(cg, _tfc._tgt_vocab_size, std::vector<unsigned>(bsize, sos_sym)));// |V| x 1
 
-	// compute source representation
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, sources);// batched
 	//dynet::Expression i_tgt_emb = this->_decoder->get_wrd_embedding_matrix(cg);// hidden_dim x |VT|
-
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	unsigned t = 0;
@@ -1690,7 +1653,7 @@ void TransformerModel::stochastic_decode(dynet::ComputationGraph& cg, const Word
 	{
 		//cg.checkpoint(); // cannot do checkpointing here because the soft targets need to be memorized!
 			
-		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, i_Wo_bias, i_Wo_emb_tgt, v_soft_targets);// batched
+		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, v_soft_targets);// batched
 		//v_soft_targets.push_back(i_tgt_emb/*H x |V|*/ * i_ydist/*|V|*/);// H x 1
 		v_soft_targets.push_back(i_ydist);// |V| x 1
 
@@ -1729,12 +1692,8 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 	const int& eos_sym = _tfc._sm._kTGT_EOS;
 	unsigned int vocab_size = _dicts.second.size();
 
-	// compute the source representation
+	// get the source representation
 	dynet::Expression i_src_rep = this->compute_source_rep(cg, WordIdSentences(1, source)/*pseudo batch (1)*/);// ToDo: batch decoding
-
-	// prepare recipe for output layer
-	dynet::Expression i_Wo_bias, i_Wo_emb_tgt;
-	prepare_output_layer(cg, i_Wo_bias, i_Wo_emb_tgt);
 	
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 
@@ -1750,7 +1709,7 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 		for (auto& hprev: chart) {
 			cg.checkpoint();
 		
-			dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, i_Wo_bias, i_Wo_emb_tgt, hprev.target, false, aligns);
+			dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, hprev.target, false, aligns);
 
 			// find the top k best next words
 			auto ydist = dynet::as_vector(cg.incremental_forward(i_ydist));
