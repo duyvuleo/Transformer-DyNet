@@ -46,6 +46,7 @@ bool USE_SMALLER_MINIBATCH = false;
 unsigned NUM_RESETS = 1;
 
 unsigned NUM_SAMPLES = 2;
+unsigned SAMPLING_SIZE = 1;
 
 bool VERBOSE = false;
 
@@ -177,6 +178,7 @@ int main(int argc, char** argv) {
 		("num-resets", value<unsigned>()->default_value(1), "no. of times the training process will be reset; default 1") 
 		//-----------------------------------------
 		("sampling", "sample translation during training; default not")
+		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 1")
 		//-----------------------------------------
 		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES); default 0 (perplexity)") // note that MT scores here are approximate (e.g., evaluating with <unk> markers, and tokenized text or with subword segmentation if using BPE), not necessarily equivalent to real BLEU/NIST/WER/RIBES scores.
 		("dev-eval-infer-algo", value<unsigned>()->default_value(1), "specify the algorithm for inference on dev (0: sampling; 1: greedy; N>=2: beam search with N size of beam); default 0 (sampling)") // using sampling/greedy will be faster. 
@@ -667,7 +669,7 @@ void eval_on_dev(transformer::TransformerModel &tf,
 // ---
 
 // ---
-dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), batch_size * |S|)*/,
+dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), 1)*/,
 	const WordIdSentences& ssents, 
 	const WordIdSentences& samples, 
 	MMFeatures& mm_feas)
@@ -676,13 +678,14 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 	mm_feas.compute_feature_scores(ssents, samples, scores);
 	
 	// compute moment matching: <\hat{\Phi}(x) - \bar{\Phi}, \Phi(x) - \bar{\Phi}>
-	dynet::Expression i_phi_x = dynet::input(cg, dynet::Dim({(unsigned)scores.size(), mm_feas._num_samples}, (unsigned)ssents.size()), scores);// ((|F|, |S|), batch_size)
+	unsigned F_dim = scores.size() / ((unsigned)ssents.size() * mm_feas._num_samples);
+	dynet::Expression i_phi_x = dynet::input(cg, dynet::Dim({F_dim, mm_feas._num_samples}, (unsigned)ssents.size()), scores);// ((|F|, |S|), batch_size)
 	dynet::Expression i_phi_x_csum = dynet::cumsum(i_phi_x, 1);// ((|F|, 1), batch_size)
 	i_phi_x_csum = dynet::concatenate_cols(std::vector<dynet::Expression>(mm_feas._num_samples, i_phi_x_csum));// ((|F|, |S|), batch_size)
 	dynet::Expression i_phi_hat = (i_phi_x_csum - i_phi_x) / (mm_feas._num_samples - 1);// ((|F|, |S|), batch_size)
-	i_phi_x = dynet::reshape(i_phi_x, dynet::Dim({(unsigned)scores.size(), 1}, samples.size()));// ((|F|, 1), batch_size * |S|)
-	i_phi_hat = dynet::reshape(i_phi_hat, dynet::Dim({(unsigned)scores.size(), 1}, samples.size()));// ((|F|, 1), batch_size * |S|)
-	dynet::Expression i_mm = dynet::dot_product(i_phi_hat - i_phi_bar, i_phi_x - i_phi_bar);// ((1, 1), |S| * batch_size)
+	i_phi_x = dynet::reshape(i_phi_x, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
+	i_phi_hat = dynet::reshape(i_phi_hat, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
+	dynet::Expression i_mm = dynet::dot_product(i_phi_hat - i_phi_bar, i_phi_x - i_phi_bar);// ((1, 1), batch_size * |S|)
 	
 	//std::vector<float> v_tmp(samples.size(), 1.f);
 	//return dynet::input(cg, dynet::Dim({1, 1}, (unsigned)scores.size()), v_tmp);// for debugging only
@@ -734,9 +737,26 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
 
-	// pre-compute mm scores
+	// pre-compute mm scores for \bar(\phi)
 	std::vector<float> v_pre_mm_scores;
-	mm_feas.compute_feature_scores(train_src_minibatch[train_ids_minibatch[0]], train_trg_minibatch[train_ids_minibatch[0]], v_pre_mm_scores);
+	if (SAMPLING_SIZE > 0)
+	{
+		WordIdSentences v_sampled_src, v_sampled_trg;
+		for (unsigned i = 0; i < SAMPLING_SIZE; i++){
+			v_sampled_src.insert(v_sampled_src.end(), train_src_minibatch[train_ids_minibatch[i]].begin(), train_src_minibatch[train_ids_minibatch[i]].end());
+			v_sampled_trg.insert(v_sampled_trg.end(), train_trg_minibatch[train_ids_minibatch[i]].begin(), train_trg_minibatch[train_ids_minibatch[i]].end());
+		}
+		
+		mm_feas.compute_feature_scores(v_sampled_src, v_sampled_trg, v_pre_mm_scores);
+		
+		dynet::ComputationGraph cg;
+		unsigned bsize = v_sampled_src.size();
+		dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);// (|F| * bsize, 1)
+		i_phi_bar = dynet::average(split_rows(i_phi_bar, bsize));
+		v_pre_mm_scores = dynet::as_vector(cg.incremental_forward(i_phi_bar));
+		
+	}
+	else TRANSFORMER_RUNTIME_ASSERT("sample-size must be at least 1!");
 
 	unsigned sid = 0, id = 0, last_print = 0;
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
@@ -798,8 +818,8 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				}
 
 				// compute moment matching scores
-				dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), mm_feas._num_samples}, (unsigned)ssents.size()), v_pre_mm_scores);
-				dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, mm_feas);// shape=((1,1), batch_size)
+				dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);
+				dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, mm_feas);// shape=((1,1), batch_size * |S|)
 				
 				i_xent = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
 			}
