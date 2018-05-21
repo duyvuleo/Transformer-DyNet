@@ -85,7 +85,8 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 // ---
 dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), batch_size * |S|)*/,
 	const WordIdSentences& ssents, 
-	const WordIdSentences& samples, 
+	const WordIdSentences& samples,
+	unsigned bsize, 
 	MMFeatures& mm_feas);
 // ---
 
@@ -687,19 +688,30 @@ void eval_on_dev(transformer::TransformerModel &tf,
 dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), 1)*/,
 	const WordIdSentences& ssents, 
 	const WordIdSentences& samples, 
+	unsigned bsize,
 	MMFeatures& mm_feas)
 {
+	//cerr << "bsize=" << bsize << endl;
 	std::vector<float> scores;
+	//cerr << "ssents.size()=" << ssents.size() << endl;
+	//cerr << "samples.size()=" << samples.size() << endl;
 	mm_feas.compute_feature_scores(ssents, samples, scores);
+	//cerr << "scores.size()=" << scores.size() << endl;
 	
 	// compute moment matching: <\hat{\Phi}(x) - \bar{\Phi}, \Phi(x) - \bar{\Phi}>
-	unsigned F_dim = scores.size() / ((unsigned)ssents.size() * mm_feas._num_samples);
-	dynet::Expression i_phi_x = dynet::input(cg, dynet::Dim({F_dim, mm_feas._num_samples}, (unsigned)ssents.size()), scores);// ((|F|, |S|), batch_size)
-	dynet::Expression i_phi_x_csum = dynet::cumsum(i_phi_x, 1);// ((|F|, 1), batch_size)
+	unsigned F_dim = i_phi_bar.dim()[0];
+	//cerr << "1" << endl;
+	dynet::Expression i_phi_x = dynet::input(cg, dynet::Dim({F_dim, mm_feas._num_samples}, bsize), scores);// ((|F|, |S|), batch_size)
+	//cerr << "2" << endl;
+	dynet::Expression i_phi_x_csum = dynet::sum_dim(i_phi_x, {1});// ((|F|, 1), batch_size)
+	//cerr << "3" << endl;
 	i_phi_x_csum = dynet::concatenate_cols(std::vector<dynet::Expression>(mm_feas._num_samples, i_phi_x_csum));// ((|F|, |S|), batch_size)
+	//cerr << "4" << endl;
 	dynet::Expression i_phi_hat = (i_phi_x_csum - i_phi_x) / (mm_feas._num_samples - 1);// ((|F|, |S|), batch_size)
+	//cerr << "5" << endl;
 	i_phi_x = dynet::reshape(i_phi_x, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
 	i_phi_hat = dynet::reshape(i_phi_hat, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
+	//cerr << "6" << endl;
 	dynet::Expression i_mm = dynet::dot_product(i_phi_hat - i_phi_bar, i_phi_x - i_phi_bar);// ((1, 1), batch_size * |S|)
 	
 	//std::vector<float> v_tmp(samples.size(), 1.f);
@@ -769,7 +781,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);// (|F| * bsize, 1)
 		i_phi_bar = dynet::average(split_rows(i_phi_bar, bsize));
 		v_pre_mm_scores = dynet::as_vector(cg.incremental_forward(i_phi_bar));
-		
+		/*for (auto& score : v_pre_mm_scores){
+			cerr << score << " " << endl;
+		}
+		cerr << endl;*/
 	}
 	else TRANSFORMER_RUNTIME_ASSERT("sample-size must be at least 1!");
 
@@ -826,7 +841,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				for (auto& ssent : ssents){
 					WordIdSentences results;
 					std::vector<float> v_probs;// unused for now!
+					//cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
+					tf.set_dropout(false);
 					tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs);
+					tf.set_dropout(true);
 
 					ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
 					samples.insert(samples.end(), results.begin(), results.end());
@@ -834,7 +852,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 				// compute moment matching scores
 				dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);
-				dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, mm_feas);// shape=((1,1), batch_size * |S|)
+				dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
 				
 				i_xent = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
 			}

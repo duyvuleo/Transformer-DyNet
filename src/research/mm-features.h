@@ -9,6 +9,7 @@
 #include <vector>
 #include <map>
 #include <fstream>
+#include <algorithm>
 
 using namespace std;
 
@@ -185,7 +186,7 @@ struct MMFeatures_WO : public MMFeatures
 				v_scores.push_back(0.f);
 			bool flag = true;
 			for (auto& w : src){
-				if (sample.find(w) == sample.end()){ //not found
+				if (std::find(sample.begin(), sample.end(), w) == sample.end()){ //not found
 					flag = false;
 					break;
 				}
