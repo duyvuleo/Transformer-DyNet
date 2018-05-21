@@ -129,3 +129,20 @@ struct MMFeatures_NMT : public MMFeatures
 		}
 	}
 };
+
+// Feature specific for DP
+struct MMFeatures_DP : public MMFeatures		 
+{
+};
+
+// Feature specific for CP
+struct MMFeatures_CP : public MMFeatures		 
+{
+};
+
+// Feature specific for WO
+struct MMFeatures_WO : public MMFeatures		 
+{
+};
+
+

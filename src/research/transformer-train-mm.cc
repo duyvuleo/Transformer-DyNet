@@ -148,6 +148,7 @@ int main(int argc, char** argv) {
 		("ff-dropout-p", value<float>()->default_value(0.1f), "use dropout for feed-forward layer; 0.1 by default")
 		//-----------------------------------------
 		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
+		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 1")
 		//-----------------------------------------
 		("use-label-smoothing", "use label smoothing for cross entropy; no by default")
 		("label-smoothing-weight", value<float>()->default_value(0.1f), "impose label smoothing weight in objective function; 0.1 by default")
@@ -178,7 +179,6 @@ int main(int argc, char** argv) {
 		("num-resets", value<unsigned>()->default_value(1), "no. of times the training process will be reset; default 1") 
 		//-----------------------------------------
 		("sampling", "sample translation during training; default not")
-		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 1")
 		//-----------------------------------------
 		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES); default 0 (perplexity)") // note that MT scores here are approximate (e.g., evaluating with <unk> markers, and tokenized text or with subword segmentation if using BPE), not necessarily equivalent to real BLEU/NIST/WER/RIBES scores.
 		("dev-eval-infer-algo", value<unsigned>()->default_value(1), "specify the algorithm for inference on dev (0: sampling; 1: greedy; N>=2: beam search with N size of beam); default 0 (sampling)") // using sampling/greedy will be faster. 
@@ -708,7 +708,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	const transformer::TransformerConfig& tfc = tf.get_config();
 
 	// model params file
-	std::string params_out_file = model_path + "/model.params";
+	std::string params_out_file = model_path + "/model.mm.params";// save to different file with pre-trained model file
 
 	// create minibatches
 	std::vector<std::vector<WordIdSentence> > train_src_minibatch, dev_src_minibatch;
