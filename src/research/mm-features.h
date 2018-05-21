@@ -169,6 +169,32 @@ struct MMFeatures_WO : public MMFeatures
 	{	
 	}
 
+	virtual void compute_feature_scores(const WordIdSentences& xs, const WordIdSentences& ys, std::vector<float>& v_scores){
+		v_scores.clear();
+		
+		for (unsigned s = 0; s < xs.size(); s++){
+			const auto& src = xs[s];
+			const auto& sample = ys[s];
+			
+			// FIXME
+			// feature 1: equal length (if |src| == |sample| then 1.0 otherwise 0.0)
+			// feature 2: all words in src must be appear in sample!
+			if (src.size() == sample.size())
+				v_scores.push_back(1.f);
+			else
+				v_scores.push_back(0.f);
+			bool flag = true;
+			for (auto& w : src){
+				if (sample.find(w) == sample.end()){ //not found
+					flag = false;
+					break;
+				}
+			}
+			if (flag) v_scores.push_back(1.f);
+			else v_scores.push_back(0.f);
+		}
+	}
+
 	virtual ~MMFeatures_WO(){}
 };
 
