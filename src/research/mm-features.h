@@ -130,19 +130,46 @@ struct MMFeatures_NMT : public MMFeatures
 	}
 };
 
-// Feature specific for DP
-struct MMFeatures_DP : public MMFeatures		 
+// Feature specific for DP (dependency parsing)
+struct MMFeatures_DP : public MMFeatures		       
 {
+	explicit MMFeatures_DP(){	
+	}
+
+	explicit MMFeatures_DP(unsigned num_samples)
+		: MMFeatures(num_samples)
+	{	
+	}
+
+	virtual ~MMFeatures_DP(){}
 };
 
-// Feature specific for CP
+// Feature specific for CP (constituency parsing)
 struct MMFeatures_CP : public MMFeatures		 
 {
+	explicit MMFeatures_CP(){	
+	}
+
+	explicit MMFeatures_CP(unsigned num_samples)
+		: MMFeatures(num_samples)
+	{	
+	}
+
+	virtual ~MMFeatures_CP(){}
 };
 
-// Feature specific for WO
+// Feature specific for WO (word ordering)
 struct MMFeatures_WO : public MMFeatures		 
 {
+	explicit MMFeatures_WO(){	
+	}
+
+	explicit MMFeatures_WO(unsigned num_samples)
+		: MMFeatures(num_samples)
+	{	
+	}
+
+	virtual ~MMFeatures_WO(){}
 };
 
 

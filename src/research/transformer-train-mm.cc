@@ -147,6 +147,10 @@ int main(int argc, char** argv) {
 		("attention-dropout-p", value<float>()->default_value(0.1f), "use dropout for attention; 0.1 by default")
 		("ff-dropout-p", value<float>()->default_value(0.1f), "use dropout for feed-forward layer; 0.1 by default")
 		//-----------------------------------------
+		("task", value<std::string>()->default_value("nmt"), "specify the task (nmt, wo, dp, cp); nmt by default")
+		("mm-nmt-lr", value<bool>()->default_value(true), "source and target length ratio feature for NMT; true by default")
+		("mm-nmt-lr-beta", value<float>()->default_value(1.f), "beta value for source and target length ratio feature for NMT; 1.0 by default")
+		//-----------------------------------------
 		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
 		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 1")
 		//-----------------------------------------
@@ -383,9 +387,20 @@ int main(int argc, char** argv) {
 
 	if (vm["dev-eval-measure"].as<unsigned>() > 4) TRANSFORMER_RUNTIME_ASSERT("Unknown dev-eval-measure type (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES)!");
 
-	MMFeatures* p_mm_fea_cfg/*feature config for moment matching*/ = new MMFeatures_NMT(NUM_SAMPLES, true, 1.2f, false, "", false, "", 0, false);// features for NMT for now
-	// FIXME: read in feature configuration for moment matching
-	// ...
+	MMFeatures* p_mm_fea_cfg = nullptr;/*feature config for moment matching*/
+	std::string task = vm["task"].as<std::string>();
+	if ("nmt" == task)
+		p_mm_fea_cfg  = new MMFeatures_NMT(NUM_SAMPLES
+					, vm["mm_nmt_lr"].as<bool>(), vm["mm_nmt_lr_beta"].as<float>() /*length ratio*/
+					, false, "" /*bilingual dictionary*/
+					, false, "", 0 /*phrase table*/
+					, false /*coverage*/);// features for NMT task
+	else if ("wo" == task)
+		p_mm_fea_cfg  = new MMFeatures_WO(NUM_SAMPLES);// features for WO task
+	else if ("cp" == task)
+		p_mm_fea_cfg  = new MMFeatures_CP(NUM_SAMPLES);// features for CP task
+	else if ("dp" == task)
+		p_mm_fea_cfg  = new MMFeatures_DP(NUM_SAMPLES);// features for DP task
 
 	// train transformer model
 	run_train(tf
