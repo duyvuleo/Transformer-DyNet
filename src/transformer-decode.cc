@@ -66,10 +66,11 @@ int main(int argc, char** argv) {
 		("test,T", value<std::string>(), "file containing testing sentences.")
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")
 		//-----------------------------------------
-		("beam,b", value<unsigned>()->default_value(1), "size of beam in decoding; 1: greedy")
+		("beam,b", value<unsigned>()->default_value(1), "size of beam in decoding; 1: greedy by default")
 		("alpha,a", value<float>()->default_value(0.6f), "length normalisation hyperparameter; 0.6f by default") // follow the GNMT paper!
 		("topk,k", value<unsigned>(), "use <num> top kbest entries; none by default")
 		("nbest-style", value<std::string>()->default_value("simple"), "style for nbest translation outputs (moses|simple); simple by default")
+		("length-ratio", value<float>()->default_value(TARGET_LENGTH_LIMIT_FACTOR), "target_length = source_length * TARGET_LENGTH_LIMIT_FACTOR; 2 by default")
 		//-----------------------------------------
 		("remove-unk", "remove <unk> in the output; default not")
 		//-----------------------------------------
@@ -105,6 +106,8 @@ int main(int argc, char** argv) {
 		cout << opts << "\n";
 		return EXIT_FAILURE;
 	}
+
+	TARGET_LENGTH_LIMIT_FACTOR = vm["length-ratio"].as<float>();
 
 	// get and check model path
 	std::string model_path = vm["model-path"].as<std::string>();
