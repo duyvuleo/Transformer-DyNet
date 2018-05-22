@@ -230,7 +230,7 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 		_size_limit = sent_src.size() * _length_ratio;// not generating target with the approximate length "_length_ratio times" than the source length
 
 	// perform decoding
-	for (int sent_len = 0; sent_len <= _size_limit; sent_len++) {
+	for (unsigned sent_len = 0; sent_len <= _size_limit; sent_len++) {
 		// this vector will hold the best IDs
 		std::vector<Beam_Info> next_beam_id(_beam_size+1, Beam_Info(-DBL_MAX,-1,-1,-1));
 
@@ -300,7 +300,7 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 
 		// create the new hypotheses
 		std::vector<EnsembleDecoderHypPtr> next_beam;
-		for (int i = 0; i < _beam_size; i++) {
+		for (unsigned i = 0; i < _beam_size; i++) {
 			float score = std::get<0>(next_beam_id[i]);
 			int hypid = std::get<1>(next_beam_id[i]);
 			int wid = std::get<2>(next_beam_id[i]);
@@ -392,7 +392,7 @@ std::vector<BatchedEnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet:
 		_size_limit = max_len * _length_ratio;// not generating target with the approximate length "TARGET_LENGTH_LIMIT_FACTOR times" than the source length
 
 	// perform decoding
-	for (int sent_len = 0; sent_len <= _size_limit; sent_len++) {
+	for (unsigned sent_len = 0; sent_len <= _size_limit; sent_len++) {
 		// this vector will hold the best IDs
 		std::vector<Beam_Info> next_beam_id(_beam_size+1, Beam_Info(-DBL_MAX,-1,-1,-1));
 

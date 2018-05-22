@@ -42,7 +42,7 @@ void decode_nbest(const std::string test_file
 	, unsigned topk
 	, const std::string& nbest_style
 	, unsigned beam_size=5
-	, float length_ratio=2.f
+	, unsigned length_ratio=2.f
 	, unsigned int lc=0 /*line number to be continued*/
 	, bool remove_unk=false /*whether to include <unk> in the output*/
 	, bool r2l_target=false /*right-to-left decoding*/);
