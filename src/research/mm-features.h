@@ -11,6 +11,17 @@
 #include <fstream>
 #include <algorithm>
 
+unsigned get_len(const WordIdSentence& sent);
+unsigned get_len(const WordIdSentence& sent){
+	const WordId& pad = sent.back();
+	unsigned len = 0;
+	for (auto iter = sent.end() - 1; iter != sent.begin(); iter--){
+		if (*iter == pad) len++;
+		else break;
+	}
+	return (sent.size() - len + 1);
+}
+
 using namespace std;
 
 struct MMFeatures{ // abstract class
@@ -59,7 +70,7 @@ struct MMFeatures_NMT : public MMFeatures
 		_fea_pt_smt(fea_pt_smt), _pt_smt_file_path(pt_smt_file_path), _ngram(ngram),
 		_fea_cov(fea_cov)
 	{	
-		if ("" != _bi_dict_filepath){
+		if (fea_bi_dict && "" != _bi_dict_filepath){
 			ifstream inpf_bi_dict(_bi_dict_filepath);
 			assert(inpf_bi_dict);
 
@@ -76,14 +87,19 @@ struct MMFeatures_NMT : public MMFeatures
 	}
 
 	void get_len_ratio_feature(const WordIdSentence& x, const WordIdSentence& y, float& feature){
-		if (_beta * x.size() < (float)y.size())
-			feature = _beta * x.size() / (float)y.size();
-		else feature = (float)y.size() / (_beta * x.size());
+		unsigned lx = get_len(x);
+		unsigned ly = get_len(y);
+
+		/*if (_beta * lx < (float)ly)
+			feature = _beta * lx / ly;
+		else feature = (float)ly / (_beta * lx);*/
+		feature = (float)lx / ly;// simple feature
 	}
 
 	void get_bi_dict_feature(const WordIdSentence& x, const WordIdSentence& y, std::vector<float>& features){
 		features.clear();
 		features.resize(_bi_dict.size(), 0.f);
+		// FIXME: handle sentinel markers, <s> and </s>?
 		for (auto& sword : x){
 			for (auto& tword : y){
 				const auto& iter = _bi_dict.find(std::make_pair(sword, tword));// FIXME: is this slow?
@@ -110,13 +126,13 @@ struct MMFeatures_NMT : public MMFeatures
 			
 			if (_fea_len_ratio){
 				float f = 0.f;
-				get_len_ratio_feature(src, sample, f);
+				this->get_len_ratio_feature(src, sample, f);
 				v_scores.push_back(f);
 			}
 			
 			if (_fea_bi_dict){
 				std::vector<float> v_f;
-				get_bi_dict_feature(src, sample, v_f);
+				this->get_bi_dict_feature(src, sample, v_f);
 				v_scores.insert(v_scores.end(), v_f.begin(), v_f.end());
 			}
 			
@@ -176,18 +192,22 @@ struct MMFeatures_WO : public MMFeatures
 		for (unsigned s = 0; s < xs.size(); s++){
 			const auto& src = xs[s];
 			const auto& sample = ys[s];
+
+			unsigned lx = get_len(src) - 2;
+			unsigned ly = get_len(sample) - 2;
 			
 			// constraint 1: equal length
 			// constraint 2: all words in src must be appear in sample!
 			// math: (|x| - |y|)^2 + ( #{w \in x & w \in y for \all w} - |x|)^2
-			if (src.size() < sample.size()) v_scores.push_back((float)src.size() / sample.size());
-			else v_scores.push_back((float)sample.size() / src.size());
+			if (lx < ly) v_scores.push_back((float)lx / ly);
+			else v_scores.push_back((float)ly / lx);
 			//cerr << score << " ";
 			unsigned count = 0;
-			for (auto& w : src)
-				if (std::find(sample.begin(), sample.end(), w) != sample.end()) count++;
+			for (auto iter = src.begin() + 1; iter != src.end() - 1; iter++){
+				if (std::find(sample.begin() + 1, sample.begin() + sample.size() - ly - 1, *iter) != sample.end()) count++;
+			}
 			//cerr << "count=" << count << " ";
-			v_scores.push_back(((float)count - (float)src.size()) / src.size());
+			v_scores.push_back(((float)lx - (float)count) / lx);
 			//cerr << score << endl;
 			//v_scores.push_back(score);
 		}
