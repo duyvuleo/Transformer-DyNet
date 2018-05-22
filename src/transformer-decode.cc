@@ -33,6 +33,7 @@ bool load_model_config(const std::string& model_cfg_file
 void decode(const std::string test_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned beam_size=5
+	, unsigned length_ratio=2.f
 	, unsigned int lc=0 /*line number to be continued*/
 	, bool remove_unk=false /*whether to include <unk> in the output*/
 	, bool r2l_target=false /*right-to-left decoding*/);
@@ -41,6 +42,7 @@ void decode_nbest(const std::string test_file
 	, unsigned topk
 	, const std::string& nbest_style
 	, unsigned beam_size=5
+	, float length_ratio=2.f
 	, unsigned int lc=0 /*line number to be continued*/
 	, bool remove_unk=false /*whether to include <unk> in the output*/
 	, bool r2l_target=false /*right-to-left decoding*/);
@@ -70,7 +72,7 @@ int main(int argc, char** argv) {
 		("alpha,a", value<float>()->default_value(0.6f), "length normalisation hyperparameter; 0.6f by default") // follow the GNMT paper!
 		("topk,k", value<unsigned>(), "use <num> top kbest entries; none by default")
 		("nbest-style", value<std::string>()->default_value("simple"), "style for nbest translation outputs (moses|simple); simple by default")
-		("length-ratio", value<float>()->default_value(TARGET_LENGTH_LIMIT_FACTOR), "target_length = source_length * TARGET_LENGTH_LIMIT_FACTOR; 2 by default")
+		("length-ratio", value<unsigned>()->default_value(2), "target_length = source_length * TARGET_LENGTH_LIMIT_FACTOR; 2 by default")
 		//-----------------------------------------
 		("remove-unk", "remove <unk> in the output; default not")
 		//-----------------------------------------
@@ -106,8 +108,6 @@ int main(int argc, char** argv) {
 		cout << opts << "\n";
 		return EXIT_FAILURE;
 	}
-
-	TARGET_LENGTH_LIMIT_FACTOR = vm["length-ratio"].as<float>();
 
 	// get and check model path
 	std::string model_path = vm["model-path"].as<std::string>();
@@ -158,9 +158,9 @@ int main(int argc, char** argv) {
 
 	// decode the input file
 	if (vm.count("topk"))
-		decode_nbest(test_input_file, v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<std::string>(), vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
+		decode_nbest(test_input_file, v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<std::string>(), vm["beam"].as<unsigned>(), vm["length-ratio"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
 	else
-		decode(test_input_file, v_tf_models, vm["beam"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
+		decode(test_input_file, v_tf_models, vm["beam"].as<unsigned>(), vm["length-ratio"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
 
 	return EXIT_SUCCESS;
 }
@@ -231,6 +231,7 @@ bool load_model_config(const std::string& model_cfg_file
 void decode(const std::string test_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned beam_size
+	, unsigned length_ratio
 	, unsigned int lc /*line number to be continued*/
 	, bool remove_unk /*whether to include <unk> in the output*/
 	, bool r2l_target /*right-to-left decoding*/)
@@ -243,6 +244,7 @@ void decode(const std::string test_file
 
 	EnsembleDecoder ens(td);
 	ens.set_beam_size(beam_size);
+	ens.set_length_ratio(length_ratio);
 
 	cerr << "Reading test examples from " << test_file << endl;
 	ifstream in(test_file);
@@ -305,6 +307,7 @@ void decode_nbest(const std::string test_file
 	, unsigned topk
 	, const std::string& nbest_style
 	, unsigned beam_size
+	, unsigned length_ratio
 	, unsigned int lc /*line number to be continued*/
 	, bool remove_unk /*whether to include <unk> in the output*/
 	, bool r2l_target /*right-to-left decoding*/)
@@ -319,6 +322,7 @@ void decode_nbest(const std::string test_file
 
 	EnsembleDecoder ens(td);
 	ens.set_beam_size(beam_size);
+	ens.set_length_ratio(length_ratio);
 
 	cerr << "Reading test examples from " << test_file << endl;
 	ifstream in(test_file);

@@ -868,17 +868,18 @@ public:
 		, const dynet::Expression& i_src_rep
 		, std::vector<Expression>& v_soft_targets
 		, float sm_temp=1.f);
-	void sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// random sampling
-	void sample(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets); // batched version of random sampling
+	void sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned length_ratio=2);// random sampling
+	void sample(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets, unsigned length_ratio=2); // batched version of random sampling
 	void sample_sentences(dynet::ComputationGraph& cg
 	        , const WordIdSentence& source
         	, unsigned num_samples
 	        , std::vector<WordIdSentence>& samples
-		, std::vector<float>& v_probs);
-	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target);// greedy decoding
-	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets);// batched version of greedy decoding
+		, std::vector<float>& v_probs
+		, unsigned length_ratio=2);
+	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned length_ratio=2);// greedy decoding
+	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets, unsigned length_ratio=2);// batched version of greedy decoding
 	//void beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned beam_width);// beam search decoding (return one best hypo)
-	void beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentences &targets, unsigned beam_width, unsigned top_beams=1);// beam search decoding (return top_beams hypos)
+	void beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentences &targets, unsigned beam_width, unsigned length_ratio=2, unsigned top_beams=1);// beam search decoding (return top_beams hypos)
 	void stochastic_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, unsigned length_ratio, std::vector<Expression>& v_soft_targets); // batched stochastic decoding
 
 	dynet::ParameterCollection& get_model_parameters();
@@ -1315,7 +1316,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	return i_tloss;
 }
 
-void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target)
+void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned length_ratio)
 {
 	_tfc._is_training = false;
 	
@@ -1349,7 +1350,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 		// this shouldn't happen
 		if (w == (WordId)dist.size()) w = eos_sym;
 
-		if (t > TARGET_LENGTH_LIMIT_FACTOR * source.size())
+		if (t > length_ratio * source.size())
 			w = eos_sym;
 
 		target.push_back(w);
@@ -1365,7 +1366,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentence 
 	_tfc._is_training = true;
 }
 
-void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets) // batched version of random sampling
+void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets, unsigned length_ratio) // batched version of random sampling
 {
 	_tfc._is_training = false;
 
@@ -1402,7 +1403,7 @@ void TransformerModel::sample(dynet::ComputationGraph& cg, const WordIdSentences
 			// this shouldn't happen
 			if (w == (WordId)_tfc._tgt_vocab_size) w = eos_sym;
 
-			if (t > TARGET_LENGTH_LIMIT_FACTOR * max_src_len)
+			if (t > length_ratio * max_src_len)
 				w = eos_sym;
 
 			targets[bs].push_back(w);
@@ -1434,7 +1435,8 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
         , const WordIdSentence& source
         , unsigned num_samples
         , std::vector<WordIdSentence>& samples
-	, std::vector<float>& v_probs)
+	, std::vector<float>& v_probs
+	, unsigned length_ratio)
 {
 	_tfc._is_training = false;
 	
@@ -1471,7 +1473,7 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 			// this shouldn't happen
 			if (w == (WordId)_tfc._tgt_vocab_size) w = eos_sym;
 
-			if (t > TARGET_LENGTH_LIMIT_FACTOR * source.size())
+			if (t > length_ratio * source.size())
 				w = eos_sym;
 
 			samples[s].push_back(w);
@@ -1505,7 +1507,7 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 	_tfc._is_training = true;
 }
 
-void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target)
+void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned length_ratio)
 {
 	_tfc._is_training = false;
 	
@@ -1538,7 +1540,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 		}
 
 		// break potential infinite loop
-		if (t > TARGET_LENGTH_LIMIT_FACTOR * source.size()) {
+		if (t > length_ratio * source.size()) {
 			w = eos_sym;
 			pr_w = ydist[w];
 		}
@@ -1558,7 +1560,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 	_tfc._is_training = true;
 }
 
-void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets) // batched version of greedy decoding
+void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets, unsigned length_ratio) // batched version of greedy decoding
 {
 	_tfc._is_training = false;
 
@@ -1596,7 +1598,7 @@ void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSe
 			}
 
 			// break potential infinite loop
-			if (t > TARGET_LENGTH_LIMIT_FACTOR * max_src_len) {
+			if (t > length_ratio * max_src_len) {
 				w = eos_sym;
 				pr_w = ydist[w];
 			}
@@ -1684,7 +1686,8 @@ struct Hypothesis {
 };
 
 // A simplified version of beam search decoding (transformer-decode will use integrated ensemble decoding instead!)
-void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentences &targets, unsigned beam_width, unsigned top_beams)
+void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentences &targets
+	, unsigned beam_width, unsigned length_ratio, unsigned top_beams)
 {
 	_tfc._is_training = false;
 	
@@ -1703,7 +1706,7 @@ void TransformerModel::beam_decode(dynet::ComputationGraph& cg, const WordIdSent
 	std::vector<unsigned int> vocab(boost::copy_range<std::vector<unsigned int>>(boost::irange(0u, vocab_size)));
 	std::vector<Hypothesis> completed;
 
-	for (unsigned steps = 0; completed.size() < beam_width && steps < TARGET_LENGTH_LIMIT_FACTOR * source.size(); ++steps) {
+	for (unsigned steps = 0; completed.size() < beam_width && steps < length_ratio * source.size(); ++steps) {
 		std::vector<Hypothesis> new_chart;
 
 		for (auto& hprev: chart) {

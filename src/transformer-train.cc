@@ -792,7 +792,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			tf.greedy_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], target);
 			cerr << "***Greedy translation: " << get_sentence(target, tf.get_target_dict()) << endl;
 			/*std::vector<WordIdSentence> targets;
-			tf.beam_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], targets, 4, 5);
+			tf.beam_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], targets, 4, 2, 5);
 			for (auto& tgt : targets)
 				cerr << "***Beam translation: " << get_sentence(tgt, tf.get_target_dict()) << endl;*/
 			cerr << "---------------------------------------------------------------------------------------------------" << endl << endl;

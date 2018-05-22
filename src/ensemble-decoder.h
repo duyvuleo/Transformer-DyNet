@@ -147,24 +147,26 @@ public:
 	void set_ensemble_operation(const std::string & ensemble_operation) { _ensemble_operation = ensemble_operation; }
 
 	int get_beam_size() const { return _beam_size; }
-	void set_beam_size(int beam_size) { _beam_size = beam_size; }
+	void set_beam_size(unsigned beam_size) { _beam_size = beam_size; }
 	int get_size_limit() const { return _size_limit; }
-	void set_size_limit(int size_limit) { _size_limit = size_limit; }
+	void set_size_limit(unsigned size_limit) { _size_limit = size_limit; }
+	void set_length_ratio(unsigned length_ratio){ _length_ratio = length_ratio; }
 
 protected:
 
 	float _word_pen;
 	float _unk_pen, _unk_log_prob;
 	WordId _unk_id;
-	int _size_limit;
-	int _beam_size;
+	unsigned _size_limit;
+	unsigned _beam_size;
+	unsigned _length_ratio;
 	std::string _ensemble_operation;
 
 	bool _verbose;
 };
 
 EnsembleDecoder::EnsembleDecoder(dynet::Dict& td)
-	: _word_pen(0.f), _unk_pen(0.f), _size_limit(500), _beam_size(1), _ensemble_operation("sum"), _verbose(false) 
+	: _word_pen(0.f), _unk_pen(0.f), _size_limit(500), _beam_size(1), _length_ratio(0), _ensemble_operation("sum"), _verbose(false) 
 {
 	_unk_id = td.convert("<unk>");
 	_unk_log_prob = -std::log(td.size());// penalty score for <unk>
@@ -224,7 +226,8 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 	int bid;
 
 	// limit the output length
-	_size_limit = sent_src.size() * TARGET_LENGTH_LIMIT_FACTOR;// not generating target with the approximate length "TARGET_LENGTH_LIMIT_FACTOR times" than the source length
+	if (_length_ratio > 0)
+		_size_limit = sent_src.size() * _length_ratio;// not generating target with the approximate length "_length_ratio times" than the source length
 
 	// perform decoding
 	for (int sent_len = 0; sent_len <= _size_limit; sent_len++) {
@@ -385,7 +388,8 @@ std::vector<BatchedEnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet:
 	// limit the output length
 	size_t max_len = sent_src_batch[0].size();
 	for(size_t i = 1; i < bsize; i++) max_len = std::max(max_len, sent_src_batch[i].size());
-	_size_limit = max_len * TARGET_LENGTH_LIMIT_FACTOR;// not generating target with the approximate length "TARGET_LENGTH_LIMIT_FACTOR times" than the source length
+	if (_length_ratio > 0)
+		_size_limit = max_len * _length_ratio;// not generating target with the approximate length "TARGET_LENGTH_LIMIT_FACTOR times" than the source length
 
 	// perform decoding
 	for (int sent_len = 0; sent_len <= _size_limit; sent_len++) {
