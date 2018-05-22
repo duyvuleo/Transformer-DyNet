@@ -392,7 +392,7 @@ int main(int argc, char** argv) {
 	std::string task = vm["task"].as<std::string>();
 	if ("nmt" == task)
 		p_mm_fea_cfg  = new MMFeatures_NMT(NUM_SAMPLES
-					, vm["mm_nmt_lr"].as<bool>(), vm["mm_nmt_lr_beta"].as<float>() /*length ratio*/
+					, vm["mm-nmt-lr"].as<bool>(), vm["mm-nmt-lr-beta"].as<float>() /*length ratio*/
 					, false, "" /*bilingual dictionary*/
 					, false, "", 0 /*phrase table*/
 					, false /*coverage*/);// features for NMT task
