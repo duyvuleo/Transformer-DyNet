@@ -781,10 +781,11 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);// (|F| * bsize, 1)
 		i_phi_bar = dynet::average(split_rows(i_phi_bar, bsize));
 		v_pre_mm_scores = dynet::as_vector(cg.incremental_forward(i_phi_bar));
-		/*for (auto& score : v_pre_mm_scores){
-			cerr << score << " " << endl;
+		cerr << "pre_mm_scores: ";
+		for (auto& score : v_pre_mm_scores){
+			cerr << score << " ";
 		}
-		cerr << endl;*/
+		cerr << endl;
 	}
 	else TRANSFORMER_RUNTIME_ASSERT("sample-size must be at least 1!");
 
@@ -841,10 +842,12 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				for (auto& ssent : ssents){
 					WordIdSentences results;
 					std::vector<float> v_probs;// unused for now!
-					//cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
+					cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
 					tf.set_dropout(false);
 					tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs);
 					tf.set_dropout(true);
+			
+					for (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
 
 					ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
 					samples.insert(samples.end(), results.begin(), results.end());
@@ -853,6 +856,12 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				// compute moment matching scores
 				dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);
 				dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
+				cg.incremental_forward(i_mm);
+				cerr << "mm_scores: ";
+				std::vector<float> mm_scores = dynet::as_vector(cg.get_value(i_mm.i));
+				for (auto& sc : mm_scores)
+					cerr << sc << " ";
+				cerr << endl;
 				
 				i_xent = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
 			}
@@ -866,10 +875,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			dynet::Expression& i_objective = i_xent;
 
 			// perform forward computation for aggregate objective
-			cg.forward(i_objective);
+			cg.incremental_forward(i_objective);
 
 			// grab the parts of the objective
-			float loss = as_scalar(cg.get_value(i_xent.i));
+			float loss = dynet::as_scalar(cg.get_value(i_xent.i));
 			if (!is_valid(loss)){
 				std::cerr << "***Warning***: nan or -nan values occurred!" << std::endl;
 				++id;
