@@ -697,6 +697,9 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 	//cerr << "samples.size()=" << samples.size() << endl;
 	mm_feas.compute_feature_scores(ssents, samples, scores);
 	//cerr << "scores.size()=" << scores.size() << endl;
+	//cerr << "scores: ";
+	//for (auto& score : scores) cerr << score << " ";
+	//cerr << endl;
 	
 	// compute moment matching: <\hat{\Phi}(x) - \bar{\Phi}, \Phi(x) - \bar{\Phi}>
 	unsigned F_dim = i_phi_bar.dim()[0];

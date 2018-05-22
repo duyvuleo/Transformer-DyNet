@@ -180,12 +180,16 @@ struct MMFeatures_WO : public MMFeatures
 			// constraint 1: equal length
 			// constraint 2: all words in src must be appear in sample!
 			// math: (|x| - |y|)^2 + ( #{w \in x & w \in y for \all w} - |x|)^2
-			float score = pow((float)(src.size() - sample.size()), 2);
+			if (src.size() < sample.size()) v_scores.push_back((float)src.size() / sample.size());
+			else v_scores.push_back((float)sample.size() / src.size());
+			//cerr << score << " ";
 			unsigned count = 0;
 			for (auto& w : src)
 				if (std::find(sample.begin(), sample.end(), w) != sample.end()) count++;
-			score += pow((float)(count - src.size()), 2);
-			v_scores.push_back(score);
+			//cerr << "count=" << count << " ";
+			v_scores.push_back(((float)count - (float)src.size()) / src.size());
+			//cerr << score << endl;
+			//v_scores.push_back(score);
 		}
 	}
 
