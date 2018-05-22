@@ -177,22 +177,15 @@ struct MMFeatures_WO : public MMFeatures
 			const auto& src = xs[s];
 			const auto& sample = ys[s];
 			
-			// FIXME
-			// feature 1: equal length (if |src| == |sample| then 1.0 otherwise 0.0)
-			// feature 2: all words in src must be appear in sample!
-			if (src.size() == sample.size())
-				v_scores.push_back(1.f);
-			else
-				v_scores.push_back(0.f);
-			bool flag = true;
-			for (auto& w : src){
-				if (std::find(sample.begin(), sample.end(), w) == sample.end()){ //not found
-					flag = false;
-					break;
-				}
-			}
-			if (flag) v_scores.push_back(1.f);
-			else v_scores.push_back(0.f);
+			// constraint 1: equal length
+			// constraint 2: all words in src must be appear in sample!
+			// math: (|x| - |y|)^2 + ( #{w \in x & w \in y for \all w} - |x|)^2
+			float score = pow((float)(src.size() - sample.size()), 2);
+			unsigned count = 0;
+			for (auto& w : src)
+				if (std::find(sample.begin(), sample.end(), w) != sample.end()) count++;
+			score += pow((float)(count - src.size()), 2);
+			v_scores.push_back(score);
 		}
 	}
 
