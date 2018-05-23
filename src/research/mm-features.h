@@ -190,17 +190,17 @@ struct MMFeatures_WO : public MMFeatures
 			const auto& src = xs[s];
 			auto sample = ys[s];
 			remove_padded_values(sample);
-			cerr << "src: ";
-			for (auto& w : src) cerr << w << " ";
-			cerr << endl;
-			cerr << "sample: ";
-                        for (auto& w : sample) cerr << w << " ";
-                        cerr << endl;
+			//cerr << "src: ";
+			//for (auto& w : src) cerr << w << " ";
+			//cerr << endl;
+			//cerr << "sample: ";
+                        //for (auto& w : sample) cerr << w << " ";
+                        //cerr << endl;
 
 			unsigned lx = src.size() - 2;
 			unsigned ly = sample.size() - 2;
-			cerr << "lx=" << lx << endl;
-			cerr << "ly=" << ly << endl;
+			//cerr << "lx=" << lx << endl;
+			//cerr << "ly=" << ly << endl;
 			
 			// constraint 1: equal length
 			// constraint 2: all words in src must be appear in sample!
