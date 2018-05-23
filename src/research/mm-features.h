@@ -209,7 +209,7 @@ struct MMFeatures_WO : public MMFeatures
 			else v_scores.push_back((float)ly / lx);
 			//cerr << score << " "i;
 			// FIXME
-			v_scores.push_back(((float)lx - (float)count) / lx);
+			//v_scores.push_back(((float)lx - (float)count) / lx);
 			//cerr << score << endl;
 			//v_scores.push_back(score);
 		}
