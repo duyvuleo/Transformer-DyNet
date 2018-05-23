@@ -11,15 +11,11 @@
 #include <fstream>
 #include <algorithm>
 
-unsigned get_len(const WordIdSentence& sent);
-unsigned get_len(const WordIdSentence& sent){
+void remove_padded_values(WordIdSentence& sent);
+void remove_padded_values(WordIdSentence& sent){
 	const WordId& pad = sent.back();
-	unsigned len = 0;
-	for (auto iter = sent.end() - 1; iter != sent.begin(); iter--){
-		if (*iter == pad) len++;
-		else break;
-	}
-	return (sent.size() - len + 1);
+	auto iter = std::find(sent.begin(), sent.end(), pad);
+	if (iter + 1 != sent.end()) sent.erase(iter + 1, sent.end());
 }
 
 using namespace std;
@@ -87,8 +83,8 @@ struct MMFeatures_NMT : public MMFeatures
 	}
 
 	void get_len_ratio_feature(const WordIdSentence& x, const WordIdSentence& y, float& feature){
-		unsigned lx = get_len(x);
-		unsigned ly = get_len(y);
+		unsigned lx = x.size();
+		unsigned ly = y.size();
 
 		/*if (_beta * lx < (float)ly)
 			feature = _beta * lx / ly;
@@ -122,7 +118,8 @@ struct MMFeatures_NMT : public MMFeatures
 		
 		for (unsigned s = 0; s < xs.size(); s++){
 			const auto& src = xs[s];
-			const auto& sample = ys[s];
+			auto sample = ys[s];
+			remove_padded_values(sample);
 			
 			if (_fea_len_ratio){
 				float f = 0.f;
@@ -191,22 +188,27 @@ struct MMFeatures_WO : public MMFeatures
 		
 		for (unsigned s = 0; s < xs.size(); s++){
 			const auto& src = xs[s];
-			const auto& sample = ys[s];
+			auto sample = ys[s];
+			remove_padded_values(sample);
+			cerr << "src: ";
+			for (auto& w : src) cerr << w << " ";
+			cerr << endl;
+			cerr << "sample: ";
+                        for (auto& w : sample) cerr << w << " ";
+                        cerr << endl;
 
-			unsigned lx = get_len(src) - 2;
-			unsigned ly = get_len(sample) - 2;
+			unsigned lx = src.size() - 2;
+			unsigned ly = sample.size() - 2;
+			cerr << "lx=" << lx << endl;
+			cerr << "ly=" << ly << endl;
 			
 			// constraint 1: equal length
 			// constraint 2: all words in src must be appear in sample!
 			// math: (|x| - |y|)^2 + ( #{w \in x & w \in y for \all w} - |x|)^2
 			if (lx < ly) v_scores.push_back((float)lx / ly);
 			else v_scores.push_back((float)ly / lx);
-			//cerr << score << " ";
-			unsigned count = 0;
-			for (auto iter = src.begin() + 1; iter != src.end() - 1; iter++){
-				if (std::find(sample.begin() + 1, sample.begin() + sample.size() - ly - 1, *iter) != sample.end()) count++;
-			}
-			//cerr << "count=" << count << " ";
+			//cerr << score << " "i;
+			// FIXME
 			v_scores.push_back(((float)lx - (float)count) / lx);
 			//cerr << score << endl;
 			//v_scores.push_back(score);
