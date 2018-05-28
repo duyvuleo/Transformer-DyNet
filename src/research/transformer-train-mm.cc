@@ -936,7 +936,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				dynet::Expression i_xent_mle = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
 				//cerr << "dim=(" << i_xent_mle.dim()[0] << "," << i_xent_mle.dim()[1] << ")," << i_xent_mle.dim().batch_elems() << ")" << endl;
 				//float loss_mle = dynet::as_scalar(cg.incremental_forward(i_xent_mle));
-				//cerr << loss_mle << endl;
+				//cerr << "loss_mle=" << loss_mle << endl;
 
 				// MM loss
 				//cerr << "MM loss" << endl;

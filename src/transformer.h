@@ -1438,8 +1438,6 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 	, std::vector<float>& v_probs
 	, unsigned length_ratio)
 {
-	cg.checkpoint();
-
 	_tfc._is_training = false;
 	
 	const int& sos_sym = _tfc._sm._kTGT_SOS;
@@ -1506,8 +1504,6 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 		
 		if (stopped) break;
 	}
-
-	cg.revert();
 
 	_tfc._is_training = true;
 }
