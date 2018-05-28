@@ -672,7 +672,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	cerr << endl << "Creating minibatches for training data (using minibatch_size=" << minibatch_size << ")..." << endl;
 	create_minibatches(train_cor, minibatch_size, train_src_minibatch, train_trg_minibatch);// on train
 	cerr << "Creating minibatches for development data (using minibatch_size=" << minibatch_size << ")..." << endl;
-	create_minibatches(devel_cor, minibatch_size, dev_src_minibatch, dev_trg_minibatch);// on dev
+	create_minibatches(devel_cor, 1024/*minibatch_size*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 	// create a sentence list for this train minibatch
 	train_ids_minibatch.resize(train_src_minibatch.size());
 	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);

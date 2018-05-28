@@ -74,6 +74,9 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
 	dynet::Trainer*& p_sgd, 
+	const std::string& task,
+	unsigned training_mode,
+	float alpha,
 	const std::string& model_path, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -88,6 +91,15 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 	const WordIdSentences& samples,
 	unsigned bsize, 
 	MMFeatures& mm_feas);
+// ---
+
+// --
+dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
+        const WordIdSentences& ssents,
+        transformer::TransformerModel& tf,
+        const std::vector<float>& v_pre_mm_scores,
+        MMFeatures& mm_feas,
+	transformer::ModelStats& ctstats);
 // ---
 
 // ---
@@ -148,8 +160,10 @@ int main(int argc, char** argv) {
 		("attention-dropout-p", value<float>()->default_value(0.1f), "use dropout for attention; 0.1 by default")
 		("ff-dropout-p", value<float>()->default_value(0.1f), "use dropout for feed-forward layer; 0.1 by default")
 		//-----------------------------------------
+		("training-mode", value<unsigned>()->default_value(2), "specify training mode (0: MLE; 1: MM; 2: interleave; 3: mixed); default 2")
+		("alpha", value<float>()->default_value(0.017f), "specify alpha value in mixed training mode; default 0.017")
 		("task", value<std::string>()->default_value("nmt"), "specify the task (nmt, wo, dp, cp); nmt by default")
-		("mm-nmt-lr", value<bool>()->default_value(true), "source and target length ratio feature for NMT; true by default")
+		("mm-nmt-lr", value<bool>()->default_value(true), "specifysource and target length ratio feature for NMT; true by default")
 		("mm-nmt-lr-beta", value<float>()->default_value(1.f), "beta value for source and target length ratio feature for NMT; 1.0 by default")
 		//-----------------------------------------
 		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
@@ -403,10 +417,16 @@ int main(int argc, char** argv) {
 	else if ("dp" == task)
 		p_mm_fea_cfg  = new MMFeatures_DP(NUM_SAMPLES);// features for DP task
 
+	unsigned training_mode = vm["training-mode"].as<unsigned>();
+	float alpha = vm["alpha"].as<float>();
+
 	// train transformer model
 	run_train(tf
 		, train_cor, devel_cor
 		, p_sgd_trainer
+		, task
+		, training_mode
+		, alpha
 		, model_path
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
@@ -696,10 +716,10 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 	//cerr << "ssents.size()=" << ssents.size() << endl;
 	//cerr << "samples.size()=" << samples.size() << endl;
 	mm_feas.compute_feature_scores(ssents, samples, scores);
-	//cerr << "scores.size()=" << scores.size() << endl;
-	//cerr << "scores: ";
-	//for (auto& score : scores) cerr << score << " ";
-	//cerr << endl;
+	/*cerr << "scores.size()=" << scores.size() << endl;
+	cerr << "scores: ";
+	for (auto& score : scores) cerr << score << " ";
+	cerr << endl;*/
 	
 	// compute moment matching: <\hat{\Phi}(x) - \bar{\Phi}, \Phi(x) - \bar{\Phi}>
 	unsigned F_dim = i_phi_bar.dim()[0];
@@ -725,8 +745,52 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 // ---
 
 // ---
+dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	transformer::TransformerModel& tf,
+	const std::vector<float>& v_pre_mm_scores, 
+	MMFeatures& mm_feas,
+	transformer::ModelStats& ctstats)
+{
+	WordIdSentences ssents_ext, samples;
+	for (auto& ssent : ssents){
+		WordIdSentences results;
+		std::vector<float> v_probs;// unused for now
+		//cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
+		tf.set_dropout(false);
+		tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs);
+		tf.set_dropout(true);
+
+		//for (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
+
+		ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
+		samples.insert(samples.end(), results.begin(), results.end());
+	}
+
+	// compute moment matching scores
+	dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);
+	dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
+	/*cg.incremental_forward(i_mm);
+	cerr << "mm_scores: ";
+	std::vector<float> mm_scores = dynet::as_vector(cg.get_value(i_mm.i));
+	for (auto& sc : mm_scores)
+		cerr << sc << " ";
+	cerr << endl;*/
+
+	dynet::Expression i_xent_mm = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
+	//float loss_mm = dynet::as_scalar(cg.get_value(i_xent_mm.i));
+	//cerr << "loss_mm=" << loss_mm << endl;
+
+	return i_xent_mm;
+}
+// ---
+
+// ---
 void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
 	dynet::Trainer*& p_sgd, 
+	const std::string& task,
+	unsigned training_mode,
+	float alpha,
 	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -738,7 +802,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	const transformer::TransformerConfig& tfc = tf.get_config();
 
 	// model params file
-	std::string params_out_file = model_path + "/model.mm.params";// save to different file with pre-trained model file
+	std::stringstream ss;
+	ss << model_path << "/model.mm.params.n" << NUM_SAMPLES << "." << training_mode;
+	std::string params_out_file = ss.str();
+	//std::string params_out_file = model_path + "/model.mm.params";// save to different file with pre-trained model file
 
 	// create minibatches
 	std::vector<std::vector<WordIdSentence> > train_src_minibatch, dev_src_minibatch;
@@ -748,13 +815,13 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	cerr << endl << "Creating minibatches for training data (using minibatch_size=" << minibatch_size << ")..." << endl;
 	create_minibatches(train_cor, minibatch_size, train_src_minibatch, train_trg_minibatch);// on train
 	cerr << "Creating minibatches for development data (using minibatch_size=" << minibatch_size << ")..." << endl;
-	create_minibatches(devel_cor, minibatch_size, dev_src_minibatch, dev_trg_minibatch);// on dev
+	create_minibatches(devel_cor, 1024/*minibatch_size*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 	// create a sentence list for this train minibatch
 	train_ids_minibatch.resize(train_src_minibatch.size());
 	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);	
 
-	// TODO: how to set this flag properly to interchange between standard and reinforced CE losses?
-	bool interleave = false;
+	// hyperparameter for modified loss
+	bool interleave = true;
   
 	// model stats on dev
 	transformer::ModelStats dstats(dev_eval_mea);
@@ -766,6 +833,17 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	// shuffle minibatches
 	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
+
+	unsigned cpt = 0;// count of patience
+
+	cerr << endl << "--------------------------------------------------------------------------------------------------------" << endl;
+        cerr << "Pre-trained model scores on dev data..." << endl;
+	tf.set_dropout(false);
+	eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+	dstats.update_best_score(cpt);
+	tf.set_dropout(true);
+        cerr << "***DEV: " << "sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string(true) << endl;
+	cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 
 	// pre-compute mm scores for \bar(\phi)
 	std::vector<float> v_pre_mm_scores;
@@ -794,7 +872,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 	unsigned sid = 0, id = 0, last_print = 0;
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
-	unsigned epoch = 0, cpt = 0/*count of patience*/;
+	unsigned epoch = 0;
 	while (epoch < max_epochs) {
 		transformer::ModelStats tstats;
 
@@ -838,36 +916,44 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 			dynet::Expression i_xent;
 			transformer::ModelStats ctstats;
-			if (interleave)
+			if (training_mode == 0){ // MLE only
 				i_xent = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
-			else{
-				WordIdSentences ssents_ext, samples;
-				for (auto& ssent : ssents){
-					WordIdSentences results;
-					std::vector<float> v_probs;// unused for now!
-					//cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
-					tf.set_dropout(false);
-					tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs);
-					tf.set_dropout(true);
-			
-					//for (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
-
-					ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
-					samples.insert(samples.end(), results.begin(), results.end());
-				}
-
-				// compute moment matching scores
-				dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);
-				dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
-				//cg.incremental_forward(i_mm);
-				//cerr << "mm_scores: ";
-				//std::vector<float> mm_scores = dynet::as_vector(cg.get_value(i_mm.i));
-				//for (auto& sc : mm_scores)
-				//	cerr << sc << " ";
-				//cerr << endl;
-				
-				i_xent = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
 			}
+			else if (training_mode == 1){ // MM only
+				i_xent = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, ctstats);// reinforced CE loss
+			}
+			else if (training_mode == 2){ // interleave
+				if (interleave)
+					i_xent = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
+				else
+					i_xent = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, ctstats);
+	                        			
+				interleave = !interleave;
+			}
+			else if (training_mode == 3){ // mixed
+				// MLE loss
+				//cerr << "MLE loss" << endl;
+				dynet::Expression i_xent_mle = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
+				//cerr << "dim=(" << i_xent_mle.dim()[0] << "," << i_xent_mle.dim()[1] << ")," << i_xent_mle.dim().batch_elems() << ")" << endl;
+				//float loss_mle = dynet::as_scalar(cg.incremental_forward(i_xent_mle));
+				//cerr << loss_mle << endl;
+
+				// MM loss
+				//cerr << "MM loss" << endl;
+				dynet::Expression i_xent_mm = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, ctstats);
+
+				//std::vector<float> losses_mle = dynet::as_vector(cg.incremental_forward(i_xent_mle));
+				//for (auto& lo : losses_mle) cerr << lo << " ";
+				//cerr << endl;
+
+				// mixed loss
+				//cerr << "mixed loss" << endl;
+				i_xent = alpha * i_xent_mle + i_xent_mm;
+				//cerr << "dim=(" << i_xent_mle.dim()[0] << "," << i_xent_mle.dim()[1] << ")," << i_xent_mle.dim().batch_elems() << ")" << endl;
+				//cerr << "dim=(" << i_xent_mm.dim()[0] << "," << i_xent_mm.dim()[1] << ")," << i_xent_mm.dim().batch_elems() << ")" << endl;
+				//cerr << "dim=(" << i_xent.dim()[0] << "," << i_xent.dim()[1] << ")," << i_xent.dim().batch_elems() << ")" << endl;
+			}
+			else TRANSFORMER_RUNTIME_ASSERT("training-mode unknown!");
 	
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -875,10 +961,8 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				cerr << "***********************************************************************************" << endl;
 			}
 
-			dynet::Expression& i_objective = i_xent;
-
 			// perform forward computation for aggregate objective
-			cg.incremental_forward(i_objective);
+			cg.incremental_forward(i_xent);
 
 			// grab the parts of the objective
 			float loss = dynet::as_scalar(cg.get_value(i_xent.i));
@@ -888,18 +972,20 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				continue;
 			}
 
+			//cerr << "loss=" << loss << endl;
+
 			tstats._scores[1] += loss;
 			tstats._words_src += ctstats._words_src;
 			tstats._words_src_unk += ctstats._words_src_unk;  
 			tstats._words_tgt += ctstats._words_tgt;
 			tstats._words_tgt_unk += ctstats._words_tgt_unk;  
 
-			cg.backward(i_objective);
+			cg.backward(i_xent);
 			p_sgd->update();
 
 			sid += train_trg_minibatch[train_ids_minibatch[id]].size();
 			iter += train_trg_minibatch[train_ids_minibatch[id]].size();
-
+		
 			if (sid / report_every_i != last_print 
 					|| iter >= dev_every_i_reports
 					|| id + 1 == train_ids_minibatch.size()){

@@ -1438,6 +1438,8 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 	, std::vector<float>& v_probs
 	, unsigned length_ratio)
 {
+	cg.checkpoint();
+
 	_tfc._is_training = false;
 	
 	const int& sos_sym = _tfc._sm._kTGT_SOS;
@@ -1486,7 +1488,10 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 		for (auto& prob : probs) v_probs[id++] += prob;
 
 		t += 1;
-		if (_tfc._position_encoding == 1 && t >= _tfc._max_length) break;// to prevent over-length sample in learned positional encoding
+		if (_tfc._position_encoding == 1 && t >= _tfc._max_length) {
+			cg.revert();
+			break;// to prevent over-length sample in learned positional encoding
+		}
 
 		cg.revert();
 
@@ -1502,7 +1507,7 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 		if (stopped) break;
 	}
 
-	cg.clear();
+	cg.revert();
 
 	_tfc._is_training = true;
 }

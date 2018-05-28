@@ -190,23 +190,30 @@ struct MMFeatures_WO : public MMFeatures
 			const auto& src = xs[s];
 			auto sample = ys[s];
 			remove_padded_values(sample);
-			//cerr << "src: ";
-			//for (auto& w : src) cerr << w << " ";
-			//cerr << endl;
-			//cerr << "sample: ";
-                        //for (auto& w : sample) cerr << w << " ";
-                        //cerr << endl;
+			/*cerr << "src: ";
+			for (auto& w : src) cerr << w << " ";
+			cerr << endl;
+			cerr << "sample: ";
+                        for (auto& w : sample) cerr << w << " ";
+                        cerr << endl;*/
 
 			unsigned lx = src.size() - 2;
 			unsigned ly = sample.size() - 2;
 			//cerr << "lx=" << lx << endl;
 			//cerr << "ly=" << ly << endl;
+			if (ly == 0){
+				cerr << "src: ";
+                        	for (auto& w : src) cerr << w << " ";
+                        	cerr << endl;
+                        	cerr << "sample: ";
+                        	for (auto& w : sample) cerr << w << " ";
+                        	cerr << endl;
+			}
 			
 			// constraint 1: equal length
 			// constraint 2: all words in src must be appear in sample!
 			// math: (|x| - |y|)^2 + ( #{w \in x & w \in y for \all w} - |x|)^2
-			if (lx < ly) v_scores.push_back((float)lx / ly);
-			else v_scores.push_back((float)ly / lx);
+			v_scores.push_back((float)lx / ly);
 			//cerr << score << " "i;
 			// FIXME
 			//v_scores.push_back(((float)lx - (float)count) / lx);
