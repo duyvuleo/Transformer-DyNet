@@ -86,10 +86,16 @@ struct MMFeatures_NMT : public MMFeatures
 		unsigned lx = x.size();
 		unsigned ly = y.size();
 
-		/*if (_beta * lx < (float)ly)
-			feature = _beta * lx / ly;
-		else feature = (float)ly / (_beta * lx);*/
-		feature = (float)lx / ly;// simple feature
+		// refer to ttp://aclweb.org/anthology/P17-1139
+ 		if (_beta * lx < (float)ly)
+			feature = _beta * (float)lx / ly;
+		else feature = (float)ly / (_beta * lx);
+			
+		// naive feature
+		//feature = (float)lx / ly;// simple feature
+		
+		// length difference
+		//feature = std::pow(lx - ly, 2);
 	}
 
 	void get_bi_dict_feature(const WordIdSentence& x, const WordIdSentence& y, std::vector<float>& features){
@@ -187,7 +193,7 @@ struct MMFeatures_WO : public MMFeatures
 		v_scores.clear();
 		
 		for (unsigned s = 0; s < xs.size(); s++){
-			const auto& src = xs[s];
+			auto src = xs[s];
 			auto sample = ys[s];
 			remove_padded_values(sample);
 			/*cerr << "src: ";
@@ -197,11 +203,12 @@ struct MMFeatures_WO : public MMFeatures
                         for (auto& w : sample) cerr << w << " ";
                         cerr << endl;*/
 
-			unsigned lx = src.size() - 2;
+			// get sentence lengths
+			unsigned lx = src.size() - 2;// not including <s> and </s>
 			unsigned ly = sample.size() - 2;
 			//cerr << "lx=" << lx << endl;
 			//cerr << "ly=" << ly << endl;
-			if (ly == 0){
+			if (ly == 0){// bad sample: <s> </s> (or empty)
 				cerr << "src: ";
                         	for (auto& w : src) cerr << w << " ";
                         	cerr << endl;
@@ -210,15 +217,22 @@ struct MMFeatures_WO : public MMFeatures
                         	cerr << endl;
 			}
 			
-			// constraint 1: equal length
-			// constraint 2: all words in src must be appear in sample!
-			// math: (|x| - |y|)^2 + ( #{w \in x & w \in y for \all w} - |x|)^2
+			// constraint 1: length ratio
 			v_scores.push_back((float)lx / ly);
-			//cerr << score << " "i;
-			// FIXME
-			//v_scores.push_back(((float)lx - (float)count) / lx);
-			//cerr << score << endl;
-			//v_scores.push_back(score);
+
+			// constraint 2: precision (refers to no. of words in source appear in sample)
+		        WordIdSentence intersection;
+			std::sort(src.begin(), src.end());
+			std::sort(sample.begin(), sample.end());
+			std::set_intersection(src.begin(), src.end(), sample.begin(), sample.end(), std::back_inserter(intersection));
+			float precision = (float)(intersection.size() - 2) / lx;
+			v_scores.push_back(precision);
+	
+			// constraint 3: recall (refers to no. of words in sample appear in source)
+			float recall = (float)(intersection.size() - 2) / ly;
+			v_scores.push_back(recall);
+			 
+			// combine?: (|x| - |y|)^2 + ( #{w \in x & w \in y for \all w} - |x|)^2		
 		}
 	}
 

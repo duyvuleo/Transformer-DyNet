@@ -875,6 +875,7 @@ public:
         	, unsigned num_samples
 	        , std::vector<WordIdSentence>& samples
 		, std::vector<float>& v_probs
+		, float softmax_temp=1.f
 		, unsigned length_ratio=2);
 	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned length_ratio=2);// greedy decoding
 	void greedy_decode(dynet::ComputationGraph& cg, const WordIdSentences &sources, WordIdSentences &targets, unsigned length_ratio=2);// batched version of greedy decoding
@@ -1436,6 +1437,7 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
         , unsigned num_samples
         , std::vector<WordIdSentence>& samples
 	, std::vector<float>& v_probs
+	, float softmax_temp
 	, unsigned length_ratio)
 {
 	_tfc._is_training = false;
@@ -1459,7 +1461,7 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 	{
 		cg.checkpoint();
 	
-		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, samples, false, aligns);// batched, ((TARGET_VOCAB_SIZE, 1), num_samples)
+		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, samples, false, aligns, softmax_temp);// batched, ((TARGET_VOCAB_SIZE, 1), num_samples)
 	
 		auto ydist = dynet::as_vector(cg.incremental_forward(i_ydist));// (num_samples * TARGET_VOCAB_SIZE)
 		for (unsigned s = 0 ; s < num_samples; s++){

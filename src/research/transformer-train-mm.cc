@@ -77,6 +77,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	const std::string& task,
 	unsigned training_mode,
 	float alpha,
+	float softmax_temp,
 	const std::string& model_path, 
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -99,6 +100,7 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
         transformer::TransformerModel& tf,
         const std::vector<float>& v_pre_mm_scores,
         MMFeatures& mm_feas,
+	float softmax_temp,
 	transformer::ModelStats& ctstats);
 // ---
 
@@ -163,11 +165,12 @@ int main(int argc, char** argv) {
 		("training-mode", value<unsigned>()->default_value(2), "specify training mode (0: MLE; 1: MM; 2: interleave; 3: mixed); default 2")
 		("alpha", value<float>()->default_value(0.017f), "specify alpha value in mixed training mode; default 0.017")
 		("task", value<std::string>()->default_value("nmt"), "specify the task (nmt, wo, dp, cp); nmt by default")
-		("mm-nmt-lr", value<bool>()->default_value(true), "specifysource and target length ratio feature for NMT; true by default")
-		("mm-nmt-lr-beta", value<float>()->default_value(1.f), "beta value for source and target length ratio feature for NMT; 1.0 by default")
+		("mm-nmt-lr", value<bool>()->default_value(true), "specify source and target length ratio feature for NMT; true by default")
+		("mm-nmt-lr-beta", value<float>()->default_value(1.f), "specify beta value for source and target length ratio feature for NMT; 1.0 by default")
 		//-----------------------------------------
 		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
 		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 1")
+		("softmax-temperature", value<float>()->default_value(1.f), "use temperature for softmax activation; 1.0 by default")
 		//-----------------------------------------
 		("use-label-smoothing", "use label smoothing for cross entropy; no by default")
 		("label-smoothing-weight", value<float>()->default_value(0.1f), "impose label smoothing weight in objective function; 0.1 by default")
@@ -419,6 +422,7 @@ int main(int argc, char** argv) {
 
 	unsigned training_mode = vm["training-mode"].as<unsigned>();
 	float alpha = vm["alpha"].as<float>();
+	float softmax_temp = vm["softmax-temperature"].as<float>();
 
 	// train transformer model
 	run_train(tf
@@ -427,6 +431,7 @@ int main(int argc, char** argv) {
 		, task
 		, training_mode
 		, alpha
+		, softmax_temp
 		, model_path
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
 		, lr_epochs, vm["lr-eta-decay"].as<float>(), lr_patience/*learning rate scheduler*/
@@ -750,6 +755,7 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	transformer::TransformerModel& tf,
 	const std::vector<float>& v_pre_mm_scores, 
 	MMFeatures& mm_feas,
+	float softmax_temp,
 	transformer::ModelStats& ctstats)
 {
 	WordIdSentences ssents_ext, samples;
@@ -758,7 +764,7 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 		std::vector<float> v_probs;// unused for now
 		//cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
 		tf.set_dropout(false);
-		tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs);
+		tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs, softmax_temp);
 		tf.set_dropout(true);
 
 		//for (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
@@ -791,6 +797,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	const std::string& task,
 	unsigned training_mode,
 	float alpha,
+	float softmax_temp,
 	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
@@ -920,13 +927,13 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				i_xent = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
 			}
 			else if (training_mode == 1){ // MM only
-				i_xent = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, ctstats);// reinforced CE loss
+				i_xent = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, softmax_temp, ctstats);// reinforced CE loss
 			}
 			else if (training_mode == 2){ // interleave
 				if (interleave)
 					i_xent = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
 				else
-					i_xent = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, ctstats);
+					i_xent = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, softmax_temp, ctstats);
 	                        			
 				interleave = !interleave;
 			}
@@ -940,7 +947,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 				// MM loss
 				//cerr << "MM loss" << endl;
-				dynet::Expression i_xent_mm = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, ctstats);
+				dynet::Expression i_xent_mm = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, softmax_temp, ctstats);
 
 				//std::vector<float> losses_mle = dynet::as_vector(cg.incremental_forward(i_xent_mle));
 				//for (auto& lo : losses_mle) cerr << lo << " ";
