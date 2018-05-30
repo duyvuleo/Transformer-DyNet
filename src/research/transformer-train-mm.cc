@@ -810,7 +810,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 	// model params file
 	std::stringstream ss;
-	ss << model_path << "/model.mm.params.n" << NUM_SAMPLES << "." << training_mode;
+	if (training_mode == 0)
+		ss << model_path << "/model.params.0";
+	else
+		ss << model_path << "/model.mm.params.n" << NUM_SAMPLES << "." << training_mode;
 	std::string params_out_file = ss.str();
 	//std::string params_out_file = model_path + "/model.mm.params";// save to different file with pre-trained model file
 
@@ -869,11 +872,11 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);// (|F| * bsize, 1)
 		i_phi_bar = dynet::average(split_rows(i_phi_bar, bsize));
 		v_pre_mm_scores = dynet::as_vector(cg.incremental_forward(i_phi_bar));
-		//cerr << "pre_mm_scores: ";
-		//for (auto& score : v_pre_mm_scores){
-		//	cerr << score << " ";
-		//}
-		//cerr << endl;
+		/*cerr << "pre_mm_scores: ";
+		for (auto& score : v_pre_mm_scores){
+			cerr << score << " ";
+		}
+		cerr << endl;*/
 	}
 	else TRANSFORMER_RUNTIME_ASSERT("sample-size must be at least 1!");
 
@@ -939,26 +942,17 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			}
 			else if (training_mode == 3){ // mixed
 				// MLE loss
-				//cerr << "MLE loss" << endl;
 				dynet::Expression i_xent_mle = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
-				//cerr << "dim=(" << i_xent_mle.dim()[0] << "," << i_xent_mle.dim()[1] << ")," << i_xent_mle.dim().batch_elems() << ")" << endl;
 				//float loss_mle = dynet::as_scalar(cg.incremental_forward(i_xent_mle));
 				//cerr << "loss_mle=" << loss_mle << endl;
 
 				// MM loss
-				//cerr << "MM loss" << endl;
-				dynet::Expression i_xent_mm = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, softmax_temp, ctstats);
-
-				//std::vector<float> losses_mle = dynet::as_vector(cg.incremental_forward(i_xent_mle));
-				//for (auto& lo : losses_mle) cerr << lo << " ";
-				//cerr << endl;
+				dynet::Expression i_xent_mm = (1.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, softmax_temp, ctstats);	
+				//float loss_mm = dynet::as_scalar(cg.incremental_forward(i_xent_mm));
+                                //cerr << "loss_mm=" << loss_mm << endl;
 
 				// mixed loss
-				//cerr << "mixed loss" << endl;
-				i_xent = alpha * i_xent_mle + i_xent_mm;
-				//cerr << "dim=(" << i_xent_mle.dim()[0] << "," << i_xent_mle.dim()[1] << ")," << i_xent_mle.dim().batch_elems() << ")" << endl;
-				//cerr << "dim=(" << i_xent_mm.dim()[0] << "," << i_xent_mm.dim()[1] << ")," << i_xent_mm.dim().batch_elems() << ")" << endl;
-				//cerr << "dim=(" << i_xent.dim()[0] << "," << i_xent.dim()[1] << ")," << i_xent.dim().batch_elems() << ")" << endl;
+				i_xent = i_xent_mle + alpha * i_xent_mm;
 			}
 			else TRANSFORMER_RUNTIME_ASSERT("training-mode unknown!");
 	
