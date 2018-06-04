@@ -1311,7 +1311,6 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		v_errors.push_back(i_err);
 	}
 #endif
-
 	dynet::Expression i_tloss = dynet::sum_batches(dynet::sum(v_errors));
 
 	return i_tloss;
@@ -1508,6 +1507,8 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 	}
 
 	_tfc._is_training = true;
+
+	cg.clear();
 }
 
 void TransformerModel::greedy_decode(dynet::ComputationGraph& cg, const WordIdSentence &source, WordIdSentence &target, unsigned length_ratio)

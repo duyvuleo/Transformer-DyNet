@@ -23,6 +23,7 @@ using namespace std;
 struct MMFeatures{ // abstract class
 public:
 	unsigned _num_samples;
+	unsigned _F_dim;
 
 	explicit MMFeatures(){}
 	explicit MMFeatures(unsigned num_samples) : _num_samples(num_samples)
@@ -30,7 +31,11 @@ public:
 
 	virtual ~MMFeatures(){}
 
-	virtual void compute_feature_scores(const WordIdSentences& xs, const WordIdSentences& ys, std::vector<float>& v_scores){
+	virtual void compute_feature_scores(const WordIdSentences& xs, const WordIdSentences& ys, std::vector<float>& v_scores, unsigned dup=1){
+	}
+
+	virtual std::string get_name(){
+		return "";
 	}
 };
 
@@ -55,6 +60,21 @@ struct MMFeatures_NMT : public MMFeatures
 
 	virtual ~MMFeatures_NMT(){}
 
+	virtual std::string get_name(){
+		std::stringstream ss;
+		ss << ".n" << this->_num_samples;
+		if (_fea_len_ratio)
+			ss << ".lr_" << _beta;
+		if (_fea_bi_dict)
+			ss << ".bd";
+		if (_fea_pt_smt)
+			ss << ".psmt";
+		if (_fea_cov)
+			ss << ".cov";
+		
+		return ss.str();
+	}
+
 	explicit MMFeatures_NMT(unsigned num_samples, 
 		bool fea_len_ratio, float beta,
 		bool fea_bi_dict, const std::string& bi_dict_filepath,
@@ -65,7 +85,7 @@ struct MMFeatures_NMT : public MMFeatures
 		_fea_bi_dict(fea_bi_dict), _bi_dict_filepath(bi_dict_filepath),
 		_fea_pt_smt(fea_pt_smt), _pt_smt_file_path(pt_smt_file_path), _ngram(ngram),
 		_fea_cov(fea_cov)
-	{	
+	{			
 		if (fea_bi_dict && "" != _bi_dict_filepath){
 			ifstream inpf_bi_dict(_bi_dict_filepath);
 			assert(inpf_bi_dict);
@@ -80,6 +100,12 @@ struct MMFeatures_NMT : public MMFeatures
 				_bi_dict.insert(std::make_pair(std::make_pair(atoi(words[0].c_str()), atoi(words[1].c_str())), _bi_dict.size() - 1));
 			}
 		}
+
+		this->_F_dim = 0;
+		if (_fea_len_ratio) this->_F_dim++;
+		if (_fea_bi_dict) this->_F_dim += _bi_dict.size();		
+		if (_fea_pt_smt){} // FIXME
+		if (_fea_cov) this->_F_dim++;
 	}
 
 	void get_len_ratio_feature(const WordIdSentence& x, const WordIdSentence& y, float& feature){
@@ -119,7 +145,7 @@ struct MMFeatures_NMT : public MMFeatures
 		// FIXME
 	}
 	
-	virtual void compute_feature_scores(const WordIdSentences& xs, const WordIdSentences& ys, std::vector<float>& v_scores){
+	virtual void compute_feature_scores(const WordIdSentences& xs, const WordIdSentences& ys, std::vector<float>& v_scores, unsigned dup=1){
 		v_scores.clear();
 		
 		for (unsigned s = 0; s < xs.size(); s++){
@@ -146,6 +172,15 @@ struct MMFeatures_NMT : public MMFeatures
 			if (_fea_cov){
 				// FIXME
 			}
+			
+	                if (dup > 1){
+				// naive version
+				unsigned old_size = v_scores.size();				
+				for (unsigned d = 1; d < dup; d++){
+					for (unsigned i = old_size - this->_F_dim; i < old_size; i++)
+						v_scores.push_back(v_scores[i]);
+				}				
+			}		
 		}
 	}
 };
@@ -181,15 +216,36 @@ struct MMFeatures_CP : public MMFeatures
 // Feature specific for WO (word ordering)
 struct MMFeatures_WO : public MMFeatures		 
 {
+	std::vector<bool> _ablation = {true, true, true};
+
 	explicit MMFeatures_WO(){	
 	}
 
-	explicit MMFeatures_WO(unsigned num_samples)
+	explicit MMFeatures_WO(unsigned num_samples, bool do_len_ratio=true, bool do_precision=true, bool do_recall=true)
 		: MMFeatures(num_samples)
-	{	
+	{			
+                _ablation[0] = do_len_ratio;
+		_ablation[1] = do_precision;
+		_ablation[2] = do_recall;
+		this->_F_dim = 0;
+		for (auto b : _ablation)
+			if (b) this->_F_dim++;
 	}
 
-	virtual void compute_feature_scores(const WordIdSentences& xs, const WordIdSentences& ys, std::vector<float>& v_scores){
+	virtual std::string get_name(){
+		std::stringstream ss;
+		ss << ".n" << this->_num_samples;
+		if (_ablation[0])
+			ss << ".lr";
+		if (_ablation[1])
+                        ss << ".p";
+		if (_ablation[2])
+                        ss << ".r";
+		
+		return ss.str();
+	}
+
+	virtual void compute_feature_scores(const WordIdSentences& xs, const WordIdSentences& ys, std::vector<float>& v_scores, unsigned dup=1){
 		v_scores.clear();
 		
 		for (unsigned s = 0; s < xs.size(); s++){
@@ -218,21 +274,40 @@ struct MMFeatures_WO : public MMFeatures
 			}
 			
 			// constraint 1: length ratio
-			v_scores.push_back((float)lx / ly);
+			if (_ablation[0]){
+				if (lx < ly) v_scores.push_back((float)lx / ly);
+				else v_scores.push_back((float)ly / lx);
+			}
 
-			// constraint 2: precision (refers to no. of words in source appear in sample)
-		        WordIdSentence intersection;
-			std::sort(src.begin(), src.end());
-			std::sort(sample.begin(), sample.end());
-			std::set_intersection(src.begin(), src.end(), sample.begin(), sample.end(), std::back_inserter(intersection));
-			float precision = (float)(intersection.size() - 2) / lx;
-			v_scores.push_back(precision);
+			if (_ablation[1] || _ablation[2]){
+			        WordIdSentence intersection;
+				std::sort(src.begin(), src.end());
+				std::sort(sample.begin(), sample.end());
+				std::set_intersection(src.begin(), src.end(), sample.begin(), sample.end(), std::back_inserter(intersection));
+
+				// constraint 2: precision (refers to no. of words in source appear in sample)
+				if (_ablation[1]){
+					float precision = (float)(intersection.size() - 2) / ly;			
+					v_scores.push_back(precision);
+				}
 	
-			// constraint 3: recall (refers to no. of words in sample appear in source)
-			float recall = (float)(intersection.size() - 2) / ly;
-			v_scores.push_back(recall);
+				// constraint 3: recall (refers to no. of words in sample appear in source)
+				if (_ablation[2]){
+					float recall = (float)(intersection.size() - 2) / lx;			
+					v_scores.push_back(recall);
+				}
+			}
 			 
 			// combine?: (|x| - |y|)^2 + ( #{w \in x & w \in y for \all w} - |x|)^2		
+			
+                       if (dup > 1){
+				// naive version
+				unsigned old_size = v_scores.size();				
+				for (unsigned d = 1; d < dup; d++){
+					for (unsigned i = old_size - this->_F_dim; i < old_size; i++)
+						v_scores.push_back(v_scores[i]);
+				}				
+			}
 		}
 	}
 

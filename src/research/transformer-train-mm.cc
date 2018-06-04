@@ -105,6 +105,15 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 // ---
 
 // ---
+void eval_mm_on_dev(transformer::TransformerModel &tf, 
+	MMFeatures& mm_feas,
+	const WordIdCorpus &devel_cor, 
+	float softmax_temp,
+	const std::vector<std::vector<float>>& v_pre_emp_scores,
+	transformer::ModelStats& dstats);
+// ---
+
+// ---
 void get_dev_stats(const WordIdCorpus &devel_cor
 	, const transformer::TransformerConfig& tfc
 	, transformer::ModelStats& dstats);
@@ -167,6 +176,9 @@ int main(int argc, char** argv) {
 		("task", value<std::string>()->default_value("nmt"), "specify the task (nmt, wo, dp, cp); nmt by default")
 		("mm-nmt-lr", value<bool>()->default_value(true), "specify source and target length ratio feature for NMT; true by default")
 		("mm-nmt-lr-beta", value<float>()->default_value(1.f), "specify beta value for source and target length ratio feature for NMT; 1.0 by default")
+		("mm-wo-lr", value<bool>()->default_value(true), "specifiy whether to use length ratio feature; true by default")
+		("mm-wo-p", value<bool>()->default_value(true), "specifiy whether to use precision feature; true by default")
+		("mm-wo-r", value<bool>()->default_value(true), "specifiy whether to use recall feature; true by default")
 		//-----------------------------------------
 		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
 		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 1")
@@ -259,6 +271,7 @@ int main(int argc, char** argv) {
 	NUM_RESETS = vm["num-resets"].as<unsigned>();
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
 	NUM_SAMPLES = vm["num-samples"].as<unsigned>();
+	SAMPLING_SIZE = vm["sampling-size"].as<unsigned>();
 
 	// get and check model path
 	std::string model_path = vm["model-path"].as<std::string>();
@@ -275,6 +288,7 @@ int main(int argc, char** argv) {
 	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
 
 	std::string config_file = model_path + "/model.config";// configuration file path
+	std::string model_file = model_path + "/model.params";
 	if (stat(config_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){// check existence		
 		// (incremental training)
 		// to load the training profiles from previous training run
@@ -322,6 +336,7 @@ int main(int argc, char** argv) {
 		   >> tfc._ffl_activation_type
 		   >> tfc._shared_embeddings
 		   >> tfc._use_hybrid_model;
+		ss >> model_file;
 	}
 	else{// not exist, meaning that the model will be created from scratch!
 		cerr << "Preparing to train the model from scratch..." << endl;
@@ -392,7 +407,7 @@ int main(int argc, char** argv) {
 
 	// initialise transformer object
 	transformer::TransformerModel tf(tfc, sd, td);
-	std::string model_file = model_path + "/model.params";
+	//std::string model_file = model_path + "/model.params";
 	if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
 	{
 		cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
@@ -414,7 +429,10 @@ int main(int argc, char** argv) {
 					, false, "", 0 /*phrase table*/
 					, false /*coverage*/);// features for NMT task
 	else if ("wo" == task)
-		p_mm_fea_cfg  = new MMFeatures_WO(NUM_SAMPLES);// features for WO task
+		p_mm_fea_cfg  = new MMFeatures_WO(NUM_SAMPLES, 
+					vm["mm-wo-lr"].as<bool>(), 
+					vm["mm-wo-p"].as<bool>(), 
+					vm["mm-wo-r"].as<bool>());// features for WO task
 	else if ("cp" == task)
 		p_mm_fea_cfg  = new MMFeatures_CP(NUM_SAMPLES);// features for CP task
 	else if ("dp" == task)
@@ -614,8 +632,9 @@ void eval_on_dev(transformer::TransformerModel &tf,
 		std::shared_ptr<MTEval::Evaluator> evaluator(MTEval::EvaluatorFactory::create(spec));
 		std::vector<MTEval::Sample> v_samples;
 		for (unsigned i = 0; i < devel_cor.size(); ++i) {
-			WordIdSentence ssent, tsent;
-			tie(ssent, tsent) = devel_cor[i];  
+			const auto& ssent = std::get<0>(devel_cor[i]);
+			const auto& tsent = std::get<1>(devel_cor[i]);
+			//tie(ssent, tsent) = devel_cor[i];
 
 			// inference
 			dynet::ComputationGraph cg;
@@ -674,9 +693,8 @@ void eval_on_dev(transformer::TransformerModel &tf,
 		std::shared_ptr<MTEval::Evaluator> evaluator(MTEval::EvaluatorFactory::create(spec));
 		std::vector<MTEval::Sample> v_samples;
 		for (unsigned i = 0; i < dev_src_minibatch.size(); ++i) {
-			WordIdSentences ssents, tsents;
-			ssents = dev_src_minibatch[i];
-			tsents = dev_tgt_minibatch[i];
+			const auto& ssents = dev_src_minibatch[i];
+			const auto& tsents = dev_tgt_minibatch[i];
 
 			// batched inference/decoding
 			dynet::ComputationGraph cg;
@@ -710,7 +728,62 @@ void eval_on_dev(transformer::TransformerModel &tf,
 // ---
 
 // ---
-dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), 1)*/,
+void eval_mm_on_dev(transformer::TransformerModel &tf, 
+	MMFeatures& mm_feas,
+        const WordIdCorpus &devel_cor,
+	float softmax_temp,
+	const std::vector<std::vector<float>>& v_pre_emp_scores,
+        transformer::ModelStats& dstats)
+{
+	unsigned F_dim = v_pre_emp_scores[0].size();
+
+	std::vector<float> v_scores;
+	float mm_loss = 0.f;
+	unsigned i = 0;
+	//cerr << "i=";
+	for (; i < devel_cor.size() && i < SAMPLING_SIZE; ++i) {
+		//cerr << i << " ";
+		const auto& ssent = std::get<0>(devel_cor[i]);
+		//const auto& tsent = std::get<1>(devel_cor[i]);
+		
+		dynet::ComputationGraph cg;
+
+		// sample from current model
+		WordIdSentences samples;
+		tf.set_dropout(false);
+                tf.sample_sentences(cg, ssent, mm_feas._num_samples, samples, v_scores, softmax_temp);
+                tf.set_dropout(true);
+
+		// compute mm loss
+		cg.clear();
+		v_scores.clear();
+		mm_feas.compute_feature_scores(WordIdSentences(mm_feas._num_samples, ssent), samples, v_scores);
+		//cerr << "phi_h: ";
+		//for (auto& score : v_scores) cerr << score << " ";
+		//cerr << endl;
+
+		dynet::Expression i_mod = dynet::input(cg, dynet::Dim({F_dim, 1}, mm_feas._num_samples), v_scores);
+		i_mod = dynet::mean_batches(i_mod);
+
+		//cerr << "phi_bar: ";
+		//for (auto& score : v_pre_emp_scores[i]) cerr << score << " ";
+		//cerr << endl;
+		dynet::Expression i_emp = dynet::input(cg, dynet::Dim({F_dim, 1}, 1), v_pre_emp_scores[i]);
+
+		dynet::Expression i_dist = dynet::squared_distance(i_mod, i_emp);
+		cg.incremental_forward(i_dist);
+		mm_loss += dynet::as_scalar(cg.get_value(i_dist.i));		 
+		//cerr << mm_loss << endl;
+	}
+
+	//cerr << endl;
+
+        dstats._scores[1] = mm_loss / i;//devel_cor.size();
+}
+// ---
+
+// ---
+dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), batch_size * |S|)*/,
 	const WordIdSentences& ssents, 
 	const WordIdSentences& samples, 
 	unsigned bsize,
@@ -721,8 +794,7 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 	//cerr << "ssents.size()=" << ssents.size() << endl;
 	//cerr << "samples.size()=" << samples.size() << endl;
 	mm_feas.compute_feature_scores(ssents, samples, scores);
-	/*cerr << "scores.size()=" << scores.size() << endl;
-	cerr << "scores: ";
+	/*cerr << "scores: ";
 	for (auto& score : scores) cerr << score << " ";
 	cerr << endl;*/
 	
@@ -753,7 +825,7 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg, 
 	const WordIdSentences& ssents, 
 	transformer::TransformerModel& tf,
-	const std::vector<float>& v_pre_mm_scores, 
+	const std::vector<float>& v_pre_emp_scores, 
 	MMFeatures& mm_feas,
 	float softmax_temp,
 	transformer::ModelStats& ctstats)
@@ -762,21 +834,21 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	for (auto& ssent : ssents){
 		WordIdSentences results;
 		std::vector<float> v_probs;// unused for now
-		//cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
+		//rr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
 		tf.set_dropout(false);
 		tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs, softmax_temp);
 		tf.set_dropout(true);
 
-		//for (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
+		//r (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
 
 		ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
 		samples.insert(samples.end(), results.begin(), results.end());
 	}
 
-	// compute moment matching scores
-	dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);
+	// compute moment matching scores	
+	dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({mm_feas._F_dim, 1}, mm_feas._num_samples * (unsigned)ssents.size()), v_pre_emp_scores);// ((F_dim, 1), batch_size * |S|)	
 	dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
-	/*cg.incremental_forward(i_mm);
+	/*.incremental_forward(i_mm);
 	cerr << "mm_scores: ";
 	std::vector<float> mm_scores = dynet::as_vector(cg.get_value(i_mm.i));
 	for (auto& sc : mm_scores)
@@ -784,8 +856,6 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	cerr << endl;*/
 
 	dynet::Expression i_xent_mm = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
-	//float loss_mm = dynet::as_scalar(cg.get_value(i_xent_mm.i));
-	//cerr << "loss_mm=" << loss_mm << endl;
 
 	return i_xent_mm;
 }
@@ -811,9 +881,9 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	// model params file
 	std::stringstream ss;
 	if (training_mode == 0)
-		ss << model_path << "/model.params.0";
+		ss << model_path << "/model.0.params";
 	else
-		ss << model_path << "/model.mm.params.n" << NUM_SAMPLES << "." << training_mode;
+		ss << model_path << "/model.mm." << training_mode << mm_feas.get_name() << ".params";
 	std::string params_out_file = ss.str();
 	//std::string params_out_file = model_path + "/model.mm.params";// save to different file with pre-trained model file
 
@@ -824,18 +894,40 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	size_t minibatch_size = MINIBATCH_SIZE;
 	cerr << endl << "Creating minibatches for training data (using minibatch_size=" << minibatch_size << ")..." << endl;
 	create_minibatches(train_cor, minibatch_size, train_src_minibatch, train_trg_minibatch);// on train
-	cerr << "Creating minibatches for development data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	cerr << "Creating minibatches for development data (using minibatch_size=" << "1024" /*minibatch_size*/ << ")..." << endl << endl;
 	create_minibatches(devel_cor, 1024/*minibatch_size*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 	// create a sentence list for this train minibatch
 	train_ids_minibatch.resize(train_src_minibatch.size());
 	std::iota(train_ids_minibatch.begin(), train_ids_minibatch.end(), 0);	
 
 	// hyperparameter for modified loss
-	bool interleave = true;
-  
+	bool interleave = true;	
+ 
+	// pre-compute mm scores over training set
+	cerr << "Computing mm scores on train..." << endl;
+	std::vector<std::vector<float>> v_train_emp_scores;// |F| * |S| * batch_size
+	for (unsigned i = 0; i < train_ids_minibatch.size(); ++i) {
+		const auto& ssents = train_src_minibatch[i];
+		const auto& tsents = train_trg_minibatch[i];
+
+		std::vector<float> scores;
+                mm_feas.compute_feature_scores(ssents, tsents, scores, mm_feas._num_samples);// |F| * |S| * batch_size	
+		v_train_emp_scores.push_back(scores); 
+	}
+ 
 	// model stats on dev
-	transformer::ModelStats dstats(dev_eval_mea);
+	cerr << "Computing mm scores on dev..." << endl;
+	transformer::ModelStats dstats(5/*dev_eval_mea*/);
 	get_dev_stats(devel_cor, tfc, dstats);
+	std::vector<std::vector<float>> v_dev_emp_scores;
+	for (unsigned i = 0; i < devel_cor.size(); ++i) {
+        	const auto& ssent = std::get<0>(devel_cor[i]);
+		const auto& tsent = std::get<1>(devel_cor[i]);        
+
+		std::vector<float> scores;
+		mm_feas.compute_feature_scores(WordIdSentences(1, ssent), WordIdSentences(1, tsent), scores);
+		v_dev_emp_scores.push_back(scores);
+	}
 	
 	unsigned report_every_i = TREPORT;
 	unsigned dev_every_i_reports = DREPORT;
@@ -849,36 +941,12 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	cerr << endl << "--------------------------------------------------------------------------------------------------------" << endl;
         cerr << "Pre-trained model scores on dev data..." << endl;
 	tf.set_dropout(false);
-	eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+	//eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+	eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, v_dev_emp_scores, dstats);
 	dstats.update_best_score(cpt);
 	tf.set_dropout(true);
         cerr << "***DEV: " << "sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string(true) << endl;
-	cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-
-	// pre-compute mm scores for \bar(\phi)
-	std::vector<float> v_pre_mm_scores;
-	if (SAMPLING_SIZE > 0)
-	{
-		WordIdSentences v_sampled_src, v_sampled_trg;
-		for (unsigned i = 0; i < SAMPLING_SIZE; i++){
-			v_sampled_src.insert(v_sampled_src.end(), train_src_minibatch[train_ids_minibatch[i]].begin(), train_src_minibatch[train_ids_minibatch[i]].end());
-			v_sampled_trg.insert(v_sampled_trg.end(), train_trg_minibatch[train_ids_minibatch[i]].begin(), train_trg_minibatch[train_ids_minibatch[i]].end());
-		}
-		
-		mm_feas.compute_feature_scores(v_sampled_src, v_sampled_trg, v_pre_mm_scores);
-		
-		dynet::ComputationGraph cg;
-		unsigned bsize = v_sampled_src.size();
-		dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({(unsigned)v_pre_mm_scores.size(), 1}, 1), v_pre_mm_scores);// (|F| * bsize, 1)
-		i_phi_bar = dynet::average(split_rows(i_phi_bar, bsize));
-		v_pre_mm_scores = dynet::as_vector(cg.incremental_forward(i_phi_bar));
-		/*cerr << "pre_mm_scores: ";
-		for (auto& score : v_pre_mm_scores){
-			cerr << score << " ";
-		}
-		cerr << endl;*/
-	}
-	else TRANSFORMER_RUNTIME_ASSERT("sample-size must be at least 1!");
+	cerr << "--------------------------------------------------------------------------------------------------------" << endl;	
 
 	unsigned sid = 0, id = 0, last_print = 0;
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
@@ -930,29 +998,42 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 				i_xent = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
 			}
 			else if (training_mode == 1){ // MM only
-				i_xent = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, softmax_temp, ctstats);// reinforced CE loss
+				const std::vector<float>& v_emp_scores = v_train_emp_scores[train_ids_minibatch[id]];
+                                //for (auto& score : v_emp_scores) cerr << score << " ";
+                                //cerr << endl;
+
+				i_xent = (2.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats);// reinforced CE loss
 			}
 			else if (training_mode == 2){ // interleave
 				if (interleave)
 					i_xent = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
-				else
-					i_xent = compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, softmax_temp, ctstats);
+				else{
+					const std::vector<float>& v_emp_scores = v_train_emp_scores[train_ids_minibatch[id]];
+ 	                               	//for (auto& score : v_emp_scores) cerr << score << " ";
+        	                        //cerr << endl;
+
+					i_xent = (2.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats);
+				}
 	                        			
 				interleave = !interleave;
 			}
-			else if (training_mode == 3){ // mixed
-				// MLE loss
-				dynet::Expression i_xent_mle = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
-				//float loss_mle = dynet::as_scalar(cg.incremental_forward(i_xent_mle));
-				//cerr << "loss_mle=" << loss_mle << endl;
-
+			else if (training_mode == 3){ // mixed		
 				// MM loss
-				dynet::Expression i_xent_mm = (1.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_pre_mm_scores, mm_feas, softmax_temp, ctstats);	
-				//float loss_mm = dynet::as_scalar(cg.incremental_forward(i_xent_mm));
-                                //cerr << "loss_mm=" << loss_mm << endl;
+				const std::vector<float>& v_emp_scores = v_train_emp_scores[train_ids_minibatch[id]];
+				/*for (auto& score : v_emp_scores) cerr << score << " ";
+				cerr << endl;*/
+
+				dynet::Expression i_xent_mm = (2.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats);	
+				/*float loss_mm = dynet::as_scalar(cg.incremental_forward(i_xent_mm));
+                                cerr << "loss_mm=" << loss_mm << endl;*/
+
+				// MLE loss
+				dynet::Expression i_xent_mle =  tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
+				/*float loss_mle = dynet::as_scalar(cg.incremental_forward(i_xent_mle));
+				cerr << "loss_mle=" << loss_mle << endl;*/
 
 				// mixed loss
-				i_xent = i_xent_mle + alpha * i_xent_mm;
+				i_xent = (1.f - alpha) * i_xent_mle + alpha * i_xent_mm;
 			}
 			else TRANSFORMER_RUNTIME_ASSERT("training-mode unknown!");
 	
@@ -1046,7 +1127,8 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 		timer_iteration.reset();
 		
 		//eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);// non-batched version
-		eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+		//eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+		eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, v_dev_emp_scores, dstats);
 		float elapsed = timer_iteration.elapsed();
 
 		// update best score and save parameter to file

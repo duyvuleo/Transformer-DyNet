@@ -96,14 +96,14 @@ struct ModelStats {
 
 	ModelStats(unsigned score_type){
 		_score_type = score_type;
-		if (_score_type != 0 && _score_type != 3)// BLEU/NIST/RIBES (higher is better)
+		if (_score_type != 0 && _score_type != 3 && _score_type != 5)// BLEU/NIST/RIBES (higher is better)
 		{
 			_scores[0] = 0.f;
 		}// else perplexity or WER (lower is better)
 	}
 
 	void update_best_score(unsigned& cpt){
-		if (_score_type == 0 || _score_type == 3)// perplexity or WER (lower is better)
+		if (_score_type == 0 || _score_type == 3 || _score_type == 5)// perplexity or WER (lower is better)
 		{
 			if (_scores[0] > _scores[1]){
 				_scores[0] = _scores[1];
@@ -134,6 +134,7 @@ struct ModelStats {
 			else if (_score_type == 2) ss << "approxNIST=";
 			else if (_score_type == 3) ss << "approxWER=";
 			else if (_score_type == 4) ss << "approxRIBES=";
+			else if (_score_type == 5) ss << "userScore=";
 
 			ss << score;
 		}
