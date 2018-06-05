@@ -11,6 +11,8 @@
 #include <fstream>
 #include <algorithm>
 
+#include <dynet/dict.h>
+
 void remove_padded_values(WordIdSentence& sent);
 void remove_padded_values(WordIdSentence& sent){
 	const WordId& pad = sent.back();
@@ -19,6 +21,7 @@ void remove_padded_values(WordIdSentence& sent){
 }
 
 using namespace std;
+using namespace dynet;
 
 struct MMFeatures{ // abstract class
 public:
@@ -47,6 +50,7 @@ struct MMFeatures_NMT : public MMFeatures
 	
 	bool _fea_bi_dict = false;
 	std::string _bi_dict_filepath = "";
+	float _bi_dict_entry_prob_threshold = 0.5f;
 	std::map<std::pair<WordId, WordId>, unsigned> _bi_dict;
 		
 	bool _fea_pt_smt = false;
@@ -66,7 +70,7 @@ struct MMFeatures_NMT : public MMFeatures
 		if (_fea_len_ratio)
 			ss << ".lr_" << _beta;
 		if (_fea_bi_dict)
-			ss << ".bd";
+			ss << ".bd_" << _bi_dict_entry_prob_threshold;
 		if (_fea_pt_smt)
 			ss << ".psmt";
 		if (_fea_cov)
@@ -77,12 +81,12 @@ struct MMFeatures_NMT : public MMFeatures
 
 	explicit MMFeatures_NMT(unsigned num_samples, 
 		bool fea_len_ratio, float beta,
-		bool fea_bi_dict, const std::string& bi_dict_filepath,
+		bool fea_bi_dict, const std::string& bi_dict_filepath, float bi_dict_prob_thresh, dynet::Dict* p_sdict, dynet::Dict* p_tdict,
 		bool fea_pt_smt, const std::string& pt_smt_file_path, unsigned ngram,
 		bool fea_cov)
 		: MMFeatures(num_samples),
 		_fea_len_ratio(fea_len_ratio), _beta(beta),
-		_fea_bi_dict(fea_bi_dict), _bi_dict_filepath(bi_dict_filepath),
+		_fea_bi_dict(fea_bi_dict), _bi_dict_filepath(bi_dict_filepath), _bi_dict_entry_prob_threshold(bi_dict_prob_thresh),
 		_fea_pt_smt(fea_pt_smt), _pt_smt_file_path(pt_smt_file_path), _ngram(ngram),
 		_fea_cov(fea_cov)
 	{			
@@ -96,14 +100,20 @@ struct MMFeatures_NMT : public MMFeatures
 
 				std::vector<std::string> words = split_words(line);
 				assert(words.size() == 3);
-
-				_bi_dict.insert(std::make_pair(std::make_pair(atoi(words[0].c_str()), atoi(words[1].c_str())), _bi_dict.size() - 1));
+				if (atof(words[2].c_str()) >= _bi_dict_entry_prob_threshold && p_sdict->contains(words[0]) && p_tdict->contains(words[1])){
+					//cerr << words[0] << "-" << words[1] << "-" << words[2] << endl;
+ 					WordId src_wid = p_sdict->convert(words[0]);
+					WordId trg_wid = p_tdict->convert(words[1]);
+					_bi_dict.insert(std::make_pair(std::make_pair(src_wid, trg_wid), _bi_dict.size()));
+				}
 			}
+
+			cerr << "[MM] - No. of entries in bilingual dictionary: " << _bi_dict.size() << endl;
 		}
 
 		this->_F_dim = 0;
 		if (_fea_len_ratio) this->_F_dim++;
-		if (_fea_bi_dict) this->_F_dim += _bi_dict.size();		
+		if (_fea_bi_dict) this->_F_dim += _bi_dict.size();
 		if (_fea_pt_smt){} // FIXME
 		if (_fea_cov) this->_F_dim++;
 	}
@@ -127,12 +137,12 @@ struct MMFeatures_NMT : public MMFeatures
 	void get_bi_dict_feature(const WordIdSentence& x, const WordIdSentence& y, std::vector<float>& features){
 		features.clear();
 		features.resize(_bi_dict.size(), 0.f);
-		// FIXME: handle sentinel markers, <s> and </s>?
 		for (auto& sword : x){
 			for (auto& tword : y){
+				//cerr << sword << "-" << tword << endl;
 				const auto& iter = _bi_dict.find(std::make_pair(sword, tword));// FIXME: is this slow?
 				if (iter != _bi_dict.end())//found
-					features[iter->second] = 1.f;
+					features[iter->second] = 1.f;				
 			}
 		}
 	}
@@ -152,6 +162,12 @@ struct MMFeatures_NMT : public MMFeatures
 			const auto& src = xs[s];
 			auto sample = ys[s];
 			remove_padded_values(sample);
+			/*cerr << "src: ";
+			for (auto& w : src) cerr << w << " ";
+			cerr << endl;
+			cerr << "sample: ";
+                        for (auto& w : sample) cerr << w << " ";
+                        cerr << endl;*/
 			
 			if (_fea_len_ratio){
 				float f = 0.f;

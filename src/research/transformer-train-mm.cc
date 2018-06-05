@@ -49,6 +49,7 @@ unsigned NUM_SAMPLES = 2;
 unsigned SAMPLING_SIZE = 1;
 
 bool VERBOSE = false;
+bool DEBUG_FLAG = false;
 
 // ---
 bool load_data(const variables_map& vm
@@ -176,6 +177,9 @@ int main(int argc, char** argv) {
 		("task", value<std::string>()->default_value("nmt"), "specify the task (nmt, wo, dp, cp); nmt by default")
 		("mm-nmt-lr", value<bool>()->default_value(true), "specify source and target length ratio feature for NMT; true by default")
 		("mm-nmt-lr-beta", value<float>()->default_value(1.f), "specify beta value for source and target length ratio feature for NMT; 1.0 by default")
+		("mm-nmt-bd", value<bool>()->default_value(false), "specify bilingual dict feature for NMT; false by default")
+		("mm-nmt-bd-fp", value<std::string>()->default_value(""), "specify bilingual dict file path for NMT; none by default")
+		("mm-nmt-bd-thresh", value<float>()->default_value(0.5f), "specify threshold filtering prob value for entries in bilingual dictionary; 0.5 by default")
 		("mm-wo-lr", value<bool>()->default_value(true), "specifiy whether to use length ratio feature; true by default")
 		("mm-wo-p", value<bool>()->default_value(true), "specifiy whether to use precision feature; true by default")
 		("mm-wo-r", value<bool>()->default_value(true), "specifiy whether to use recall feature; true by default")
@@ -213,6 +217,7 @@ int main(int argc, char** argv) {
 		("num-resets", value<unsigned>()->default_value(1), "no. of times the training process will be reset; default 1") 
 		//-----------------------------------------
 		("sampling", "sample translation during training; default not")
+		("mm-debug", "very chatty for debugging only; default not")
 		//-----------------------------------------
 		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES); default 0 (perplexity)") // note that MT scores here are approximate (e.g., evaluating with <unk> markers, and tokenized text or with subword segmentation if using BPE), not necessarily equivalent to real BLEU/NIST/WER/RIBES scores.
 		("dev-eval-infer-algo", value<unsigned>()->default_value(1), "specify the algorithm for inference on dev (0: sampling; 1: greedy; N>=2: beam search with N size of beam); default 0 (sampling)") // using sampling/greedy will be faster. 
@@ -261,6 +266,7 @@ int main(int argc, char** argv) {
 	// hyper-parameters for training
 	DEBUGGING_FLAG = vm.count("debug");
 	VERBOSE = vm.count("verbose");
+	DEBUG_FLAG = vm.count("mm-debug");
 	TREPORT = vm["treport"].as<unsigned>(); 
 	DREPORT = vm["dreport"].as<unsigned>(); 
 	SAMPLING_TRAINING = vm.count("sampling");
@@ -425,7 +431,7 @@ int main(int argc, char** argv) {
 	if ("nmt" == task)
 		p_mm_fea_cfg  = new MMFeatures_NMT(NUM_SAMPLES
 					, vm["mm-nmt-lr"].as<bool>(), vm["mm-nmt-lr-beta"].as<float>() /*length ratio*/
-					, false, "" /*bilingual dictionary*/
+					, vm["mm-nmt-bd"].as<bool>(), vm["mm-nmt-bd-fp"].as<std::string>(), vm["mm-nmt-bd-thresh"].as<float>(), &sd, &td /*bilingual dictionary*/
 					, false, "", 0 /*phrase table*/
 					, false /*coverage*/);// features for NMT task
 	else if ("wo" == task)
@@ -794,9 +800,11 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 	//cerr << "ssents.size()=" << ssents.size() << endl;
 	//cerr << "samples.size()=" << samples.size() << endl;
 	mm_feas.compute_feature_scores(ssents, samples, scores);
-	/*cerr << "scores: ";
-	for (auto& score : scores) cerr << score << " ";
-	cerr << endl;*/
+	if (DEBUG_FLAG){
+		cerr << "scores: ";
+		for (auto& score : scores) cerr << score << " ";
+		cerr << endl;
+	}
 	
 	// compute moment matching: <\hat{\Phi}(x) - \bar{\Phi}, \Phi(x) - \bar{\Phi}>
 	unsigned F_dim = i_phi_bar.dim()[0];
@@ -812,10 +820,7 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 	i_phi_x = dynet::reshape(i_phi_x, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
 	i_phi_hat = dynet::reshape(i_phi_hat, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
 	//cerr << "6" << endl;
-	dynet::Expression i_mm = dynet::dot_product(i_phi_hat - i_phi_bar, i_phi_x - i_phi_bar);// ((1, 1), batch_size * |S|)
-	
-	//std::vector<float> v_tmp(samples.size(), 1.f);
-	//return dynet::input(cg, dynet::Dim({1, 1}, (unsigned)scores.size()), v_tmp);// for debugging only
+	dynet::Expression i_mm = dynet::dot_product(i_phi_hat - i_phi_bar, i_phi_x - i_phi_bar);// ((1, 1), batch_size * |S|)	
 
 	return i_mm;
 }
@@ -834,12 +839,14 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	for (auto& ssent : ssents){
 		WordIdSentences results;
 		std::vector<float> v_probs;// unused for now
-		//rr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
+		if (DEBUG_FLAG) cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
 		tf.set_dropout(false);
 		tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs, softmax_temp);
 		tf.set_dropout(true);
 
-		//r (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
+		if (DEBUG_FLAG){
+			for (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
+		}
 
 		ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
 		samples.insert(samples.end(), results.begin(), results.end());
@@ -848,12 +855,14 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	// compute moment matching scores	
 	dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({mm_feas._F_dim, 1}, mm_feas._num_samples * (unsigned)ssents.size()), v_pre_emp_scores);// ((F_dim, 1), batch_size * |S|)	
 	dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
-	/*.incremental_forward(i_mm);
-	cerr << "mm_scores: ";
-	std::vector<float> mm_scores = dynet::as_vector(cg.get_value(i_mm.i));
-	for (auto& sc : mm_scores)
-		cerr << sc << " ";
-	cerr << endl;*/
+	if (DEBUG_FLAG){
+		cg.incremental_forward(i_mm);
+		cerr << "mm_scores: ";
+		std::vector<float> mm_scores = dynet::as_vector(cg.get_value(i_mm.i));
+		for (auto& sc : mm_scores)
+			cerr << sc << " ";
+		cerr << endl;
+	}
 
 	dynet::Expression i_xent_mm = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
 
@@ -883,7 +892,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	if (training_mode == 0)
 		ss << model_path << "/model.0.params";
 	else
-		ss << model_path << "/model.mm." << training_mode << mm_feas.get_name() << ".params";
+		ss << model_path << "/model.mm." << training_mode << ".a" << alpha << ".smte" << softmax_temp << mm_feas.get_name() << ".params";
 	std::string params_out_file = ss.str();
 	//std::string params_out_file = model_path + "/model.mm.params";// save to different file with pre-trained model file
 
@@ -952,7 +961,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
 	unsigned epoch = 0;
 	while (epoch < max_epochs) {
-		transformer::ModelStats tstats;
+		transformer::ModelStats tstats, tstats_mm;
 
 		tf.set_dropout(true);// enable dropout
 
@@ -992,17 +1001,16 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			auto& ssents = train_src_minibatch[train_ids_minibatch[id]];
 			auto& tsents = train_trg_minibatch[train_ids_minibatch[id]];// unused if computing reinforced CE loss
 
-			dynet::Expression i_xent;
-			transformer::ModelStats ctstats;
-			if (training_mode == 0){ // MLE only
-				i_xent = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
-			}
+			dynet::Expression i_xent, i_xent_mle, i_xent_mm;
+			transformer::ModelStats ctstats, ctstats_mm;
+			if (training_mode == 0) // MLE only
+				i_xent = tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss			
 			else if (training_mode == 1){ // MM only
 				const std::vector<float>& v_emp_scores = v_train_emp_scores[train_ids_minibatch[id]];
                                 //for (auto& score : v_emp_scores) cerr << score << " ";
                                 //cerr << endl;
 
-				i_xent = (2.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats);// reinforced CE loss
+				i_xent = (2.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats_mm);// reinforced CE loss
 			}
 			else if (training_mode == 2){ // interleave
 				if (interleave)
@@ -1012,7 +1020,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
  	                               	//for (auto& score : v_emp_scores) cerr << score << " ";
         	                        //cerr << endl;
 
-					i_xent = (2.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats);
+					i_xent = (2.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats_mm);
 				}
 	                        			
 				interleave = !interleave;
@@ -1020,17 +1028,21 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			else if (training_mode == 3){ // mixed		
 				// MM loss
 				const std::vector<float>& v_emp_scores = v_train_emp_scores[train_ids_minibatch[id]];
-				/*for (auto& score : v_emp_scores) cerr << score << " ";
-				cerr << endl;*/
+				//for (auto& score : v_emp_scores) cerr << score << " ";
+				//cerr << endl;
 
-				dynet::Expression i_xent_mm = (2.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats);	
-				/*float loss_mm = dynet::as_scalar(cg.incremental_forward(i_xent_mm));
-                                cerr << "loss_mm=" << loss_mm << endl;*/
+				i_xent_mm = (2.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats_mm);	
+				if (DEBUG_FLAG){
+					float loss_mm = dynet::as_scalar(cg.incremental_forward(i_xent_mm));
+        	                        cerr << "loss_mm=" << loss_mm << endl;
+				}
 
 				// MLE loss
-				dynet::Expression i_xent_mle =  tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
-				/*float loss_mle = dynet::as_scalar(cg.incremental_forward(i_xent_mle));
-				cerr << "loss_mle=" << loss_mle << endl;*/
+				i_xent_mle =  tf.build_graph(cg, ssents, tsents, &ctstats);// standard CE loss
+				if (DEBUG_FLAG){
+					float loss_mle = dynet::as_scalar(cg.incremental_forward(i_xent_mle));
+					cerr << "loss_mle=" << loss_mle << endl;
+				}
 
 				// mixed loss
 				i_xent = (1.f - alpha) * i_xent_mle + alpha * i_xent_mm;
@@ -1047,20 +1059,55 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 			cg.incremental_forward(i_xent);
 
 			// grab the parts of the objective
-			float loss = dynet::as_scalar(cg.get_value(i_xent.i));
+			float loss = dynet::as_scalar(cg.get_value(i_xent.i)), loss_mle = 0.f, loss_mm = 0.f;
 			if (!is_valid(loss)){
 				std::cerr << "***Warning***: nan or -nan values occurred!" << std::endl;
 				++id;
 				continue;
 			}
-
 			//cerr << "loss=" << loss << endl;
-
-			tstats._scores[1] += loss;
-			tstats._words_src += ctstats._words_src;
-			tstats._words_src_unk += ctstats._words_src_unk;  
-			tstats._words_tgt += ctstats._words_tgt;
-			tstats._words_tgt_unk += ctstats._words_tgt_unk;  
+			
+			if (training_mode == 0) loss_mle = loss;
+			else if (training_mode == 1) loss_mm = loss * mm_feas._num_samples;
+			else if (training_mode == 2){
+				if (interleave) loss_mle = loss;
+				else loss_mm = loss * mm_feas._num_samples;
+			}
+			else if (training_mode == 3){
+				loss_mle = dynet::as_scalar(cg.get_value(i_xent_mle.i));
+				loss_mm = dynet::as_scalar(cg.get_value(i_xent_mm.i)) * mm_feas._num_samples;
+			}
+			
+			if (training_mode == 0 || training_mode == 3){
+				tstats._scores[1] += loss_mle;
+				tstats._words_src += ctstats._words_src;
+				tstats._words_src_unk += ctstats._words_src_unk;  
+				tstats._words_tgt += ctstats._words_tgt;
+				tstats._words_tgt_unk += ctstats._words_tgt_unk;
+			}
+			if (training_mode == 1 || training_mode == 3){
+				tstats_mm._scores[1] += loss_mm;
+                                tstats_mm._words_src += ctstats_mm._words_src;
+                                tstats_mm._words_src_unk += ctstats_mm._words_src_unk;
+                                tstats_mm._words_tgt += ctstats_mm._words_tgt;
+                                tstats_mm._words_tgt_unk += ctstats_mm._words_tgt_unk;
+			}
+			if (training_mode == 2){
+				if (interleave){
+					tstats._scores[1] += loss_mle;
+	                                tstats._words_src += ctstats._words_src;
+        	                        tstats._words_src_unk += ctstats._words_src_unk;
+                	                tstats._words_tgt += ctstats._words_tgt;
+                        	        tstats._words_tgt_unk += ctstats._words_tgt_unk;
+				}
+				else{
+					tstats_mm._scores[1] += loss_mm;
+	                                tstats_mm._words_src += ctstats_mm._words_src;
+        	                        tstats_mm._words_src_unk += ctstats_mm._words_src_unk;
+                	                tstats_mm._words_tgt += ctstats_mm._words_tgt;
+                        	        tstats_mm._words_tgt_unk += ctstats_mm._words_tgt_unk;
+				}
+			}
 
 			cg.backward(i_xent);
 			p_sgd->update();
@@ -1077,8 +1124,14 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 
 				p_sgd->status();
 				cerr << "sents=" << sid << " ";
-				cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';
-				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl; 	
+				if (training_mode == 0 || (training_mode == 2 && interleave) || training_mode == 3){
+					cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';
+					cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl; 	
+				}
+				if (training_mode == 1 || (training_mode == 2 && !interleave) || training_mode == 3){
+					cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats_mm._words_src_unk << " trg_unks=" << tstats_mm._words_tgt_unk << " " << tstats_mm.get_score_string() << ' ';
+                                        cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats_mm._words_src + tstats_mm._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;
+				}
 			}
 			   		 
 			++id;
