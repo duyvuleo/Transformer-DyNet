@@ -214,6 +214,19 @@ Finally, we can evaluate the translation result with BLEU:
 
 Note that it is recommended to use sacreBLEU or mteval instead for fairest evaluation(s).
 
+Additionally, Transformer-DyNet also provides the training of language model based on transformer architecture, e.g.,
+
+    mkdir  <your_folder>/lm
+
+    nice ./build_gpu/transformer-lm --max-seq-len 100 --minibatch-size 1024 --treport 512 --dreport 20000 --vocab <vocab_file> -t <training_data_file> -d <dev_data_file> -p <your_folder>/lm -e 100 --lr-eta 0.1 --lr-patience 10 --patience 20 --lr-eta-decay 2 --emb-dropout-p 0.1 --sublayer-dropout-p 0.1 --attention-dropout-p 0.1 --ff-dropout-p 0.1 --ff-activation-type 1 --nlayers 4 --num-units 512 --num-heads 4 --use-label-smoothing --label-smoothing-weight 0.1 --position-encoding 2 --reset-if-stuck --use-smaller-minibatch --num-resets 5 &><your_folder>/lm/train.log &
+
+Note that: <training_data_file> and <dev_data_file> have to be created by ./scripts/wrap-data.py as follows:
+
+    ./scripts/wrap-data.py <train_file> <dev_file> <test_file> [<vocab_file>|<word_cutoff_freq>]
+
+--vocab <vocab_file> can be used if you already have the existing vocabulary file, otherwise ignore it.
+
+
 ## Benchmarks on Sequence-to-Sequence Generation Tasks
 
 The details of my benchmarks (scripts, results, scores) can be found in 'benchmarks' folder. 
@@ -468,7 +481,23 @@ The details of my benchmarks (scripts, results, scores) can be found in 'benchma
 		and label smoothing (0.1)		
 			w/ BPE (40K)			28.061		9.618		25.305
 
-## Word Ordering (coming soon)
+## Word Ordering
+
+	* Data for experiments following https://github.com/allenschmaltz/word_ordering/blob/master/data/preprocessing/README_DATASET_CREATION.txt. Standard split from PTB dataset: train (39832), valid (1700), test (2416)
+
+	Method									BLEU
+	
+	-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	vanilla LSTM language model (Schmaltz et al, 2016)			26.8
+
+	RNN-based seq2seq models (Wiseman et al., 2016)				31.0
+		- w/ beam search optimisation (BSO)				34.5
+
+	-------------------------------------------------------------------
+	Transformer-Dynet (https://github.com/duyvuleo/Transformer-DyNet)
+	- Baseline 								38.48 (new SOTA)
+	(4 heads, 4 encoder/decoder layers, sinusoid positional encoding, 512 units, SGD, beam5)
 
 ## Sequence-to-Sequence based Dependency Parsing (English) (updating)
 
