@@ -450,7 +450,7 @@ bool load_model_config(const std::string& model_cfg_file
 	, dynet::Dict& d
 	, const transformer::SentinelMarkers& sm)
 {
-	cerr << "Loading model(s) from configuration file: " << model_cfg_file << "..." << endl;	
+	cerr << "Loading model(s) from configuration file: " << model_cfg_file << "..." << endl;
 
 	v_models.clear();
 

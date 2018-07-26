@@ -469,6 +469,3 @@ std::vector<BatchedEnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet:
 	return nbest;
 }
 
-// batch decoding
-// ToDo (FIXME): 
-

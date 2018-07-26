@@ -13,6 +13,8 @@
 
 #include <dynet/dict.h>
 
+#include "../transformer-lm.h"
+
 void remove_padded_values(WordIdSentence& sent);
 void remove_padded_values(WordIdSentence& sent){
 	const WordId& pad = sent.back();
@@ -330,4 +332,106 @@ struct MMFeatures_WO : public MMFeatures
 	virtual ~MMFeatures_WO(){}
 };
 
+struct MMFeatures_UDA : public MMFeatures		 
+{
+	std::shared_ptr<transformer::TransformerLModel> _p_src_alm;
+	std::shared_ptr<transformer::TransformerLModel> _p_tgt_alm;
+
+	explicit MMFeatures_UDA(){
+	}
+
+	explicit MMFeatures_UDA(unsigned num_samples
+		, dynet::Dict& sd, dynet::Dict& td
+		, const std::string& src_alm_path, const std::string& tgt_alm_path)
+		: MMFeatures(num_samples)
+	{			
+ 		this->_F_dim = 1;
+
+		if ("" != src_alm_path){
+			cerr << "Loading language model from " << src_alm_path << "..." << endl;
+			
+			ifstream inpf(src_alm_path + "/model.config");
+			assert(inpf);
+			
+			std::string line;
+			getline(inpf, line);
+			std::stringstream ss(line);
+
+			transformer::SentinelMarkers sm;// sentinel markers
+			sm._kTGT_SOS = sd.convert("<s>");
+			sm._kTGT_EOS = sd.convert("</s>");
+			sm._kTGT_UNK = sd.convert("<unk>");
+
+			std::string model_file;
+			transformer::TransformerConfig tfc;// transformer config
+			tfc._tgt_vocab_size = sd.size();
+			tfc._sm = sm;
+			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+		  		>> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+		   		>> tfc._use_label_smoothing >> tfc._label_smoothing_weight
+		   		>> tfc._position_encoding >> tfc._max_length
+		   		>> tfc._attention_type
+		   		>> tfc._ffl_activation_type
+		   		>> tfc._use_hybrid_model;		
+			ss >> model_file;
+			tfc._is_training = false;
+			tfc._use_dropout = false;
+
+			_p_src_alm.reset(new transformer::TransformerLModel(tfc, sd));
+			_p_src_alm.get()->initialise_params_from_file(model_file);// load pre-trained model from file
+			cerr << "Count of model parameters: " << _p_src_alm.get()->get_model_parameters().parameter_count() << endl;
+		}
+
+		if ("" != tgt_alm_path){
+			cerr << "Loading language model from " << tgt_alm_path << "..." << endl;
+			
+			ifstream inpf(tgt_alm_path + "/model.config");
+			assert(inpf);
+			
+			std::string line;
+			getline(inpf, line);
+			std::stringstream ss(line);
+
+			transformer::SentinelMarkers sm;// sentinel markers
+			sm._kTGT_SOS = td.convert("<s>");
+			sm._kTGT_EOS = td.convert("</s>");
+			sm._kTGT_UNK = td.convert("<unk>");
+
+			std::string model_file;
+			transformer::TransformerConfig tfc;// transformer config
+			tfc._tgt_vocab_size = td.size();
+			tfc._sm = sm;
+			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+		  		>> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+		   		>> tfc._use_label_smoothing >> tfc._label_smoothing_weight
+		   		>> tfc._position_encoding >> tfc._max_length
+		   		>> tfc._attention_type
+		   		>> tfc._ffl_activation_type
+		   		>> tfc._use_hybrid_model;		
+			ss >> model_file;
+			tfc._is_training = false;
+			tfc._use_dropout = false;
+
+			_p_tgt_alm.reset(new transformer::TransformerLModel(tfc, td));
+			_p_tgt_alm.get()->initialise_params_from_file(model_file);// load pre-trained model from file
+			cerr << "Count of model parameters: " << _p_tgt_alm.get()->get_model_parameters().parameter_count() << endl;
+		}
+		
+		cerr << "MMFeatures_UDA initialised!" << endl;
+	}
+
+	virtual std::string get_name(){
+		std::stringstream ss;
+		ss << ".n" << this->_num_samples;
+			
+		return ss.str();
+	}
+
+	virtual void compute_feature_scores(const WordIdSentences& xs, const WordIdSentences& ys, std::vector<float>& v_scores, unsigned dup=1){
+		v_scores.clear();
+
+		dynet::ComputationGraph cg;
+		v_scores = _p_tgt_alm->get_losses(cg, ys);
+	}
+};
 

@@ -658,6 +658,10 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	unsigned average_checkpoints,
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
 {
+	unsigned sid = 0, id = 0, last_print = 0;
+	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
+	unsigned epoch = 0, cpt = 0/*count of patience*/;
+	
 	// get current configuration
 	const transformer::TransformerConfig& tfc = tf.get_config();
 
@@ -680,6 +684,23 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	// model stats on dev
 	transformer::ModelStats dstats(dev_eval_mea);
 	get_dev_stats(devel_cor, tfc, dstats);
+
+	// ----
+	// pre-compute model score on dev before training
+	//eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);// non-batched version
+	tf.set_dropout(false);// disable dropout
+	eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+	float elapsed = timer_iteration.elapsed();
+	
+	// update best score so far (in case of incremental training)
+	dstats.update_best_score(cpt);
+
+	// verbose
+	cerr << endl << "--------------------------------------------------------------------------------------------------------" << endl;
+	cerr << "***Initial score on DEV: sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
+	cerr << "[completed in " << elapsed << " ms]" << endl;
+	cerr << "--------------------------------------------------------------------------------------------------------" << endl;
+	// ----
 	
 	unsigned report_every_i = TREPORT;
 	unsigned dev_every_i_reports = DREPORT;
@@ -687,10 +708,8 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	// shuffle minibatches
 	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
-
-	unsigned sid = 0, id = 0, last_print = 0;
-	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
-	unsigned epoch = 0, cpt = 0/*count of patience*/;
+	
+	// start training loop
 	while (epoch < max_epochs) {
 		transformer::ModelStats tstats;
 

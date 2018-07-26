@@ -142,6 +142,13 @@ int main(int argc, char** argv) {
 		sm._kTGT_SOS = td.convert("<s>");
 		sm._kTGT_EOS = td.convert("</s>");
 
+		if (vm.count("swap")){
+			std::swap(sd, td);
+			std::swap(sm._kSRC_SOS, sm._kTGT_SOS);
+			std::swap(sm._kSRC_EOS, sm._kTGT_EOS);
+			std::swap(sm._kSRC_UNK, sm._kTGT_UNK);
+		}
+
 		// load models
 		std::string config_file = model_path + "/model.config";
 		if (!load_model_config(config_file, v_tf_models, sd, td, sm))
