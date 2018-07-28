@@ -53,7 +53,7 @@ bool DEBUG_FLAG = false;
 
 // ---
 bool load_data(const variables_map& vm
-	, WordIdSentences& mono_s_cor, WordIdCorpus& devel_cor
+	, std::pair<WordIdSentences, WordIdSentences>& mono_cor, WordIdCorpus& devel_cor
 	, dynet::Dict& sd, dynet::Dict& td
 	, SentinelMarkers& sm);
 // ---
@@ -74,7 +74,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 
 // ---
 void run_train(transformer::TransformerModel &tf, 
-	const WordIdSentences &in_mono_data, const WordIdCorpus &devel_cor, 
+	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus& devel_cor, 
 	dynet::Trainer*& p_sgd, 
 	unsigned training_mode,
 	float alpha,
@@ -84,15 +84,16 @@ void run_train(transformer::TransformerModel &tf,
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints, 
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo,
-	MMFeatures& mm_feas/*features for moment matching*/);// support batching
+	MMFeatures_UDA& mm_feas/*features for moment matching*/);// support batching
 // ---
 
 // ---
-dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), batch_size * |S|)*/,
+dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, 
+	const std::vector<float>& v_pre_emp_scores,
 	const WordIdSentences& ssents, 
 	const WordIdSentences& samples,
 	unsigned bsize, 
-	MMFeatures& mm_feas);
+	MMFeatures_UDA& mm_feas);
 // ---
 
 // --
@@ -100,14 +101,14 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
         const WordIdSentences& ssents,
         transformer::TransformerModel& tf,
         const std::vector<float>& v_pre_mm_scores,
-        MMFeatures& mm_feas,
+        MMFeatures_UDA& mm_feas,
 	float softmax_temp,
 	transformer::ModelStats& ctstats);
 // ---
 
 // ---
 void eval_mm_on_dev(transformer::TransformerModel &tf, 
-	MMFeatures& mm_feas,
+	MMFeatures_UDA& mm_feas,
 	const WordIdCorpus &devel_cor, 
 	float softmax_temp,
 	const std::vector<std::vector<float>>& v_pre_emp_scores,
@@ -148,7 +149,8 @@ int main(int argc, char** argv) {
 		("joint-vocab", value<std::string>(), "file containing target joint vocabulary file for both source and target; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
 		//-----------------------------------------
-		("in-mono-data", value<std::string>()->default_value(""), "file containing monolingual in-domain sentences.")
+		("in-src-mono-data", value<std::string>()->default_value(""), "file containing in-domain source monolingual sentences.")
+		("in-tgt-mono-data", value<std::string>()->default_value(""), "file containing in-domain target monolingual sentences.")
 		//-----------------------------------------
 		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
 		//-----------------------------------------
@@ -179,7 +181,7 @@ int main(int argc, char** argv) {
 		("alpha", value<float>()->default_value(0.017f), "specify alpha value in mixed training mode; default 0.017")
 		//-----------------------------------------
 		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
-		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 1")
+		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 10")
 		("softmax-temperature", value<float>()->default_value(1.f), "use temperature for softmax activation; 1.0 by default")
 		//-----------------------------------------
 		("use-label-smoothing", "use label smoothing for cross entropy; no by default")
@@ -251,7 +253,7 @@ int main(int argc, char** argv) {
 	
 	// print help
 	if (vm.count("help") 
-		|| !(vm.count("in-mono-data") && vm.count("devel")))
+		|| !(vm.count("in-src-mono-data") && vm.count("in-tgt-mono-data") && vm.count("devel")))
 	{
 		cout << opts << "\n";
 		return EXIT_FAILURE;
@@ -285,7 +287,7 @@ int main(int argc, char** argv) {
 	dynet::Dict sd, td;// vocabularies
 	SentinelMarkers sm;// sentinel markers
 	WordIdCorpus devel_cor;// integer-converted bilingual data for development
-	WordIdSentences mono_s_cor;// integer-converted monolingual in-domain data
+	pair<WordIdSentences, WordIdSentences> mono_cor;// integer-converted monolingual in-domain data
 	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
 
 	std::string config_file = model_path + "/model.config";// configuration file path
@@ -316,7 +318,7 @@ int main(int argc, char** argv) {
 		sm._kTGT_UNK = td.convert("<unk>");
 
 		// load data files
-		if (!load_data(vm, mono_s_cor, devel_cor, sd, td, sm))
+		if (!load_data(vm, mono_cor, devel_cor, sd, td, sm))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 		// read model configuration
@@ -358,7 +360,7 @@ int main(int argc, char** argv) {
 		sm._kTGT_UNK = td.convert("<unk>");
 
 		// load data files
-		if (!load_data(vm, mono_s_cor, devel_cor, sd, td, sm))
+		if (!load_data(vm, mono_cor, devel_cor, sd, td, sm))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 		// get transformer configuration
@@ -422,9 +424,9 @@ int main(int argc, char** argv) {
 	if (vm["dev-eval-measure"].as<unsigned>() > 4) TRANSFORMER_RUNTIME_ASSERT("Unknown dev-eval-measure type (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES)!");
 
 	// external module for moment matching feature computation
-	MMFeatures* p_mm_fea_cfg = new MMFeatures_UDA(NUM_SAMPLES
-			, sd, td
-			, vm["src-alm-model-path"].as<std::string>(), vm["tgt-alm-model-path"].as<std::string>());/*feature config for moment matching*/
+	MMFeatures_UDA* p_mm_fea_cfg = new MMFeatures_UDA(NUM_SAMPLES
+					, sd, td
+					, vm["src-alm-model-path"].as<std::string>(), vm["tgt-alm-model-path"].as<std::string>());/*feature config for moment matching*/
 
 	unsigned training_mode = vm["training-mode"].as<unsigned>();
 	float alpha = vm["alpha"].as<float>();
@@ -432,7 +434,7 @@ int main(int argc, char** argv) {
 
 	// train transformer model
 	run_train(tf
-		, mono_s_cor, devel_cor
+		, mono_cor, devel_cor
 		, p_sgd_trainer
 		, training_mode
 		, alpha
@@ -456,19 +458,24 @@ int main(int argc, char** argv) {
 
 // ---
 bool load_data(const variables_map& vm
-	, WordIdSentences& mono_s_cor, WordIdCorpus& devel_cor
+	, std::pair<WordIdSentences, WordIdSentences>& mono_cor, WordIdCorpus& devel_cor
 	, dynet::Dict& sd, dynet::Dict& td
 	, SentinelMarkers& sm)
 {
 	bool swap = vm.count("swap");
 	bool r2l_target = vm.count("r2l_target");
-	auto& d = (swap)?td:sd;
 
-	std::string in_mono_data = vm["in-mono-data"].as<std::string>();	
-	cerr << endl << "Reading monolingual in-domain data from " << in_mono_data << "...\n";
-	bool use_joint_vocab = vm.count("joint-vocab") | vm.count("shared-embeddings"); 
-	mono_s_cor = read_corpus(in_mono_data, &d, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
+	// source
+	std::string in_src_mono_data = vm["in-src-mono-data"].as<std::string>();	
+	cerr << endl << "Reading monolingual source in-domain data from " << in_src_mono_data << "...\n";	 
+	mono_cor.first = read_corpus(in_src_mono_data, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
+	
+	// target
+	std::string in_tgt_mono_data = vm["in-tgt-mono-data"].as<std::string>();	
+	cerr  << "Reading monolingual target in-domain data from " << in_tgt_mono_data << "...\n";
+	mono_cor.second = read_corpus(in_tgt_mono_data, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
 
+	// freeze dicts if required
 	if ("" == vm["src-vocab"].as<std::string>() 
 		&& "" == vm["tgt-vocab"].as<std::string>()) // if not using external vocabularies
 	{
@@ -482,11 +489,14 @@ bool load_data(const variables_map& vm
 	td.set_unk("<unk>");
 	sm._kTGT_UNK = td.get_unk_id();
 
+	// load parallel dev data
 	if (vm.count("devel")) {
 		cerr << "Reading dev data from " << vm["devel"].as<std::string>() << "...\n";
 		devel_cor = read_corpus(vm["devel"].as<std::string>(), &sd, &td, false/*for development*/, 0, r2l_target & !swap);
 	}
 
+	// swap if required
+	bool use_joint_vocab = vm.count("joint-vocab") | vm.count("shared-embeddings");
 	if (swap) {
 		cerr << "Swapping role of source and target\n";
 		if (!use_joint_vocab){
@@ -503,6 +513,8 @@ bool load_data(const variables_map& vm
 				std::reverse(tsent.begin() + 1, tsent.end() - 1);
 			}
 		}
+
+		std::swap(mono_cor.first, mono_cor.second);
 	}
 
 	return true;
@@ -679,7 +691,7 @@ void eval_on_dev(transformer::TransformerModel &tf,
 
 // ---
 void eval_mm_on_dev(transformer::TransformerModel &tf, 
-	MMFeatures& mm_feas,
+	MMFeatures_UDA& mm_feas,
         const WordIdCorpus &devel_cor,
 	float softmax_temp,
 	const std::vector<std::vector<float>>& v_pre_emp_scores,
@@ -737,17 +749,15 @@ void eval_mm_on_dev(transformer::TransformerModel &tf,
 // ---
 
 // ---
-dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Expression& i_phi_bar/*((|F|, 1), batch_size * |S|)*/,
+dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, 
+	const std::vector<float>& v_pre_emp_scores,
 	const WordIdSentences& ssents, 
 	const WordIdSentences& samples, 
 	unsigned bsize,
-	MMFeatures& mm_feas)
+	MMFeatures_UDA& mm_feas)
 {
-	//cerr << "bsize=" << bsize << endl;
 	std::vector<float> scores;
-	//cerr << "ssents.size()=" << ssents.size() << endl;
-	//cerr << "samples.size()=" << samples.size() << endl;
-	mm_feas.compute_feature_scores(ssents, samples, scores);
+	mm_feas.compute_feature_scores_on_targets(cg, samples, scores);
 	if (DEBUG_FLAG){
 		cerr << "scores: ";
 		for (auto& score : scores) cerr << score << " ";
@@ -755,7 +765,7 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 	}
 	
 	// compute moment matching: <\hat{\Phi}(x) - \bar{\Phi}, \Phi(x) - \bar{\Phi}>
-	unsigned F_dim = i_phi_bar.dim()[0];
+	unsigned F_dim = mm_feas._F_dim;
 	//cerr << "1" << endl;
 	dynet::Expression i_phi_x = dynet::input(cg, dynet::Dim({F_dim, mm_feas._num_samples}, bsize), scores);// ((|F|, |S|), batch_size)
 	//cerr << "2" << endl;
@@ -766,9 +776,45 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg, const dynet::Exp
 	dynet::Expression i_phi_hat = (i_phi_x_csum - i_phi_x) / (mm_feas._num_samples - 1);// ((|F|, |S|), batch_size)
 	//cerr << "5" << endl;
 	i_phi_x = dynet::reshape(i_phi_x, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
+	if (DEBUG_FLAG){
+		cg.incremental_forward(i_phi_x);
+		cerr << "x_scores: ";
+		std::vector<float> x_scores = dynet::as_vector(cg.get_value(i_phi_x.i));
+		for (auto& sc : x_scores)
+			cerr << sc << " ";
+		cerr << endl;
+	}
 	i_phi_hat = dynet::reshape(i_phi_hat, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
+	if (DEBUG_FLAG){
+		cg.incremental_forward(i_phi_hat);
+		cerr << "phi_hat_scores: ";
+		std::vector<float> phi_hat_scores = dynet::as_vector(cg.get_value(i_phi_hat.i));
+		for (auto& sc : phi_hat_scores)
+			cerr << sc << " ";
+		cerr << endl;
+	}
+	dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({mm_feas._F_dim, 1}, (unsigned)samples.size()), v_pre_emp_scores);// ((F_dim, 1), batch_size * |S|)
+	if (DEBUG_FLAG){
+		cg.incremental_forward(i_phi_bar);
+		cerr << "phi_bar_scores: ";
+		std::vector<float> phi_bar_scores = dynet::as_vector(cg.get_value(i_phi_bar.i));
+		for (auto& sc : phi_bar_scores)
+			cerr << sc << " ";
+		cerr << endl;
+	}
 	//cerr << "6" << endl;
-	dynet::Expression i_mm = dynet::dot_product(i_phi_hat - i_phi_bar, i_phi_x - i_phi_bar);// ((1, 1), batch_size * |S|)	
+	//cerr << "i_phi_bar.dim()=" << "((" << i_phi_bar.dim()[0] << "," << i_phi_bar.dim()[1] << "), " << i_phi_bar.dim().batch_elems() << ")" << endl;
+	//cerr << "i_phi_x.dim()=" << "((" << i_phi_x.dim()[0] << "," << i_phi_x.dim()[1] << "), " << i_phi_x.dim().batch_elems() << ")" << endl;
+	//cerr << "i_phi_hat.dim()=" << "((" << i_phi_hat.dim()[0] << "," << i_phi_hat.dim()[1] << "), " << i_phi_hat.dim().batch_elems() << ")" << endl;
+	dynet::Expression i_mm = dynet::dot_product(i_phi_hat - i_phi_bar, i_phi_x - i_phi_bar);// ((1, 1), batch_size * |S|)
+	if (DEBUG_FLAG){
+		cg.incremental_forward(i_mm);
+		cerr << "mm_scores: ";
+		std::vector<float> mm_scores = dynet::as_vector(cg.get_value(i_mm.i));
+		for (auto& sc : mm_scores)
+			cerr << sc << " ";
+		cerr << endl;
+	}	
 
 	return i_mm;
 }
@@ -779,7 +825,7 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	const WordIdSentences& ssents, 
 	transformer::TransformerModel& tf,
 	const std::vector<float>& v_pre_emp_scores, 
-	MMFeatures& mm_feas,
+	MMFeatures_UDA& mm_feas,
 	float softmax_temp,
 	transformer::ModelStats& ctstats)
 {
@@ -792,26 +838,18 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 		tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs, softmax_temp);
 		tf.set_dropout(true);
 
-		if (DEBUG_FLAG){
+		if (DEBUG_FLAG)
 			for (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
-		}
 
 		ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
 		samples.insert(samples.end(), results.begin(), results.end());
 	}
+	if (DEBUG_FLAG) cerr << "samples.size()=" << samples.size() << endl;
 
-	// compute moment matching scores	
-	dynet::Expression i_phi_bar = dynet::input(cg, dynet::Dim({mm_feas._F_dim, 1}, mm_feas._num_samples * (unsigned)ssents.size()), v_pre_emp_scores);// ((F_dim, 1), batch_size * |S|)	
-	dynet::Expression i_mm = compute_mm_score(cg, i_phi_bar, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
-	if (DEBUG_FLAG){
-		cg.incremental_forward(i_mm);
-		cerr << "mm_scores: ";
-		std::vector<float> mm_scores = dynet::as_vector(cg.get_value(i_mm.i));
-		for (auto& sc : mm_scores)
-			cerr << sc << " ";
-		cerr << endl;
-	}
+	// compute moment matching scores		
+	dynet::Expression i_mm = compute_mm_score(cg, v_pre_emp_scores, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
 
+	// compute loss associated with mm scores
 	dynet::Expression i_xent_mm = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
 
 	return i_xent_mm;
@@ -820,7 +858,7 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 
 // ---
 void run_train(transformer::TransformerModel &tf, 
-	const WordIdSentences &in_mono_data, const WordIdCorpus &devel_cor, 
+	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus &devel_cor, 
 	dynet::Trainer*& p_sgd, 
 	unsigned training_mode,
 	float alpha,
@@ -830,7 +868,7 @@ void run_train(transformer::TransformerModel &tf,
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints,
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo, 
-	MMFeatures& mm_feas/*feature config for moment matching*/)
+	MMFeatures_UDA& mm_feas/*feature config for moment matching*/)
 {
 	// get current configuration
 	const transformer::TransformerConfig& tfc = tf.get_config();
@@ -845,44 +883,67 @@ void run_train(transformer::TransformerModel &tf,
 	//std::string params_out_file = model_path + "/model.mm.params";// save to different file with pre-trained model file
 
 	// create minibatches 
-	std::vector<WordIdSentences> in_mono_data_minibatch;
-	std::vector<std::vector<WordIdSentence> > dev_src_minibatch, dev_trg_minibatch;
-	std::vector<size_t> in_mono_data_ids_minibatch;
 	size_t minibatch_size = MINIBATCH_SIZE;
-	cerr << endl << "Creating minibatches for training data (using minibatch_size=" << minibatch_size << ")..." << endl;
-	create_minibatches(in_mono_data, minibatch_size, in_mono_data_minibatch);// for in-domain monolingual data
-	cerr << "Creating minibatches for development data (using minibatch_size=" << "1024" /*minibatch_size*/ << ")..." << endl << endl;
+	std::vector<WordIdSentences> in_s_mono_data_minibatch, in_t_mono_data_minibatch;
+	std::vector<std::vector<WordIdSentence> > dev_src_minibatch, dev_trg_minibatch;
+	std::vector<size_t> in_s_mono_data_ids_minibatch, in_t_mono_data_ids_minibatch;
+
+	// source
+	cerr << endl << "Creating minibatches for in-domain source mono data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	create_minibatches(in_mono_data.first, minibatch_size, in_s_mono_data_minibatch);// for in-domain source monolingual data
+	in_s_mono_data_ids_minibatch.resize(in_s_mono_data_minibatch.size());// create a sentence list for this train minibatch
+	std::iota(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), 0);
+
+	// target
+	cerr << "Creating minibatches for in-domain target mono data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	create_minibatches(in_mono_data.second, minibatch_size, in_t_mono_data_minibatch);// for in-domain target monolingual data
+	in_t_mono_data_ids_minibatch.resize(in_t_mono_data_minibatch.size());// create a sentence list for this train minibatch
+	std::iota(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), 0);
+
+	// dev
+	cerr << "Creating minibatches for development data (using minibatch_size=" << "1024" /*minibatch_size*/ << ")..." << endl;
 	create_minibatches(devel_cor, 1024/*minibatch_size*/, dev_src_minibatch, dev_trg_minibatch);// on dev
-	// create a sentence list for this train minibatch
-	in_mono_data_ids_minibatch.resize(in_mono_data_minibatch.size());
-	std::iota(in_mono_data_ids_minibatch.begin(), in_mono_data_ids_minibatch.end(), 0);	
+
+	// shuffle minibatches
+	cerr << endl << "***SHUFFLE" << endl << endl;
+	std::shuffle(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), *dynet::rndeng);
+	std::shuffle(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), *dynet::rndeng);
 
 	// get/pre-compute mm scores over training set
-	cerr << "Computing mm scores on train..." << endl;
-	std::vector<std::vector<float>> v_train_emp_scores;
-	// FIXME
+	cerr << "Pre-computing \\bar{\\phi} on in-domain target monolingual data..." << endl;
+	float score_phi_bar = 0.f;
+	unsigned num_samples = 0;
+	for (unsigned s = 0; s < in_t_mono_data_ids_minibatch.size() && num_samples < SAMPLING_SIZE; ++s) 
+	{
+		const auto& tsents = in_t_mono_data_minibatch[in_t_mono_data_ids_minibatch[s]];
+		
+		dynet::ComputationGraph cg;
+		std::vector<float> tmp_scores;
+		mm_feas.compute_feature_scores_on_targets(cg, tsents, tmp_scores, true);
+		score_phi_bar += tmp_scores[0];
+		
+		num_samples += tsents.size();	
+	}
+	score_phi_bar /= num_samples;// averaging
+	if (DEBUG_FLAG) cerr << "score_phi_bar=" << score_phi_bar << endl;
 	 
 	// model stats on dev
-	cerr << "Computing mm scores on dev..." << endl;
-	transformer::ModelStats dstats(5/*dev_eval_mea*/);
+	//cerr << "Computing mm scores on dev..." << endl;
+	transformer::ModelStats dstats(0/*5 dev_eval_mea*/);
 	get_dev_stats(devel_cor, tfc, dstats);
-	std::vector<std::vector<float>> v_dev_emp_scores;
+	//std::vector<std::vector<float>> v_dev_emp_scores;
 	// FIXME
 		
 	unsigned report_every_i = TREPORT;
 	unsigned dev_every_i_reports = DREPORT;
-
-	// shuffle minibatches
-	cerr << endl << "***SHUFFLE" << endl;
-	std::shuffle(in_mono_data_ids_minibatch.begin(), in_mono_data_ids_minibatch.end(), *dynet::rndeng);
 
 	unsigned cpt = 0;// count of patience
 
 	cerr << endl << "--------------------------------------------------------------------------------------------------------" << endl;
         cerr << "Pre-trained model scores on dev data..." << endl;
 	tf.set_dropout(false);
-	//eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
-	eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, v_dev_emp_scores, dstats);
+	eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+	//eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, v_dev_emp_scores, dstats);
 	dstats.update_best_score(cpt);
         cerr << "***DEV: " << "sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string(true) << endl;
 	cerr << "--------------------------------------------------------------------------------------------------------" << endl;	
@@ -896,7 +957,7 @@ void run_train(transformer::TransformerModel &tf,
 		tf.set_dropout(true);// enable dropout
 
 		for (unsigned iter = 0; iter < dev_every_i_reports;) {
-			if (id == in_mono_data_ids_minibatch.size()) { 
+			if (id == in_s_mono_data_ids_minibatch.size()) { 
 				//timing
 				cerr << "***Epoch " << epoch << " is finished. ";
 				timer_epoch.show();
@@ -915,7 +976,7 @@ void run_train(transformer::TransformerModel &tf,
 
 				// shuffle the access order
 				cerr << "***SHUFFLE" << endl;
-				std::shuffle(in_mono_data_ids_minibatch.begin(), in_mono_data_ids_minibatch.end(), *dynet::rndeng);				
+				std::shuffle(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), *dynet::rndeng);				
 
 				timer_epoch.reset();
 			}
@@ -928,13 +989,13 @@ void run_train(transformer::TransformerModel &tf,
 			}
 
 			// get samples from the current model
-			auto& ssents = in_mono_data_minibatch[in_mono_data_ids_minibatch[id]];
+			auto& ssents = in_s_mono_data_minibatch[in_s_mono_data_ids_minibatch[id]];
 
 			dynet::Expression i_xent_mm;
 			transformer::ModelStats ctstats_mm;
 				
-			// FIXME: prepare v_emp_scores
-			std::vector<float> v_emp_scores;
+			// pre-computed score for \bar{\phi}
+			std::vector<float> v_emp_scores(ssents.size() * mm_feas._num_samples, score_phi_bar);
 
 			// build graph and get model loss
 			i_xent_mm = (1.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats_mm);
@@ -946,6 +1007,7 @@ void run_train(transformer::TransformerModel &tf,
 			}
 
 			// perform forward computation for aggregate objective
+			//cerr << "forward:" << endl;
 			cg.incremental_forward(i_xent_mm);
 
 			// grab the parts of the objective
@@ -957,21 +1019,27 @@ void run_train(transformer::TransformerModel &tf,
 			}
 			//cerr << "loss=" << loss_mm << endl;
 			
+			// collect stats
 			tstats_mm._scores[1] += loss_mm;
                         tstats_mm._words_src += ctstats_mm._words_src;
                         tstats_mm._words_src_unk += ctstats_mm._words_src_unk;
                         tstats_mm._words_tgt += ctstats_mm._words_tgt;
                         tstats_mm._words_tgt_unk += ctstats_mm._words_tgt_unk;
 
+			// perform backward
+			//cerr << "backward:" << endl;
 			cg.backward(i_xent_mm);
+
+			// update parameters
+			//cerr << "update params:" << endl;
 			p_sgd->update();
 
-			sid += in_mono_data_minibatch[in_mono_data_ids_minibatch[id]].size();
-			iter += in_mono_data_minibatch[in_mono_data_ids_minibatch[id]].size();
+			sid += in_s_mono_data_minibatch[in_s_mono_data_ids_minibatch[id]].size();
+			iter += in_s_mono_data_minibatch[in_s_mono_data_ids_minibatch[id]].size();
 		
 			if (sid / report_every_i != last_print 
 					|| iter >= dev_every_i_reports
-					|| id + 1 == in_mono_data_ids_minibatch.size()){
+					|| id + 1 == in_s_mono_data_ids_minibatch.size()){
 				last_print = sid / report_every_i;
 
 				float elapsed = timer_iteration.elapsed();
@@ -994,10 +1062,10 @@ void run_train(transformer::TransformerModel &tf,
 			dynet::ComputationGraph cg;
 			WordIdSentence target;// raw translation (w/o scores)			
 			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;
-			cerr << "***Source: " << get_sentence(in_mono_data_minibatch[in_mono_data_ids_minibatch[id]][0], tf.get_source_dict()) << endl;
-			tf.sample(cg, in_mono_data_minibatch[in_mono_data_ids_minibatch[id]][0], target);
+			cerr << "***Source: " << get_sentence(in_s_mono_data_minibatch[in_s_mono_data_ids_minibatch[id]][0], tf.get_source_dict()) << endl;
+			tf.sample(cg, in_s_mono_data_minibatch[in_s_mono_data_ids_minibatch[id]][0], target);
 			cerr << "***Sampled translation: " << get_sentence(target, tf.get_target_dict()) << endl;
-			tf.greedy_decode(cg, in_mono_data_minibatch[in_mono_data_ids_minibatch[id]][0], target);
+			tf.greedy_decode(cg, in_s_mono_data_minibatch[in_s_mono_data_ids_minibatch[id]][0], target);
 			cerr << "***Greedy translation: " << get_sentence(target, tf.get_target_dict()) << endl;
 			/*std::vector<WordIdSentence> targets;
 			tf.beam_decode(cg, train_src_minibatch[train_ids_minibatch[id]][0], targets, 4, 5);
@@ -1029,8 +1097,8 @@ void run_train(transformer::TransformerModel &tf,
 		timer_iteration.reset();
 		
 		//eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);// non-batched version
-		//eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
-		eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, v_dev_emp_scores, dstats);
+		eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+		//eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, v_dev_emp_scores, dstats);
 		float elapsed = timer_iteration.elapsed();
 
 		// update best score and save parameter to file
@@ -1042,7 +1110,7 @@ void run_train(transformer::TransformerModel &tf,
 
 		// verbose
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)in_mono_data.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
+		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)in_mono_data.first.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
 		if (cpt > 0) cerr << "(not improved, best score on dev so far: " << dstats.get_score_string(false) << ") ";
 		cerr << "[completed in " << elapsed << " ms]" << endl;
 
@@ -1072,18 +1140,18 @@ void run_train(transformer::TransformerModel &tf,
 				// b) use smaller batch size
 				if (USE_SMALLER_MINIBATCH){
 					cerr << "Creating minibatches for training data (using minibatch_size=" << minibatch_size/2 << ")..." << endl;
-					in_mono_data_minibatch.clear();
-					in_mono_data_ids_minibatch.clear();
-					create_minibatches(in_mono_data, minibatch_size, in_mono_data_minibatch);// for in-domain monolingual data
-					in_mono_data_ids_minibatch.resize(in_mono_data_minibatch.size());
-					std::iota(in_mono_data_ids_minibatch.begin(), in_mono_data_ids_minibatch.end(), 0);	
+					in_s_mono_data_minibatch.clear();
+					in_s_mono_data_ids_minibatch.clear();
+					create_minibatches(in_mono_data.first, minibatch_size, in_s_mono_data_minibatch);// for in-domain monolingual data
+					in_s_mono_data_ids_minibatch.resize(in_s_mono_data_minibatch.size());
+					std::iota(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), 0);	
 
 					minibatch_size /= 2;
 					report_every_i /= 2;
 				}
 				// 3) shuffle the training data
 				cerr << "***SHUFFLE" << endl;
-				std::shuffle(in_mono_data_ids_minibatch.begin(), in_mono_data_ids_minibatch.end(), *dynet::rndeng);
+				std::shuffle(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), *dynet::rndeng);
 
 				NUM_RESETS--;
 				if (NUM_RESETS == 0)

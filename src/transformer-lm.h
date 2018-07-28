@@ -391,8 +391,10 @@ public:
 		, const WordIdSentences& sents/*batched*/
 		, ModelStats* pstats=nullptr
 		, bool is_eval_on_dev=false);	
-	std::vector<float> get_losses(dynet::ComputationGraph &cg
-		, const WordIdSentences& sents /*batched*/);
+	void get_avg_losses(dynet::ComputationGraph &cg
+		, const WordIdSentences& tsents
+		, std::vector<float>& v_losses
+		, bool do_sum=false);
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const std::vector<dynet::Expression>& v_soft_sents/*batched*/
 		, bool is_eval_on_dev=false);
@@ -524,9 +526,11 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	return i_tloss;
 }
 
-std::vector<float> TransformerLModel::get_losses(dynet::ComputationGraph &cg
-	, const WordIdSentences& tsents)
-{	
+void TransformerLModel::get_avg_losses(dynet::ComputationGraph &cg
+	, const WordIdSentences& tsents
+	, std::vector<float>& v_losses
+	, bool do_sum)
+{
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
 
@@ -555,8 +559,12 @@ std::vector<float> TransformerLModel::get_losses(dynet::ComputationGraph &cg
 		v_errors.push_back(i_err);
 	}
 
-	dynet::Expression i_tloss = dynet::sum(v_errors);
-	return dynet::as_vector(cg.incremental_forward(i_tloss));
+	dynet::Expression i_tloss;
+       	if (!do_sum) i_tloss = dynet::sum(v_errors) / this->_decoder->_batch_tlen;// loss normalised by max sequence length in batch
+	else i_tloss = dynet::sum_batches(dynet::sum(v_errors)) / this->_decoder->_batch_tlen;
+	v_losses = dynet::as_vector(cg.incremental_forward(i_tloss));
+
+	cg.clear();
 }
 
 dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg

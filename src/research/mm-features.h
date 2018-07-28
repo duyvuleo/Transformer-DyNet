@@ -332,7 +332,7 @@ struct MMFeatures_WO : public MMFeatures
 	virtual ~MMFeatures_WO(){}
 };
 
-struct MMFeatures_UDA : public MMFeatures		 
+struct MMFeatures_UDA : public MMFeatures	 
 {
 	std::shared_ptr<transformer::TransformerLModel> _p_src_alm;
 	std::shared_ptr<transformer::TransformerLModel> _p_tgt_alm;
@@ -427,11 +427,20 @@ struct MMFeatures_UDA : public MMFeatures
 		return ss.str();
 	}
 
-	virtual void compute_feature_scores(const WordIdSentences& xs, const WordIdSentences& ys, std::vector<float>& v_scores, unsigned dup=1){
-		v_scores.clear();
+	void compute_feature_scores_on_targets(dynet::ComputationGraph& cg
+			, const WordIdSentences& ys
+			, std::vector<float>& v_scores
+			, bool flag=false)
+	{
+		_p_tgt_alm->get_avg_losses(cg, ys, v_scores, flag);
+	}
 
-		dynet::ComputationGraph cg;
-		v_scores = _p_tgt_alm->get_losses(cg, ys);
+	void compute_feature_scores_on_sources(dynet::ComputationGraph& cg
+			, const WordIdSentences& xs
+			, std::vector<float>& v_scores
+			, bool flag=false)
+	{
+		_p_src_alm->get_avg_losses(cg, xs, v_scores, flag);
 	}
 };
 
