@@ -119,7 +119,7 @@ void eval_mm_on_dev(transformer::TransformerModel &tf,
 	MMFeatures_UDA& mm_feas,
 	const WordIdCorpus &devel_cor, 
 	float softmax_temp,
-	const std::vector<std::vector<float>>& v_pre_emp_scores,
+	float pre_emp_score,
 	transformer::ModelStats& dstats);
 // ---
 
@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
 		("sampling", "sample translation during training; default not")
 		("mm-debug", "very chatty for debugging only; default not")
 		//-----------------------------------------
-		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES); default 0 (perplexity)") // note that MT scores here are approximate (e.g., evaluating with <unk> markers, and tokenized text or with subword segmentation if using BPE), not necessarily equivalent to real BLEU/NIST/WER/RIBES scores.
+		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES; 5: MM); default 0 (perplexity)") // note that MT scores here are approximate (e.g., evaluating with <unk> markers, and tokenized text or with subword segmentation if using BPE), not necessarily equivalent to real BLEU/NIST/WER/RIBES scores.
 		("dev-eval-infer-algo", value<unsigned>()->default_value(0), "specify the algorithm for inference on dev (0: sampling; 1: greedy; N>=2: beam search with N size of beam); default 0 (random sampling)") // using sampling/greedy will be faster. 
 		//-----------------------------------------
 		("average-checkpoints", value<unsigned>()->default_value(1), "specify number of checkpoints for model averaging; default single best model") // average checkpointing
@@ -429,7 +429,7 @@ int main(int argc, char** argv) {
 	// create SGD trainer
 	Trainer* p_sgd_trainer = create_sgd_trainer(vm, tf.get_model_parameters());
 
-	if (vm["dev-eval-measure"].as<unsigned>() > 4) TRANSFORMER_RUNTIME_ASSERT("Unknown dev-eval-measure type (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES)!");
+	if (vm["dev-eval-measure"].as<unsigned>() > 5) TRANSFORMER_RUNTIME_ASSERT("Unknown dev-eval-measure type (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES; 5: MM)!");
 
 	// external module for moment matching feature computation
 	MMFeatures_UDA* p_mm_fea_cfg = new MMFeatures_UDA(NUM_SAMPLES
@@ -702,22 +702,21 @@ void eval_mm_on_dev(transformer::TransformerModel &tf,
 	MMFeatures_UDA& mm_feas,
         const WordIdCorpus &devel_cor,
 	float softmax_temp,
-	const std::vector<std::vector<float>>& v_pre_emp_scores,
+	float pre_emp_score,
         transformer::ModelStats& dstats)
 {
-	unsigned F_dim = v_pre_emp_scores[0].size();
+	unsigned F_dim = mm_feas._F_dim;
 
-	std::vector<float> v_scores;
+	std::vector<float> v_scores, v_pre_emp_scores(1, pre_emp_score);
 	float mm_loss = 0.f;
 	unsigned i = 0;
 	//cerr << "i=";
 	for (; i < devel_cor.size() && i < SAMPLING_SIZE; ++i) {
-		/*
-
 		//cerr << i << " ";
 		const auto& ssent = std::get<0>(devel_cor[i]);
 		//const auto& tsent = std::get<1>(devel_cor[i]);
 		
+		// computation graph
 		dynet::ComputationGraph cg;
 
 		// sample from current model
@@ -729,7 +728,7 @@ void eval_mm_on_dev(transformer::TransformerModel &tf,
 		// compute mm loss
 		cg.clear();
 		v_scores.clear();
-		mm_feas.compute_feature_scores(WordIdSentences(mm_feas._num_samples, ssent), samples, v_scores);
+		mm_feas.compute_feature_scores_on_targets(cg, samples, v_scores);
 		//cerr << "phi_h: ";
 		//for (auto& score : v_scores) cerr << score << " ";
 		//cerr << endl;
@@ -740,14 +739,12 @@ void eval_mm_on_dev(transformer::TransformerModel &tf,
 		//cerr << "phi_bar: ";
 		//for (auto& score : v_pre_emp_scores[i]) cerr << score << " ";
 		//cerr << endl;
-		dynet::Expression i_emp = dynet::input(cg, dynet::Dim({F_dim, 1}, 1), v_pre_emp_scores[i]);
+		dynet::Expression i_emp = dynet::input(cg, dynet::Dim({F_dim, 1}, 1), v_pre_emp_scores);
 
 		dynet::Expression i_dist = dynet::squared_distance(i_mod, i_emp);
 		cg.incremental_forward(i_dist);
 		mm_loss += dynet::as_scalar(cg.get_value(i_dist.i));		 
 		//cerr << mm_loss << endl;
-		
-		*/
 	}
 
 	//cerr << endl;
@@ -885,7 +882,7 @@ void sanity_check(transformer::TransformerModel &tf,
 		num_samples += thyps.size();	
 	}
 	score_phi_bar /= num_samples;// averaging
-	if (DEBUG_FLAG) cerr << "score_phi_bar=" << score_phi_bar << endl;
+	if (DEBUG_FLAG) cerr << "[sanity check] - " << "\\bar{\\phi}=" << score_phi_bar << endl;
 
 	tf.set_dropout(true);// disable dropout
 }
@@ -963,16 +960,13 @@ void run_train(transformer::TransformerModel &tf,
 	if (DEBUG_FLAG) cerr << "\\bar{\\phi}=" << score_phi_bar << endl;
 	// --- sanity check
 	// computing \bar{\phi} on translations for sampled in-domain source sentences produced by initial translation model
-	//  FIXME
 	if (DEBUG_FLAG) sanity_check(tf, mm_feas, in_s_mono_data_minibatch, in_s_mono_data_ids_minibatch);
 	// ---
 	 
 	// model stats on dev
 	//cerr << "Computing mm scores on dev..." << endl;
-	transformer::ModelStats dstats(dev_eval_mea/*5: mm measure*/);
+	transformer::ModelStats dstats(dev_eval_mea)/*5: mm squared distance loss*/;
 	get_dev_stats(devel_cor, tfc, dstats);
-	//std::vector<std::vector<float>> v_dev_emp_scores;
-	// FIXME
 		
 	unsigned report_every_i = TREPORT;
 	unsigned dev_every_i_reports = DREPORT;
@@ -982,8 +976,8 @@ void run_train(transformer::TransformerModel &tf,
 	cerr << endl << "--------------------------------------------------------------------------------------------------------" << endl;
         cerr << "Pre-trained model scores on dev data..." << endl;
 	tf.set_dropout(false);
-	eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
-	//eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, v_dev_emp_scores, dstats);
+	//eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+	eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, score_phi_bar, dstats);
 	dstats.update_best_score(cpt);
         cerr << "***DEV: " << "sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string(true) << endl;
 	cerr << "--------------------------------------------------------------------------------------------------------" << endl;	
@@ -1150,8 +1144,8 @@ void run_train(transformer::TransformerModel &tf,
 		timer_iteration.reset();
 		
 		//eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);// non-batched version
-		eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
-		//eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, v_dev_emp_scores, dstats);
+		//eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+		eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, score_phi_bar, dstats);
 		float elapsed = timer_iteration.elapsed();
 
 		// update best score and save parameter to file
