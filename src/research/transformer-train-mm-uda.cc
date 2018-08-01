@@ -73,6 +73,13 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 
 // ---
+void sanity_check(transformer::TransformerModel &tf, 
+	MMFeatures_UDA& mm_feas/*feature config for moment matching*/, 
+	const std::vector<WordIdSentences>& in_s_mono_data_minibatch,
+	const std::vector<size_t>& in_s_mono_data_ids_minibatch);
+// ---
+
+// ---
 void run_train(transformer::TransformerModel &tf, 
 	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus& devel_cor, 
 	dynet::Trainer*& p_sgd, 
@@ -103,7 +110,8 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
         const std::vector<float>& v_pre_mm_scores,
         MMFeatures_UDA& mm_feas,
 	float softmax_temp,
-	transformer::ModelStats& ctstats);
+	transformer::ModelStats& ctstats,
+	dynet::Expression* p_i_mm);
 // ---
 
 // ---
@@ -216,7 +224,7 @@ int main(int argc, char** argv) {
 		("mm-debug", "very chatty for debugging only; default not")
 		//-----------------------------------------
 		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES); default 0 (perplexity)") // note that MT scores here are approximate (e.g., evaluating with <unk> markers, and tokenized text or with subword segmentation if using BPE), not necessarily equivalent to real BLEU/NIST/WER/RIBES scores.
-		("dev-eval-infer-algo", value<unsigned>()->default_value(1), "specify the algorithm for inference on dev (0: sampling; 1: greedy; N>=2: beam search with N size of beam); default 0 (sampling)") // using sampling/greedy will be faster. 
+		("dev-eval-infer-algo", value<unsigned>()->default_value(0), "specify the algorithm for inference on dev (0: sampling; 1: greedy; N>=2: beam search with N size of beam); default 0 (random sampling)") // using sampling/greedy will be faster. 
 		//-----------------------------------------
 		("average-checkpoints", value<unsigned>()->default_value(1), "specify number of checkpoints for model averaging; default single best model") // average checkpointing
 		//-----------------------------------------
@@ -467,12 +475,12 @@ bool load_data(const variables_map& vm
 
 	// source
 	std::string in_src_mono_data = vm["in-src-mono-data"].as<std::string>();	
-	cerr << endl << "Reading monolingual source in-domain data from " << in_src_mono_data << "...\n";	 
+	cerr << endl << "Reading in-domain source monolingual data from " << in_src_mono_data << "...\n";	 
 	mono_cor.first = read_corpus(in_src_mono_data, &sd, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
 	
 	// target
 	std::string in_tgt_mono_data = vm["in-tgt-mono-data"].as<std::string>();	
-	cerr  << "Reading monolingual target in-domain data from " << in_tgt_mono_data << "...\n";
+	cerr  << "Reading in-domain target monolingual data from " << in_tgt_mono_data << "...\n";
 	mono_cor.second = read_corpus(in_tgt_mono_data, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
 
 	// freeze dicts if required
@@ -776,14 +784,6 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg,
 	dynet::Expression i_phi_hat = (i_phi_x_csum - i_phi_x) / (mm_feas._num_samples - 1);// ((|F|, |S|), batch_size)
 	//cerr << "5" << endl;
 	i_phi_x = dynet::reshape(i_phi_x, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
-	if (DEBUG_FLAG){
-		cg.incremental_forward(i_phi_x);
-		cerr << "x_scores: ";
-		std::vector<float> x_scores = dynet::as_vector(cg.get_value(i_phi_x.i));
-		for (auto& sc : x_scores)
-			cerr << sc << " ";
-		cerr << endl;
-	}
 	i_phi_hat = dynet::reshape(i_phi_hat, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
 	if (DEBUG_FLAG){
 		cg.incremental_forward(i_phi_hat);
@@ -827,7 +827,8 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	const std::vector<float>& v_pre_emp_scores, 
 	MMFeatures_UDA& mm_feas,
 	float softmax_temp,
-	transformer::ModelStats& ctstats)
+	transformer::ModelStats& ctstats,
+	dynet::Expression* p_i_mm)
 {
 	WordIdSentences ssents_ext, samples;
 	for (auto& ssent : ssents){
@@ -847,12 +848,46 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	if (DEBUG_FLAG) cerr << "samples.size()=" << samples.size() << endl;
 
 	// compute moment matching scores		
-	dynet::Expression i_mm = compute_mm_score(cg, v_pre_emp_scores, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
+	//dynet::Expression i_mm = compute_mm_score(cg, v_pre_emp_scores, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
+	*p_i_mm = compute_mm_score(cg, v_pre_emp_scores, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|)
 
 	// compute loss associated with mm scores
-	dynet::Expression i_xent_mm = tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
+	//return tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
+	//return tf.build_graph(cg, ssents_ext, samples, &ctstats);// conventional CE loss
+	return tf.get_all_losses(cg, ssents_ext, samples, &ctstats);// conventional CE loss (all individual losses)
+}
+// ---
 
-	return i_xent_mm;
+// ---
+void sanity_check(transformer::TransformerModel &tf, 
+	MMFeatures_UDA& mm_feas/*feature config for moment matching*/, 
+	const std::vector<WordIdSentences>& in_s_mono_data_minibatch,
+	const std::vector<size_t>& in_s_mono_data_ids_minibatch)
+{
+	tf.set_dropout(false);// disable dropout
+
+	float score_phi_bar = 0.f;
+	unsigned num_samples = 0;
+	for (unsigned s = 0; s < in_s_mono_data_minibatch.size() && num_samples < SAMPLING_SIZE; ++s) 
+	{
+		const auto& ssents = in_s_mono_data_minibatch[in_s_mono_data_ids_minibatch[s]];
+
+		// get greedy translations
+		dynet::ComputationGraph cg;
+		WordIdSentences thyps;
+		tf.greedy_decode(cg, ssents, thyps);// faster with relatively good translations
+		
+		// compute score
+		std::vector<float> tmp_scores;
+		mm_feas.compute_feature_scores_on_targets(cg, thyps, tmp_scores, true);
+		score_phi_bar += tmp_scores[0];
+		
+		num_samples += thyps.size();	
+	}
+	score_phi_bar /= num_samples;// averaging
+	if (DEBUG_FLAG) cerr << "score_phi_bar=" << score_phi_bar << endl;
+
+	tf.set_dropout(true);// disable dropout
 }
 // ---
 
@@ -909,8 +944,8 @@ void run_train(transformer::TransformerModel &tf,
 	std::shuffle(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), *dynet::rndeng);
 	std::shuffle(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), *dynet::rndeng);
 
-	// get/pre-compute mm scores over training set
-	cerr << "Pre-computing \\bar{\\phi} on in-domain target monolingual data..." << endl;
+	// get/pre-compute mm scores over in-domain target monolingual data
+	if (DEBUG_FLAG) cerr << "Pre-computing \\bar{\\phi} on in-domain target monolingual data..." << endl;
 	float score_phi_bar = 0.f;
 	unsigned num_samples = 0;
 	for (unsigned s = 0; s < in_t_mono_data_ids_minibatch.size() && num_samples < SAMPLING_SIZE; ++s) 
@@ -925,11 +960,16 @@ void run_train(transformer::TransformerModel &tf,
 		num_samples += tsents.size();	
 	}
 	score_phi_bar /= num_samples;// averaging
-	if (DEBUG_FLAG) cerr << "score_phi_bar=" << score_phi_bar << endl;
+	if (DEBUG_FLAG) cerr << "\\bar{\\phi}=" << score_phi_bar << endl;
+	// --- sanity check
+	// computing \bar{\phi} on translations for sampled in-domain source sentences produced by initial translation model
+	//  FIXME
+	if (DEBUG_FLAG) sanity_check(tf, mm_feas, in_s_mono_data_minibatch, in_s_mono_data_ids_minibatch);
+	// ---
 	 
 	// model stats on dev
 	//cerr << "Computing mm scores on dev..." << endl;
-	transformer::ModelStats dstats(0/*5 dev_eval_mea*/);
+	transformer::ModelStats dstats(dev_eval_mea/*5: mm measure*/);
 	get_dev_stats(devel_cor, tfc, dstats);
 	//std::vector<std::vector<float>> v_dev_emp_scores;
 	// FIXME
@@ -991,14 +1031,18 @@ void run_train(transformer::TransformerModel &tf,
 			// get samples from the current model
 			auto& ssents = in_s_mono_data_minibatch[in_s_mono_data_ids_minibatch[id]];
 
-			dynet::Expression i_xent_mm;
+			dynet::Expression i_xent, i_mm, i_xent_mm;
 			transformer::ModelStats ctstats_mm;
 				
 			// pre-computed score for \bar{\phi}
 			std::vector<float> v_emp_scores(ssents.size() * mm_feas._num_samples, score_phi_bar);
 
 			// build graph and get model loss
-			i_xent_mm = (1.f / mm_feas._num_samples) * compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats_mm);
+			i_xent = compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats_mm, &i_mm);
+			dynet::Expression i_xent_sum = dynet::sum_batches(i_xent);
+
+			// total loss with reinforced moment matching scores
+			i_xent_mm = dynet::sum_batches(dynet::cmult(i_xent, i_mm));
 			
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -1011,16 +1055,25 @@ void run_train(transformer::TransformerModel &tf,
 			cg.incremental_forward(i_xent_mm);
 
 			// grab the parts of the objective
-			float loss_mm = dynet::as_scalar(cg.get_value(i_xent_mm.i));
-			if (!is_valid(loss_mm)){
+			float loss = dynet::as_scalar(cg.get_value(i_xent_sum.i));
+			if (!is_valid(loss)){
 				std::cerr << "***Warning***: nan or -nan values occurred!" << std::endl;
 				++id;
 				continue;
 			}
 			//cerr << "loss=" << loss_mm << endl;
 			
+			// observe other scores
+			std::vector<float> v_xent_losses = dynet::as_vector(cg.get_value(i_xent.i));
+			if (DEBUG_FLAG){
+				cerr << "xent_losses: ";
+				for (auto& sc : v_xent_losses)
+					cerr << sc << " ";
+				cerr << endl;
+			}
+	
 			// collect stats
-			tstats_mm._scores[1] += loss_mm;
+			tstats_mm._scores[1] += loss;
                         tstats_mm._words_src += ctstats_mm._words_src;
                         tstats_mm._words_src_unk += ctstats_mm._words_src_unk;
                         tstats_mm._words_tgt += ctstats_mm._words_tgt;

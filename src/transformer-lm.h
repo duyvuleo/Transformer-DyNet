@@ -560,8 +560,8 @@ void TransformerLModel::get_avg_losses(dynet::ComputationGraph &cg
 	}
 
 	dynet::Expression i_tloss;
-       	if (!do_sum) i_tloss = dynet::sum(v_errors) / this->_decoder->_batch_tlen;// loss normalised by max sequence length in batch
-	else i_tloss = dynet::sum_batches(dynet::sum(v_errors)) / this->_decoder->_batch_tlen;
+       	if (!do_sum) i_tloss = dynet::sum(v_errors) / tlen;// loss normalised by max sequence length in batch
+	else i_tloss = dynet::sum_batches(dynet::sum(v_errors)) / tlen;
 	v_losses = dynet::as_vector(cg.incremental_forward(i_tloss));
 
 	cg.clear();
