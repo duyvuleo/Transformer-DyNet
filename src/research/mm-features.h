@@ -334,23 +334,32 @@ struct MMFeatures_WO : public MMFeatures
 
 struct MMFeatures_UDA : public MMFeatures	 
 {
-	std::shared_ptr<transformer::TransformerLModel> _p_src_alm;
-	std::shared_ptr<transformer::TransformerLModel> _p_tgt_alm;
+	// in-domain LMs
+	std::shared_ptr<transformer::TransformerLModel> _p_in_src_alm;
+	std::shared_ptr<transformer::TransformerLModel> _p_in_tgt_alm;
+	// out-domain LMs
+	std::shared_ptr<transformer::TransformerLModel> _p_out_src_alm;
+	std::shared_ptr<transformer::TransformerLModel> _p_out_tgt_alm;
+
+	// feature function type
+	unsigned _fea_func_type = 0;
 
 	explicit MMFeatures_UDA(){
 	}
 
 	explicit MMFeatures_UDA(unsigned num_samples
 		, dynet::Dict& sd, dynet::Dict& td
-		, const std::string& src_alm_path, const std::string& tgt_alm_path)
-		: MMFeatures(num_samples)
+		, unsigned fea_func_type
+		, const std::string& in_src_alm_path, const std::string& in_tgt_alm_path
+		, const std::string& out_src_alm_path, const std::string& out_tgt_alm_path)
+		: MMFeatures(num_samples), _fea_func_type(fea_func_type)
 	{			
  		this->_F_dim = 1;
 
-		if ("" != src_alm_path){
-			cerr << "Loading language model from " << src_alm_path << "..." << endl;
+		if ("" != in_src_alm_path){
+			cerr << "Loading in-domain source language model from " << in_src_alm_path << "..." << endl;
 			
-			ifstream inpf(src_alm_path + "/model.config");
+			ifstream inpf(in_src_alm_path + "/model.config");
 			assert(inpf);
 			
 			std::string line;
@@ -377,15 +386,15 @@ struct MMFeatures_UDA : public MMFeatures
 			tfc._is_training = false;
 			tfc._use_dropout = false;
 
-			_p_src_alm.reset(new transformer::TransformerLModel(tfc, sd));
-			_p_src_alm.get()->initialise_params_from_file(model_file);// load pre-trained model from file
-			cerr << "Count of model parameters: " << _p_src_alm.get()->get_model_parameters().parameter_count() << endl;
+			_p_in_src_alm.reset(new transformer::TransformerLModel(tfc, sd));
+			_p_in_src_alm.get()->initialise_params_from_file(model_file);// load pre-trained model from file
+			cerr << "Count of model parameters: " << _p_in_src_alm.get()->get_model_parameters().parameter_count() << endl;
 		}
 
-		if ("" != tgt_alm_path){
-			cerr << "Loading language model from " << tgt_alm_path << "..." << endl;
+		if ("" != in_tgt_alm_path){
+			cerr << "Loading in-domain target language model from " << in_tgt_alm_path << "..." << endl;
 			
-			ifstream inpf(tgt_alm_path + "/model.config");
+			ifstream inpf(in_tgt_alm_path + "/model.config");
 			assert(inpf);
 			
 			std::string line;
@@ -412,9 +421,79 @@ struct MMFeatures_UDA : public MMFeatures
 			tfc._is_training = false;
 			tfc._use_dropout = false;
 
-			_p_tgt_alm.reset(new transformer::TransformerLModel(tfc, td));
-			_p_tgt_alm.get()->initialise_params_from_file(model_file);// load pre-trained model from file
-			cerr << "Count of model parameters: " << _p_tgt_alm.get()->get_model_parameters().parameter_count() << endl;
+			_p_in_tgt_alm.reset(new transformer::TransformerLModel(tfc, td));
+			_p_in_tgt_alm.get()->initialise_params_from_file(model_file);// load pre-trained model from file
+			cerr << "Count of model parameters: " << _p_in_tgt_alm.get()->get_model_parameters().parameter_count() << endl;
+		}
+
+		if ("" != out_src_alm_path){
+			cerr << "Loading out-domain source language model from " << out_src_alm_path << "..." << endl;
+			
+			ifstream inpf(out_src_alm_path + "/model.config");
+			assert(inpf);
+			
+			std::string line;
+			getline(inpf, line);
+			std::stringstream ss(line);
+
+			transformer::SentinelMarkers sm;// sentinel markers
+			sm._kTGT_SOS = sd.convert("<s>");
+			sm._kTGT_EOS = sd.convert("</s>");
+			sm._kTGT_UNK = sd.convert("<unk>");
+
+			std::string model_file;
+			transformer::TransformerConfig tfc;// transformer config
+			tfc._tgt_vocab_size = sd.size();
+			tfc._sm = sm;
+			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+		  		>> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+		   		>> tfc._use_label_smoothing >> tfc._label_smoothing_weight
+		   		>> tfc._position_encoding >> tfc._max_length
+		   		>> tfc._attention_type
+		   		>> tfc._ffl_activation_type
+		   		>> tfc._use_hybrid_model;		
+			ss >> model_file;
+			tfc._is_training = false;
+			tfc._use_dropout = false;
+
+			_p_out_src_alm.reset(new transformer::TransformerLModel(tfc, sd));
+			_p_out_src_alm.get()->initialise_params_from_file(model_file);// load pre-trained model from file
+			cerr << "Count of model parameters: " << _p_out_src_alm.get()->get_model_parameters().parameter_count() << endl;
+		}
+
+		if ("" != out_tgt_alm_path){
+			cerr << "Loading in-domain target language model from " << out_tgt_alm_path << "..." << endl;
+			
+			ifstream inpf(out_tgt_alm_path + "/model.config");
+			assert(inpf);
+			
+			std::string line;
+			getline(inpf, line);
+			std::stringstream ss(line);
+
+			transformer::SentinelMarkers sm;// sentinel markers
+			sm._kTGT_SOS = td.convert("<s>");
+			sm._kTGT_EOS = td.convert("</s>");
+			sm._kTGT_UNK = td.convert("<unk>");
+
+			std::string model_file;
+			transformer::TransformerConfig tfc;// transformer config
+			tfc._tgt_vocab_size = td.size();
+			tfc._sm = sm;
+			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+		  		>> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+		   		>> tfc._use_label_smoothing >> tfc._label_smoothing_weight
+		   		>> tfc._position_encoding >> tfc._max_length
+		   		>> tfc._attention_type
+		   		>> tfc._ffl_activation_type
+		   		>> tfc._use_hybrid_model;		
+			ss >> model_file;
+			tfc._is_training = false;
+			tfc._use_dropout = false;
+
+			_p_out_tgt_alm.reset(new transformer::TransformerLModel(tfc, td));
+			_p_out_tgt_alm.get()->initialise_params_from_file(model_file);// load pre-trained model from file
+			cerr << "Count of model parameters: " << _p_out_tgt_alm.get()->get_model_parameters().parameter_count() << endl;
 		}
 		
 		cerr << "MMFeatures_UDA initialised!" << endl;
@@ -427,20 +506,88 @@ struct MMFeatures_UDA : public MMFeatures
 		return ss.str();
 	}
 
-	void compute_feature_scores_on_targets(dynet::ComputationGraph& cg
+	// average of negative log likelihood (on target)
+	void compute_feature_func_tgtNLL(dynet::ComputationGraph& cg
+			, const WordIdSentences& ys
+			, std::vector<float>& v_scores
+			, bool flag=false/*to get individual losses for all sentences in xs; otherwise take the sum*/)
+	{
+		_p_in_tgt_alm->get_avg_nll(cg, ys, v_scores, flag);
+	}
+
+	// average of negative log likelihood (on source)
+	void compute_feature_func_srcNLL(dynet::ComputationGraph& cg
+			, const WordIdSentences& xs
+			, std::vector<float>& v_scores
+			, bool flag=false/*to get individual losses for all sentences in xs; otherwise take the sum*/)
+	{
+		_p_in_src_alm->get_avg_nll(cg, xs, v_scores, flag);
+	}
+
+	void compute_feature_func_MooreLewis(dynet::ComputationGraph& cg
 			, const WordIdSentences& ys
 			, std::vector<float>& v_scores
 			, bool flag=false)
 	{
-		_p_tgt_alm->get_avg_losses(cg, ys, v_scores, flag);
+		dynet::Expression i_H_I, i_H_O;
+		_p_in_tgt_alm->get_avg_nll(cg, ys, &i_H_I);
+		_p_out_tgt_alm->get_avg_nll(cg, ys, &i_H_O);
+
+		// section 4.2: https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/emnlp11-select-train-data.pdf
+		// and https://ufal.mff.cuni.cz/pbml/100/art-rousseau.pdf
+		dynet::Expression i_ML = i_H_I - i_H_O;
+		if (flag) // do sum
+			i_ML = dynet::sum_batches(i_ML);
+			
+		v_scores = dynet::as_vector(cg.incremental_forward(i_ML));
+
+		// remember to clear the graph (for memory efficiency)
+		cg.clear();
 	}
 
-	void compute_feature_scores_on_sources(dynet::ComputationGraph& cg
+	void compute_feature_func_Axelrod(dynet::ComputationGraph& cg
 			, const WordIdSentences& xs
+			, const WordIdSentences& ys
 			, std::vector<float>& v_scores
 			, bool flag=false)
 	{
-		_p_src_alm->get_avg_losses(cg, xs, v_scores, flag);
+		dynet::Expression i_H_I_src, i_H_O_src, i_H_I_tgt, i_H_O_tgt;
+		_p_in_src_alm->get_avg_nll(cg, xs, &i_H_I_src);
+		_p_out_src_alm->get_avg_nll(cg, xs, &i_H_O_src);
+		_p_in_tgt_alm->get_avg_nll(cg, ys, &i_H_I_tgt);
+		_p_out_tgt_alm->get_avg_nll(cg, ys, &i_H_O_tgt);
+
+		// section 4.2: https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/emnlp11-select-train-data.pdf
+		// and https://ufal.mff.cuni.cz/pbml/100/art-rousseau.pdf
+		dynet::Expression i_Axelrod = i_H_I_src - i_H_O_src + i_H_I_tgt - i_H_O_tgt;
+		if (flag) // do sum
+			i_Axelrod = dynet::sum_batches(i_Axelrod);
+	
+		v_scores = dynet::as_vector(cg.incremental_forward(i_Axelrod));
+		
+		// remember to clear the graph (for memory efficiency)
+		cg.clear();	
+	}
+
+	void compute_feature_function(dynet::ComputationGraph& cg
+			, const WordIdSentences& xs
+			, const WordIdSentences& ys
+			, std::vector<float>& v_scores
+			, bool flag=false)
+	{
+		if (_fea_func_type == 0) // avg_nll on target
+			compute_feature_func_tgtNLL(cg, ys, v_scores, flag);
+		else if (_fea_func_type == 1) // avg_nll on source
+			compute_feature_func_srcNLL(cg, xs, v_scores, flag);
+		else if (_fea_func_type == 2) // Moore&Lewis
+		       	compute_feature_func_MooreLewis(cg, ys, v_scores, flag);
+		else if (_fea_func_type == 3) // Axelrod
+		{
+			if (xs.size() == 0) // revert to Moore&Lewis score
+				compute_feature_func_MooreLewis(cg, ys, v_scores, flag);
+			else
+				compute_feature_func_Axelrod(cg, xs, ys, v_scores, flag);
+		}
 	}
 };
 

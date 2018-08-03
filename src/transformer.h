@@ -844,7 +844,7 @@ public:
 		, const dynet::Expression& i_rl // additional reward for current loss, usually with shape=((1, 1), batch_size)
 		, ModelStats* pstats=nullptr
 		, bool is_eval_on_dev=false);
-	dynet::Expression get_all_losses(dynet::ComputationGraph &cg
+	dynet::Expression compute_nll(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents
 		, const WordIdSentences& tsents
 		, ModelStats* pstats=nullptr
@@ -879,6 +879,12 @@ public:
 	        , const WordIdSentence& source
         	, unsigned num_samples
 	        , std::vector<WordIdSentence>& samples
+		, std::vector<float>& v_probs
+		, float softmax_temp=1.f
+		, unsigned length_ratio=2);
+	void sample_sentences(dynet::ComputationGraph& cg
+	        , const WordIdSentences& sources
+  	        , std::vector<WordIdSentence>& samples
 		, std::vector<float>& v_probs
 		, float softmax_temp=1.f
 		, unsigned length_ratio=2);
@@ -1227,7 +1233,7 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	return i_tloss;
 }
 
-dynet::Expression TransformerModel::get_all_losses(dynet::ComputationGraph &cg
+dynet::Expression TransformerModel::compute_nll(dynet::ComputationGraph &cg
 	, const WordIdSentences& ssents
 	, const WordIdSentences& tsents
 	, ModelStats* pstats
@@ -1595,6 +1601,86 @@ void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
 		// to check stopping condition, e.g., all sampled sentences ended with </s>.
 		bool stopped = true;
 		for (unsigned s = 0; s < num_samples; s++){
+			if (samples[s].back() != eos_sym){
+				stopped = false;
+				break;
+			}
+		}
+		
+		if (stopped) break;
+	}
+
+	_tfc._is_training = true;
+
+	cg.clear();
+}
+
+void TransformerModel::sample_sentences(dynet::ComputationGraph& cg
+        , const WordIdSentences& sources
+        , std::vector<WordIdSentence>& samples
+	, std::vector<float>& v_probs
+	, float softmax_temp
+	, unsigned length_ratio)
+{
+	_tfc._is_training = false;
+	
+	const int& sos_sym = _tfc._sm._kTGT_SOS;
+	const int& eos_sym = _tfc._sm._kTGT_EOS;
+	
+	unsigned num_ssents = sources.size();
+	dynet::Expression i_src_rep = this->compute_source_rep(cg, sources);
+	
+	std::vector<dynet::Expression> aligns;// FIXME: unused
+
+	samples.clear();
+	samples.resize(num_ssents, WordIdSentence(1, sos_sym)); 
+	std::vector<unsigned> words(num_ssents, sos_sym);
+
+	v_probs.clear();
+	v_probs.resize(num_ssents, 0.f);
+
+	unsigned t = 0;
+	while (true) 
+	{
+		cg.checkpoint();
+	
+		dynet::Expression i_ydist = this->step_forward(cg, i_src_rep, samples, false, aligns, softmax_temp);// batched, ((TARGET_VOCAB_SIZE, 1), num_samples)
+	
+		auto ydist = dynet::as_vector(cg.incremental_forward(i_ydist));// (num_samples * TARGET_VOCAB_SIZE)
+		for (unsigned s = 0 ; s < num_ssents; s++){
+			double p = rand01();
+			WordId w = 0;
+			for (; w < (WordId)_tfc._tgt_vocab_size; ++w) {
+				p -= ydist[w + _tfc._tgt_vocab_size * s];
+				if (p < 0.f) break;
+			}
+
+			// this shouldn't happen
+			if (w == (WordId)_tfc._tgt_vocab_size) w = eos_sym;
+
+			if (t > length_ratio * sources[s].size())
+				w = eos_sym;
+
+			samples[s].push_back(w);
+			words[s] = (unsigned)w;
+		}
+
+		dynet::Expression i_log_pick = -dynet::log(dynet::pick(i_ydist, words));// ((1, 1), num_samples)
+		auto probs = dynet::as_vector(cg.incremental_forward(i_log_pick));// num_samples
+		unsigned id = 0;
+		for (auto& prob : probs) v_probs[id++] += prob;
+
+		t += 1;
+		if (_tfc._position_encoding == 1 && t >= _tfc._max_length) {
+			cg.revert();
+			break;// to prevent over-length sample in learned positional encoding
+		}
+
+		cg.revert();
+
+		// to check stopping condition, e.g., all sampled sentences ended with </s>.
+		bool stopped = true;
+		for (unsigned s = 0; s < num_ssents; s++){
 			if (samples[s].back() != eos_sym){
 				stopped = false;
 				break;

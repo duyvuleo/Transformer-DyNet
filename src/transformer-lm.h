@@ -391,10 +391,13 @@ public:
 		, const WordIdSentences& sents/*batched*/
 		, ModelStats* pstats=nullptr
 		, bool is_eval_on_dev=false);	
-	void get_avg_losses(dynet::ComputationGraph &cg
+	void get_avg_nll(dynet::ComputationGraph &cg
 		, const WordIdSentences& tsents
 		, std::vector<float>& v_losses
 		, bool do_sum=false);
+	void get_avg_nll(dynet::ComputationGraph &cg
+		, const WordIdSentences& tsents
+		, dynet::Expression *p_i_nll);
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const std::vector<dynet::Expression>& v_soft_sents/*batched*/
 		, bool is_eval_on_dev=false);
@@ -526,7 +529,7 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	return i_tloss;
 }
 
-void TransformerLModel::get_avg_losses(dynet::ComputationGraph &cg
+void TransformerLModel::get_avg_nll(dynet::ComputationGraph &cg
 	, const WordIdSentences& tsents
 	, std::vector<float>& v_losses
 	, bool do_sum)
@@ -565,6 +568,41 @@ void TransformerLModel::get_avg_losses(dynet::ComputationGraph &cg
 	v_losses = dynet::as_vector(cg.incremental_forward(i_tloss));
 
 	cg.clear();
+}
+
+void TransformerLModel::get_avg_nll(dynet::ComputationGraph &cg
+	, const WordIdSentences& tsents
+	, dynet::Expression *p_i_nll)
+{
+	// decode target
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
+
+	// get losses	
+	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+
+	// compute the logit and linear projections
+	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
+
+	std::vector<dynet::Expression> v_errors;
+	unsigned tlen = _decoder.get()->_batch_tlen;
+	std::vector<unsigned> next_words(tsents.size());
+	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
+		for(size_t bs = 0; bs < tsents.size(); bs++){
+			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
+		}
+
+		// get the prediction at timestep t
+		//dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
+		dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// shifted right, ((|V_T|, 1), batch_size)
+	
+		// log_softmax and loss
+		dynet::Expression i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
+
+		v_errors.push_back(i_err);
+	}
+
+       	*p_i_nll = dynet::sum(v_errors) / tlen;// loss normalised by max sequence length in batch
 }
 
 dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg

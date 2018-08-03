@@ -84,7 +84,6 @@ void run_train(transformer::TransformerModel &tf,
 	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus& devel_cor, 
 	dynet::Trainer*& p_sgd, 
 	unsigned training_mode,
-	float alpha,
 	float softmax_temp,
 	const std::string& model_path, 
 	unsigned max_epochs, unsigned patience, 
@@ -109,6 +108,15 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
         transformer::TransformerModel& tf,
         const std::vector<float>& v_pre_mm_scores,
         MMFeatures_UDA& mm_feas,
+	float softmax_temp,
+	transformer::ModelStats& ctstats,
+	dynet::Expression* p_i_mm);
+// ---
+
+dynet::Expression compute_rl_loss(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	transformer::TransformerModel& tf, 
+	MMFeatures_UDA& mm_feas,
 	float softmax_temp,
 	transformer::ModelStats& ctstats,
 	dynet::Expression* p_i_mm);
@@ -150,68 +158,65 @@ int main(int argc, char** argv) {
 		("help", "print help message")
 		("config,c", value<std::string>(), "config file specifying additional command line options")
 		//-----------------------------------------		
+		// data hyper-parameters
 		("devel,d", value<std::string>(), "file containing small bilingual in-domain sentences for development purpose")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
 		("src-vocab", value<std::string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
 		("tgt-vocab", value<std::string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
 		("joint-vocab", value<std::string>(), "file containing target joint vocabulary file for both source and target; none by default (will be built from train file)")
 		("train-percent", value<unsigned>()->default_value(100), "use <num> percent of sentences in training data; full by default")
-		//-----------------------------------------
 		("in-src-mono-data", value<std::string>()->default_value(""), "file containing in-domain source monolingual sentences.")
 		("in-tgt-mono-data", value<std::string>()->default_value(""), "file containing in-domain target monolingual sentences.")
-		//-----------------------------------------
-		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
 		//-----------------------------------------
 		("minibatch-size,b", value<unsigned>()->default_value(1), "impose the minibatch size for training (support both GPU and CPU); single batch by default")
 		("dynet-autobatch", value<unsigned>()->default_value(0), "impose the auto-batch mode (support both GPU and CPU); no by default")
 		//-----------------------------------------
+		// SGD hyper-parameters
 		("sgd-trainer", value<unsigned>()->default_value(0), "use specific SGD trainer (0: vanilla SGD; 1: momentum SGD; 2: Adagrad; 3: AdaDelta; 4: Adam; 5: RMSProp; 6: cyclical SGD)")
 		("sparse-updates", value<bool>()->default_value(true), "enable/disable sparse update(s) for lookup parameter(s); true by default")
 		("grad-clip-threshold", value<float>()->default_value(5.f), "use specific gradient clipping threshold (https://arxiv.org/pdf/1211.5063.pdf); 5 by default")
 		//-----------------------------------------
 		("model-path,p", value<std::string>()->default_value("."), "all files related to the model will be saved in this folder")
-		("src-alm-model-path", value<std::string>()->default_value(""), "specify model path for transformer source language model")
-		("tgt-alm-model-path", value<std::string>()->default_value(""), "specify model path for transformer target language model")
+		("in-src-alm-model-path", value<std::string>()->default_value(""), "specify model path for in-domain source language model")
+		("in-tgt-alm-model-path", value<std::string>()->default_value(""), "specify model path for in-domain target language model")
+		("out-src-alm-model-path", value<std::string>()->default_value(""), "specify model path for out-domain source language model")
+		("out-tgt-alm-model-path", value<std::string>()->default_value(""), "specify model path for out-domain target language model")
 		//-----------------------------------------
+		// mm training hyper-parameters
+		("mm-feature-type", value<unsigned>()->default_value(0), "specify feature function for moment matching (0: avg_nll_on_tgt; 1: avg_nll_on_src; 2: Moore&Lewis; 3: Axelrod); 0 (avg_nll_on_tgt) by default")
+		("mm-training-mode", value<unsigned>()->default_value(1), "specify training mode (0: RL&PG; 1: MM); default 1")
+		("mm-debug", "very chatty for moment matching debugging only; default not")
+		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
+		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 10")
+		("softmax-temperature", value<float>()->default_value(1.f), "use temperature for softmax activation; 1.0 by default")
+		//-----------------------------------------
+		// Transformer hyper-parameters
 		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers; 6 by default")
 		("num-units,u", value<unsigned>()->default_value(512), "use <num> dimensions for number of units; 512 by default")
 		("num-heads,h", value<unsigned>()->default_value(8), "use <num> for number of heads in multi-head attention mechanism; 4 by default")
 		("n-ff-units-factor", value<unsigned>()->default_value(4), "use <num> times of input dim for output dim in feed-forward layer; 4 by default")
-		//-----------------------------------------
 		("encoder-emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for encoder embeddings; 0.1 by default")
 		("encoder-sublayer-dropout-p", value<float>()->default_value(0.1f), "use dropout for sub-layer's output in encoder; 0.1 by default")
 		("decoder-emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for decoding embeddings; 0.1 by default")
 		("decoder-sublayer-dropout-p", value<float>()->default_value(0.1f), "use dropout for sub-layer's output in decoder; 0.1 by default")
 		("attention-dropout-p", value<float>()->default_value(0.1f), "use dropout for attention; 0.1 by default")
 		("ff-dropout-p", value<float>()->default_value(0.1f), "use dropout for feed-forward layer; 0.1 by default")
-		//-----------------------------------------
-		("training-mode", value<unsigned>()->default_value(2), "specify training mode (0: MLE; 1: MM; 2: interleave; 3: mixed); default 2")
-		("alpha", value<float>()->default_value(0.017f), "specify alpha value in mixed training mode; default 0.017")
-		//-----------------------------------------
-		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
-		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 10")
-		("softmax-temperature", value<float>()->default_value(1.f), "use temperature for softmax activation; 1.0 by default")
-		//-----------------------------------------
 		("use-label-smoothing", "use label smoothing for cross entropy; no by default")
 		("label-smoothing-weight", value<float>()->default_value(0.1f), "impose label smoothing weight in objective function; 0.1 by default")
-		//-----------------------------------------
 		("ff-activation-type", value<unsigned>()->default_value(1), "impose feed-forward activation type (1: RELU, 2: SWISH, 3: SWISH with learnable beta); 1 by default")
-		//-----------------------------------------
 		("position-encoding", value<unsigned>()->default_value(2), "impose positional encoding (0: none; 1: learned positional embedding; 2: sinusoid encoding); 2 by default")
 		("position-encoding-flag", value<unsigned>()->default_value(0), "which both (0) / encoder only (1) / decoder only (2) will be applied positional encoding; both (0) by default")
 		("max-pos-seq-len", value<unsigned>()->default_value(300), "specify the maximum word-based sentence length (either source or target) for learned positional encoding; 300 by default")
-		//-----------------------------------------
 		("use-hybrid-model", "use hybrid model in which RNN encodings of source and target are used in place of word embeddings and positional encodings (a hybrid architecture between AM and Transformer?) partially adopted from GNMT style; no by default")
-		//-----------------------------------------
 		("attention-type", value<unsigned>()->default_value(1), "impose attention type (1: Luong attention type; 2: Bahdanau attention type); 1 by default")
+		("shared-embeddings", "use shared source and target embeddings (in case that source and target use the same vocabulary; none by default")
 		//-----------------------------------------
 		("epochs,e", value<unsigned>()->default_value(20), "maximum number of training epochs")
 		("patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved for early stopping; default none")
 		//-----------------------------------------
+		// learning rate related hyper-parameters
 		("lr-eta", value<float>()->default_value(0.1f), "SGD learning rate value (e.g., 0.1 for simple SGD trainer or smaller 0.001 for ADAM trainer)")
 		("lr-eta-decay", value<float>()->default_value(2.0f), "SGD learning rate decay value")
-		//-----------------------------------------
-		// learning rate scheduler
 		("lr-epochs", value<unsigned>()->default_value(0), "no. of epochs for starting learning rate annealing (e.g., halving)") // learning rate scheduler 1
 		("lr-patience", value<unsigned>()->default_value(0), "no. of times in which the model has not been improved, e.g., for starting learning rate annealing (e.g., halving)") // learning rate scheduler 2
 		//-----------------------------------------
@@ -221,7 +226,6 @@ int main(int argc, char** argv) {
 		("num-resets", value<unsigned>()->default_value(1), "no. of times the training process will be reset; default 1") 
 		//-----------------------------------------
 		("sampling", "sample translation during training; default not")
-		("mm-debug", "very chatty for debugging only; default not")
 		//-----------------------------------------
 		("dev-eval-measure", value<unsigned>()->default_value(0), "specify measure for evaluating dev data during training (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES; 5: MM); default 0 (perplexity)") // note that MT scores here are approximate (e.g., evaluating with <unk> markers, and tokenized text or with subword segmentation if using BPE), not necessarily equivalent to real BLEU/NIST/WER/RIBES scores.
 		("dev-eval-infer-algo", value<unsigned>()->default_value(0), "specify the algorithm for inference on dev (0: sampling; 1: greedy; N>=2: beam search with N size of beam); default 0 (random sampling)") // using sampling/greedy will be faster. 
@@ -434,10 +438,11 @@ int main(int argc, char** argv) {
 	// external module for moment matching feature computation
 	MMFeatures_UDA* p_mm_fea_cfg = new MMFeatures_UDA(NUM_SAMPLES
 					, sd, td
-					, vm["src-alm-model-path"].as<std::string>(), vm["tgt-alm-model-path"].as<std::string>());/*feature config for moment matching*/
+					, vm["mm-feature-type"].as<unsigned>()
+					, vm["in-src-alm-model-path"].as<std::string>(), vm["in-tgt-alm-model-path"].as<std::string>()
+					, vm["out-src-alm-model-path"].as<std::string>(), vm["out-tgt-alm-model-path"].as<std::string>());/*feature config for moment matching*/
 
-	unsigned training_mode = vm["training-mode"].as<unsigned>();
-	float alpha = vm["alpha"].as<float>();
+	unsigned training_mode = vm["mm-training-mode"].as<unsigned>();
 	float softmax_temp = vm["softmax-temperature"].as<float>();
 
 	// train transformer model
@@ -445,7 +450,6 @@ int main(int argc, char** argv) {
 		, mono_cor, devel_cor
 		, p_sgd_trainer
 		, training_mode
-		, alpha
 		, softmax_temp
 		, model_path
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
@@ -728,7 +732,7 @@ void eval_mm_on_dev(transformer::TransformerModel &tf,
 		// compute mm loss
 		cg.clear();
 		v_scores.clear();
-		mm_feas.compute_feature_scores_on_targets(cg, samples, v_scores);
+		mm_feas.compute_feature_function(cg, WordIdSentences(mm_feas._num_samples, ssent), samples, v_scores);
 		//cerr << "phi_h: ";
 		//for (auto& score : v_scores) cerr << score << " ";
 		//cerr << endl;
@@ -762,7 +766,7 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg,
 	MMFeatures_UDA& mm_feas)
 {
 	std::vector<float> scores;
-	mm_feas.compute_feature_scores_on_targets(cg, samples, scores);
+	mm_feas.compute_feature_function(cg, ssents, samples, scores);
 	if (DEBUG_FLAG){
 		cerr << "scores: ";
 		for (auto& score : scores) cerr << score << " ";
@@ -851,7 +855,37 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	// compute loss associated with mm scores
 	//return tf.build_graph(cg, ssents_ext, samples, i_mm, &ctstats);// reinforced CE loss
 	//return tf.build_graph(cg, ssents_ext, samples, &ctstats);// conventional CE loss
-	return tf.get_all_losses(cg, ssents_ext, samples, &ctstats);// conventional CE loss (all individual losses)
+	return tf.compute_nll(cg, ssents_ext, samples, &ctstats);// conventional CE loss (all individual losses)
+}
+// ---
+
+// ---
+dynet::Expression compute_rl_loss(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	transformer::TransformerModel& tf, 
+	MMFeatures_UDA& mm_feas,
+	float softmax_temp,
+	transformer::ModelStats& ctstats,
+	dynet::Expression* p_i_rl)
+{
+	WordIdSentences samples;
+	std::vector<float> v_probs;// unused for now
+	tf.set_dropout(false);
+	tf.sample_sentences(cg, ssents, samples, v_probs, softmax_temp);// Note: use random sampling or greedy Viterbi?
+	//tf.greedy_decode(cg, ssents, samples);
+	tf.set_dropout(true);
+
+	// compute feature function scores
+	std::vector<float> scores;
+	mm_feas.compute_feature_function(cg, ssents, samples, scores);
+	if (DEBUG_FLAG){
+		cerr << "scores: ";
+		for (auto& score : scores) cerr << score << " ";
+		cerr << endl;
+	}
+	*p_i_rl = dynet::input(cg, dynet::Dim({1, 1}, scores.size()), scores);// shape=((1,1), batch_size) 
+
+	return tf.compute_nll(cg, ssents, samples, &ctstats);// conventional CE loss (all individual losses)
 }
 // ---
 
@@ -876,7 +910,7 @@ void sanity_check(transformer::TransformerModel &tf,
 		
 		// compute score
 		std::vector<float> tmp_scores;
-		mm_feas.compute_feature_scores_on_targets(cg, thyps, tmp_scores, true);
+		mm_feas.compute_feature_function(cg, ssents, thyps, tmp_scores, true);
 		score_phi_bar += tmp_scores[0];
 		
 		num_samples += thyps.size();	
@@ -893,7 +927,6 @@ void run_train(transformer::TransformerModel &tf,
 	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus &devel_cor, 
 	dynet::Trainer*& p_sgd, 
 	unsigned training_mode,
-	float alpha,
 	float softmax_temp,
 	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
@@ -910,7 +943,7 @@ void run_train(transformer::TransformerModel &tf,
 	if (training_mode == 0)
 		ss << model_path << "/model.0.params";
 	else
-		ss << model_path << "/model.mm." << training_mode << ".a" << alpha << ".smte" << softmax_temp << mm_feas.get_name() << ".params";
+		ss << model_path << "/model.mm.tmode" << training_mode << ".smte" << softmax_temp << mm_feas.get_name() << ".params";
 	std::string params_out_file = ss.str();
 	//std::string params_out_file = model_path + "/model.mm.params";// save to different file with pre-trained model file
 
@@ -937,34 +970,36 @@ void run_train(transformer::TransformerModel &tf,
 	create_minibatches(devel_cor, 1024/*minibatch_size*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 
 	// shuffle minibatches
-	cerr << endl << "***SHUFFLE" << endl << endl;
+	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), *dynet::rndeng);
 	std::shuffle(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), *dynet::rndeng);
 
 	// get/pre-compute mm scores over in-domain target monolingual data
-	if (DEBUG_FLAG) cerr << "Pre-computing \\bar{\\phi} on in-domain target monolingual data..." << endl;
+	if (DEBUG_FLAG) cerr << endl << "Pre-computing \\bar{\\phi} on in-domain target monolingual data..." << endl;
 	float score_phi_bar = 0.f;
-	unsigned num_samples = 0;
-	for (unsigned s = 0; s < in_t_mono_data_ids_minibatch.size() && num_samples < SAMPLING_SIZE; ++s) 
+	if (training_mode == 0)
 	{
-		const auto& tsents = in_t_mono_data_minibatch[in_t_mono_data_ids_minibatch[s]];
+		unsigned num_samples = 0;
+		for (unsigned s = 0; s < in_t_mono_data_ids_minibatch.size() && num_samples < SAMPLING_SIZE; ++s) 
+		{
+			const auto& tsents = in_t_mono_data_minibatch[in_t_mono_data_ids_minibatch[s]];
 		
-		dynet::ComputationGraph cg;
-		std::vector<float> tmp_scores;
-		mm_feas.compute_feature_scores_on_targets(cg, tsents, tmp_scores, true);
-		score_phi_bar += tmp_scores[0];
+			dynet::ComputationGraph cg;
+			std::vector<float> tmp_scores;
+			mm_feas.compute_feature_function(cg, WordIdSentences()/*empty*/, tsents, tmp_scores, true);// note: in this setting, we don't have the corresponding source sentences
+			score_phi_bar += tmp_scores[0];
 		
-		num_samples += tsents.size();	
+			num_samples += tsents.size();	
+		}
+		score_phi_bar /= num_samples;// averaging
+		if (DEBUG_FLAG) cerr << "\\bar{\\phi}=" << score_phi_bar << endl;
+		// --- sanity check
+		// computing \bar{\phi} on translations for sampled in-domain source sentences produced by initial translation model
+		if (DEBUG_FLAG) sanity_check(tf, mm_feas, in_s_mono_data_minibatch, in_s_mono_data_ids_minibatch);
+		// ---
 	}
-	score_phi_bar /= num_samples;// averaging
-	if (DEBUG_FLAG) cerr << "\\bar{\\phi}=" << score_phi_bar << endl;
-	// --- sanity check
-	// computing \bar{\phi} on translations for sampled in-domain source sentences produced by initial translation model
-	if (DEBUG_FLAG) sanity_check(tf, mm_feas, in_s_mono_data_minibatch, in_s_mono_data_ids_minibatch);
-	// ---
 	 
 	// model stats on dev
-	//cerr << "Computing mm scores on dev..." << endl;
 	transformer::ModelStats dstats(dev_eval_mea)/*5: mm squared distance loss*/;
 	get_dev_stats(devel_cor, tfc, dstats);
 		
@@ -986,7 +1021,7 @@ void run_train(transformer::TransformerModel &tf,
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
 	unsigned epoch = 0;
 	while (epoch < max_epochs) {
-		transformer::ModelStats tstats_mm;
+		transformer::ModelStats tstats;
 
 		tf.set_dropout(true);// enable dropout
 
@@ -1025,18 +1060,26 @@ void run_train(transformer::TransformerModel &tf,
 			// get samples from the current model
 			auto& ssents = in_s_mono_data_minibatch[in_s_mono_data_ids_minibatch[id]];
 
-			dynet::Expression i_xent, i_mm, i_xent_mm;
-			transformer::ModelStats ctstats_mm;
-				
-			// pre-computed score for \bar{\phi}
-			std::vector<float> v_emp_scores(ssents.size() * mm_feas._num_samples, score_phi_bar);
+			dynet::Expression i_xent, i_xent_sum, i_xent_final;
+			dynet::Expression i_rl;
+			transformer::ModelStats ctstats;
 
-			// build graph and get model loss
-			i_xent = compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats_mm, &i_mm);
-			dynet::Expression i_xent_sum = dynet::sum_batches(i_xent);
+			if (training_mode == 1){ // moment matching
+				// pre-computed score for \bar{\phi}
+				std::vector<float> v_emp_scores(ssents.size() * mm_feas._num_samples, score_phi_bar);
+
+				// build graph and get model loss
+				i_xent = compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats, &i_rl);
+			}
+			else if (training_mode == 0){ // simplified version with RL/PG
+				i_xent = compute_rl_loss(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);
+			}
+
+			// normal loss
+			i_xent_sum = dynet::sum_batches(i_xent);
 
 			// total loss with reinforced moment matching scores
-			i_xent_mm = dynet::sum_batches(dynet::cmult(i_xent, i_mm));
+			i_xent_final = dynet::sum_batches(dynet::cmult(i_xent, i_rl));
 			
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -1046,7 +1089,7 @@ void run_train(transformer::TransformerModel &tf,
 
 			// perform forward computation for aggregate objective
 			//cerr << "forward:" << endl;
-			cg.incremental_forward(i_xent_mm);
+			cg.incremental_forward(i_xent_final);
 
 			// grab the parts of the objective
 			float loss = dynet::as_scalar(cg.get_value(i_xent_sum.i));
@@ -1067,15 +1110,15 @@ void run_train(transformer::TransformerModel &tf,
 			}
 	
 			// collect stats
-			tstats_mm._scores[1] += loss;
-                        tstats_mm._words_src += ctstats_mm._words_src;
-                        tstats_mm._words_src_unk += ctstats_mm._words_src_unk;
-                        tstats_mm._words_tgt += ctstats_mm._words_tgt;
-                        tstats_mm._words_tgt_unk += ctstats_mm._words_tgt_unk;
+			tstats._scores[1] += loss;
+                        tstats._words_src += ctstats._words_src;
+                        tstats._words_src_unk += ctstats._words_src_unk;
+                        tstats._words_tgt += ctstats._words_tgt;
+                        tstats._words_tgt_unk += ctstats._words_tgt_unk;
 
 			// perform backward
 			//cerr << "backward:" << endl;
-			cg.backward(i_xent_mm);
+			cg.backward(i_xent_final);
 
 			// update parameters
 			//cerr << "update params:" << endl;
@@ -1094,8 +1137,8 @@ void run_train(transformer::TransformerModel &tf,
 				p_sgd->status();
 				cerr << "sents=" << sid << " ";
 				
-				cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats_mm._words_src_unk << " trg_unks=" << tstats_mm._words_tgt_unk << " " << tstats_mm.get_score_string() << ' ';
-                                cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats_mm._words_src + tstats_mm._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;
+				cerr /*<< "loss=" << tstats._scores[1]*/ << "src_unks=" << tstats._words_src_unk << " trg_unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';
+                                cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;
 			}
 			   		 
 			++id;
