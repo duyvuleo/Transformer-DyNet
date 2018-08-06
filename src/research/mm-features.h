@@ -502,6 +502,7 @@ struct MMFeatures_UDA : public MMFeatures
 	virtual std::string get_name(){
 		std::stringstream ss;
 		ss << ".n" << this->_num_samples;
+		ss << ".f" << this->_fea_func_type;
 			
 		return ss.str();
 	}
@@ -512,7 +513,7 @@ struct MMFeatures_UDA : public MMFeatures
 			, std::vector<float>& v_scores
 			, bool flag=false/*to get individual losses for all sentences in xs; otherwise take the sum*/)
 	{
-		_p_in_tgt_alm->get_avg_nll(cg, ys, v_scores, flag);
+		_p_in_tgt_alm->get_avg_ll(cg, ys, v_scores, true/*NLL*/, flag);
 	}
 
 	// average of negative log likelihood (on source)
@@ -521,7 +522,25 @@ struct MMFeatures_UDA : public MMFeatures
 			, std::vector<float>& v_scores
 			, bool flag=false/*to get individual losses for all sentences in xs; otherwise take the sum*/)
 	{
-		_p_in_src_alm->get_avg_nll(cg, xs, v_scores, flag);
+		_p_in_src_alm->get_avg_ll(cg, xs, v_scores, true/*NLL*/, flag);
+	}
+
+	// average of log likelihood (on target)
+	void compute_feature_func_tgtLL(dynet::ComputationGraph& cg
+			, const WordIdSentences& ys
+			, std::vector<float>& v_scores
+			, bool flag=false/*to get individual losses for all sentences in xs; otherwise take the sum*/)
+	{
+		_p_in_tgt_alm->get_avg_ll(cg, ys, v_scores, false/*LL*/, flag);
+	}
+
+	// average of log likelihood (on source)
+	void compute_feature_func_srcLL(dynet::ComputationGraph& cg
+			, const WordIdSentences& xs
+			, std::vector<float>& v_scores
+			, bool flag=false/*to get individual losses for all sentences in xs; otherwise take the sum*/)
+	{
+		_p_in_src_alm->get_avg_ll(cg, xs, v_scores, false/*LL*/, flag);
 	}
 
 	void compute_feature_func_MooreLewis(dynet::ComputationGraph& cg
@@ -530,8 +549,8 @@ struct MMFeatures_UDA : public MMFeatures
 			, bool flag=false)
 	{
 		dynet::Expression i_H_I, i_H_O;
-		_p_in_tgt_alm->get_avg_nll(cg, ys, &i_H_I);
-		_p_out_tgt_alm->get_avg_nll(cg, ys, &i_H_O);
+		_p_in_tgt_alm->get_avg_ll(cg, ys, &i_H_I, true);
+		_p_out_tgt_alm->get_avg_ll(cg, ys, &i_H_O, true);
 
 		// section 4.2: https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/emnlp11-select-train-data.pdf
 		// and https://ufal.mff.cuni.cz/pbml/100/art-rousseau.pdf
@@ -552,10 +571,10 @@ struct MMFeatures_UDA : public MMFeatures
 			, bool flag=false)
 	{
 		dynet::Expression i_H_I_src, i_H_O_src, i_H_I_tgt, i_H_O_tgt;
-		_p_in_src_alm->get_avg_nll(cg, xs, &i_H_I_src);
-		_p_out_src_alm->get_avg_nll(cg, xs, &i_H_O_src);
-		_p_in_tgt_alm->get_avg_nll(cg, ys, &i_H_I_tgt);
-		_p_out_tgt_alm->get_avg_nll(cg, ys, &i_H_O_tgt);
+		_p_in_src_alm->get_avg_ll(cg, xs, &i_H_I_src, true);
+		_p_out_src_alm->get_avg_ll(cg, xs, &i_H_O_src, true);
+		_p_in_tgt_alm->get_avg_ll(cg, ys, &i_H_I_tgt, true);
+		_p_out_tgt_alm->get_avg_ll(cg, ys, &i_H_O_tgt, true);
 
 		// section 4.2: https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/emnlp11-select-train-data.pdf
 		// and https://ufal.mff.cuni.cz/pbml/100/art-rousseau.pdf
@@ -575,8 +594,8 @@ struct MMFeatures_UDA : public MMFeatures
 			, std::vector<float>& v_scores
 			, bool flag=false)
 	{
-		if (_fea_func_type == 0) // avg_nll on target
-			compute_feature_func_tgtNLL(cg, ys, v_scores, flag);
+		if (_fea_func_type == 0) // avg_ll on target
+			compute_feature_func_tgtLL(cg, ys, v_scores, flag);
 		else if (_fea_func_type == 1) // avg_nll on source
 			compute_feature_func_srcNLL(cg, xs, v_scores, flag);
 		else if (_fea_func_type == 2) // Moore&Lewis

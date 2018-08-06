@@ -100,9 +100,7 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg,
 	const WordIdSentences& samples,
 	unsigned bsize, 
 	MMFeatures_UDA& mm_feas);
-// ---
 
-// --
 dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
         const WordIdSentences& ssents,
         transformer::TransformerModel& tf,
@@ -113,13 +111,47 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 	dynet::Expression* p_i_mm);
 // ---
 
-dynet::Expression compute_rl_loss(dynet::ComputationGraph& cg, 
+// ---
+dynet::Expression compute_rl_loss_one_sample(dynet::ComputationGraph& cg, 
 	const WordIdSentences& ssents, 
 	transformer::TransformerModel& tf, 
 	MMFeatures_UDA& mm_feas,
 	float softmax_temp,
 	transformer::ModelStats& ctstats,
 	dynet::Expression* p_i_mm);
+// ---
+
+// ---
+dynet::Expression compute_rl_score_avg_br(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	const WordIdSentences& samples, 
+	unsigned bsize,
+	MMFeatures_UDA& mm_feas);
+
+dynet::Expression compute_rl_loss_multiple_samples_avg_br(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	transformer::TransformerModel& tf, 
+	MMFeatures_UDA& mm_feas,
+	float softmax_temp,
+	transformer::ModelStats& ctstats,
+	dynet::Expression* p_i_rl);
+// ---
+
+// ---
+dynet::Expression compute_rl_score_gre_br(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	const WordIdSentences& samples, 
+	unsigned bsize,
+	MMFeatures_UDA& mm_feas,
+	const std::vector<float>& greedy_scores);
+
+dynet::Expression compute_rl_loss_multiple_samples_gre_br(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	transformer::TransformerModel& tf, 
+	MMFeatures_UDA& mm_feas,
+	float softmax_temp,
+	transformer::ModelStats& ctstats,
+	dynet::Expression* p_i_rl);
 // ---
 
 // ---
@@ -819,9 +851,7 @@ dynet::Expression compute_mm_score(dynet::ComputationGraph& cg,
 
 	return i_mm;
 }
-// ---
 
-// ---
 dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg, 
 	const WordIdSentences& ssents, 
 	transformer::TransformerModel& tf,
@@ -860,7 +890,7 @@ dynet::Expression compute_mm_loss(dynet::ComputationGraph& cg,
 // ---
 
 // ---
-dynet::Expression compute_rl_loss(dynet::ComputationGraph& cg, 
+dynet::Expression compute_rl_loss_one_sample(dynet::ComputationGraph& cg, 
 	const WordIdSentences& ssents, 
 	transformer::TransformerModel& tf, 
 	MMFeatures_UDA& mm_feas,
@@ -871,9 +901,18 @@ dynet::Expression compute_rl_loss(dynet::ComputationGraph& cg,
 	WordIdSentences samples;
 	std::vector<float> v_probs;// unused for now
 	tf.set_dropout(false);
-	tf.sample_sentences(cg, ssents, samples, v_probs, softmax_temp);// Note: use random sampling or greedy Viterbi?
-	//tf.greedy_decode(cg, ssents, samples);
+	// Note: use random sampling or greedy Viterbi?
+	//tf.sample_sentences(cg, ssents, samples, v_probs, softmax_temp);// random sampling
+	tf.greedy_decode(cg, ssents, samples);// greedy Viterbi
 	tf.set_dropout(true);
+	if (DEBUG_FLAG){
+		for (unsigned i = 0; i < ssents.size(); i++){
+			const auto& source = ssents[i];
+			const auto& sample = samples[i];
+			cerr << "source: " << get_sentence(source, tf.get_source_dict()) << endl;
+			cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
+		}
+	}
 
 	// compute feature function scores
 	std::vector<float> scores;
@@ -886,6 +925,149 @@ dynet::Expression compute_rl_loss(dynet::ComputationGraph& cg,
 	*p_i_rl = dynet::input(cg, dynet::Dim({1, 1}, scores.size()), scores);// shape=((1,1), batch_size) 
 
 	return tf.compute_nll(cg, ssents, samples, &ctstats);// conventional CE loss (all individual losses)
+}
+// ---
+
+// ---
+dynet::Expression compute_rl_score_avg_br(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	const WordIdSentences& samples, 
+	unsigned bsize,
+	MMFeatures_UDA& mm_feas)
+{
+	std::vector<float> scores;
+	mm_feas.compute_feature_function(cg, ssents, samples, scores);
+	
+	unsigned F_dim = mm_feas._F_dim;
+	dynet::Expression i_phi_x = dynet::input(cg, dynet::Dim({F_dim, mm_feas._num_samples}, bsize), scores);// ((|F|, |S|), batch_size)
+	if (DEBUG_FLAG){
+		cg.incremental_forward(i_phi_x);
+		cerr << "x_scores: ";
+		std::vector<float> x_scores = dynet::as_vector(cg.get_value(i_phi_x.i));
+		for (auto& sc : x_scores)
+			cerr << sc << " ";
+		cerr << endl;
+	}
+	dynet::Expression i_phi_x_avg = dynet::sum_dim(i_phi_x, {1}) / mm_feas._num_samples;// ((|F|, 1), batch_size) --> regarded as average baseline reward
+	dynet::Expression i_rl = i_phi_x - i_phi_x_avg;
+	i_rl = dynet::reshape(i_rl, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
+	if (DEBUG_FLAG){
+		cg.incremental_forward(i_rl);
+		cerr << "rl_scores: ";
+		std::vector<float> rl_scores = dynet::as_vector(cg.get_value(i_rl.i));
+		for (auto& sc : rl_scores)
+			cerr << sc << " ";
+		cerr << endl;
+	}
+	
+	return i_rl;
+}
+
+dynet::Expression compute_rl_loss_multiple_samples_avg_br(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	transformer::TransformerModel& tf, 
+	MMFeatures_UDA& mm_feas,
+	float softmax_temp,
+	transformer::ModelStats& ctstats,
+	dynet::Expression* p_i_rl)
+{
+	WordIdSentences ssents_ext, samples;
+	for (auto& ssent : ssents){
+		WordIdSentences results;
+		std::vector<float> v_probs;// unused for now
+		if (DEBUG_FLAG) cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
+		tf.set_dropout(false);
+		tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs, softmax_temp);
+		tf.set_dropout(true);
+
+		if (DEBUG_FLAG)
+			for (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
+
+		ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
+		samples.insert(samples.end(), results.begin(), results.end());
+	}
+	if (DEBUG_FLAG) cerr << "samples.size()=" << samples.size() << endl;
+
+	// compute feature function scores
+	*p_i_rl = compute_rl_score_avg_br(cg, ssents_ext, samples, ssents.size(), mm_feas);// shape=((1,1), batch_size * |S|) 
+
+	return tf.compute_nll(cg, ssents_ext, samples, &ctstats);// conventional CE loss (all individual losses)
+}
+// ---
+
+// ---
+dynet::Expression compute_rl_score_gre_br(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	const WordIdSentences& samples, 
+	unsigned bsize,
+	MMFeatures_UDA& mm_feas,
+	const std::vector<float>& greedy_scores)
+{
+	std::vector<float> scores;
+	mm_feas.compute_feature_function(cg, ssents, samples, scores);
+	
+	unsigned F_dim = mm_feas._F_dim;
+	dynet::Expression i_phi_x = dynet::input(cg, dynet::Dim({F_dim, mm_feas._num_samples}, bsize), scores);// ((|F|, |S|), batch_size)
+	if (DEBUG_FLAG){
+		cg.incremental_forward(i_phi_x);
+		cerr << "x_scores: ";
+		std::vector<float> x_scores = dynet::as_vector(cg.get_value(i_phi_x.i));
+		for (auto& sc : x_scores)
+			cerr << sc << " ";
+		cerr << endl;
+	}
+	dynet::Expression i_phi_x_greedy = dynet::input(cg, dynet::Dim({F_dim, 1}, bsize), greedy_scores);// ((|F|, 1), batch_size) --> regarded as greedy baseline reward
+	dynet::Expression i_rl = i_phi_x - i_phi_x_greedy;
+	i_rl = dynet::reshape(i_rl, dynet::Dim({F_dim, 1}, (unsigned)samples.size()));// ((|F|, 1), batch_size * |S|)
+	if (DEBUG_FLAG){
+		cg.incremental_forward(i_rl);
+		cerr << "rl_scores: ";
+		std::vector<float> rl_scores = dynet::as_vector(cg.get_value(i_rl.i));
+		for (auto& sc : rl_scores)
+			cerr << sc << " ";
+		cerr << endl;
+	}
+	
+	return i_rl;
+}
+
+dynet::Expression compute_rl_loss_multiple_samples_gre_br(dynet::ComputationGraph& cg, 
+	const WordIdSentences& ssents, 
+	transformer::TransformerModel& tf, 
+	MMFeatures_UDA& mm_feas,
+	float softmax_temp,
+	transformer::ModelStats& ctstats,
+	dynet::Expression* p_i_rl)
+{
+	WordIdSentences ssents_ext, samples;
+	for (auto& ssent : ssents){
+		WordIdSentences results;
+		std::vector<float> v_probs;// unused for now
+		if (DEBUG_FLAG) cerr << "source: " << get_sentence(ssent, tf.get_source_dict()) << endl;
+		tf.set_dropout(false);
+		tf.sample_sentences(cg, ssent, NUM_SAMPLES, results, v_probs, softmax_temp);
+		tf.set_dropout(true);
+
+		if (DEBUG_FLAG)
+			for (auto& sample : results) cerr << "sample: " << get_sentence(sample, tf.get_target_dict()) << endl;
+
+		ssents_ext.insert(ssents_ext.end(), results.size()/*equal to NUM_SAMPLES*/, ssent);
+		samples.insert(samples.end(), results.begin(), results.end());
+	}
+	if (DEBUG_FLAG) cerr << "samples.size()=" << samples.size() << endl;
+
+	// generate greedy baselines
+	WordIdSentences greedy_samples;
+	tf.set_dropout(false);
+	tf.greedy_decode(cg, ssents, greedy_samples);// greedy Viterbi translations
+	tf.set_dropout(true);
+	std::vector<float> greedy_scores;
+	mm_feas.compute_feature_function(cg, ssents, greedy_samples, greedy_scores);
+
+	// compute feature function scores
+	*p_i_rl = compute_rl_score_gre_br(cg, ssents_ext, samples, ssents.size(), mm_feas, greedy_scores);// shape=((1,1), batch_size * |S|) 
+
+	return tf.compute_nll(cg, ssents_ext, samples, &ctstats);// conventional CE loss (all individual losses)
 }
 // ---
 
@@ -941,9 +1123,9 @@ void run_train(transformer::TransformerModel &tf,
 	// model params file
 	std::stringstream ss;
 	if (training_mode == 0)
-		ss << model_path << "/model.0.params";
+		ss << model_path << "/model.rl" << ".smte" << softmax_temp << mm_feas.get_name() << ".params";
 	else
-		ss << model_path << "/model.mm.tmode" << training_mode << ".smte" << softmax_temp << mm_feas.get_name() << ".params";
+		ss << model_path << "/model.mm" << ".smte" << softmax_temp << mm_feas.get_name() << ".params";
 	std::string params_out_file = ss.str();
 	//std::string params_out_file = model_path + "/model.mm.params";// save to different file with pre-trained model file
 
@@ -975,10 +1157,11 @@ void run_train(transformer::TransformerModel &tf,
 	std::shuffle(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), *dynet::rndeng);
 
 	// get/pre-compute mm scores over in-domain target monolingual data
-	if (DEBUG_FLAG) cerr << endl << "Pre-computing \\bar{\\phi} on in-domain target monolingual data..." << endl;
 	float score_phi_bar = 0.f;
-	if (training_mode == 0)
+	if (training_mode == 1)
 	{
+		if (DEBUG_FLAG) cerr << endl << "Pre-computing \\bar{\\phi} on in-domain target monolingual data..." << endl;
+		
 		unsigned num_samples = 0;
 		for (unsigned s = 0; s < in_t_mono_data_ids_minibatch.size() && num_samples < SAMPLING_SIZE; ++s) 
 		{
@@ -1011,8 +1194,14 @@ void run_train(transformer::TransformerModel &tf,
 	cerr << endl << "--------------------------------------------------------------------------------------------------------" << endl;
         cerr << "Pre-trained model scores on dev data..." << endl;
 	tf.set_dropout(false);
-	//eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
-	eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, score_phi_bar, dstats);
+	if (training_mode == 0)
+		eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+	else{
+		if (dev_eval_mea == 5)
+			eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, score_phi_bar, dstats);
+		else 
+			eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+	}
 	dstats.update_best_score(cpt);
         cerr << "***DEV: " << "sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string(true) << endl;
 	cerr << "--------------------------------------------------------------------------------------------------------" << endl;	
@@ -1072,14 +1261,16 @@ void run_train(transformer::TransformerModel &tf,
 				i_xent = compute_mm_loss(cg, ssents, tf, v_emp_scores, mm_feas, softmax_temp, ctstats, &i_rl);
 			}
 			else if (training_mode == 0){ // simplified version with RL/PG
-				i_xent = compute_rl_loss(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);
+				//i_xent = compute_rl_loss_one_sample(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);
+				//i_xent = compute_rl_loss_multiple_samples_avg_br(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);
+				i_xent = compute_rl_loss_multiple_samples_gre_br(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);
 			}
 
 			// normal loss
 			i_xent_sum = dynet::sum_batches(i_xent);
 
 			// total loss with reinforced moment matching scores
-			i_xent_final = dynet::sum_batches(dynet::cmult(i_xent, i_rl));
+			i_xent_final = (1.f / NUM_SAMPLES) * dynet::sum_batches(dynet::cmult(i_xent, i_rl));
 			
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -1186,9 +1377,14 @@ void run_train(transformer::TransformerModel &tf,
 
 		timer_iteration.reset();
 		
-		//eval_on_dev(tf, devel_cor, dstats, dev_eval_mea, dev_eval_infer_algo);// non-batched version
-		//eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
-		eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, score_phi_bar, dstats);
+		if (training_mode == 0)
+			eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+		else{
+			if (dev_eval_mea == 5)
+				eval_mm_on_dev(tf, mm_feas, devel_cor, softmax_temp, score_phi_bar, dstats);
+			else
+				eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
+		}
 		float elapsed = timer_iteration.elapsed();
 
 		// update best score and save parameter to file

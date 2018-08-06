@@ -391,13 +391,15 @@ public:
 		, const WordIdSentences& sents/*batched*/
 		, ModelStats* pstats=nullptr
 		, bool is_eval_on_dev=false);	
-	void get_avg_nll(dynet::ComputationGraph &cg
+	void get_avg_ll(dynet::ComputationGraph &cg
 		, const WordIdSentences& tsents
 		, std::vector<float>& v_losses
+		, bool neg=false
 		, bool do_sum=false);
-	void get_avg_nll(dynet::ComputationGraph &cg
+	void get_avg_ll(dynet::ComputationGraph &cg
 		, const WordIdSentences& tsents
-		, dynet::Expression *p_i_nll);
+		, dynet::Expression *p_i_nll
+		, bool neg=false);
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const std::vector<dynet::Expression>& v_soft_sents/*batched*/
 		, bool is_eval_on_dev=false);
@@ -529,9 +531,10 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	return i_tloss;
 }
 
-void TransformerLModel::get_avg_nll(dynet::ComputationGraph &cg
+void TransformerLModel::get_avg_ll(dynet::ComputationGraph &cg
 	, const WordIdSentences& tsents
 	, std::vector<float>& v_losses
+	, bool neg
 	, bool do_sum)
 {
 	// decode target
@@ -557,7 +560,7 @@ void TransformerLModel::get_avg_nll(dynet::ComputationGraph &cg
 		dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// shifted right, ((|V_T|, 1), batch_size)
 	
 		// log_softmax and loss
-		dynet::Expression i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
+		dynet::Expression i_err = (!neg?-1:1) * dynet::pickneglogsoftmax(i_r_t, next_words);
 
 		v_errors.push_back(i_err);
 	}
@@ -570,9 +573,10 @@ void TransformerLModel::get_avg_nll(dynet::ComputationGraph &cg
 	cg.clear();
 }
 
-void TransformerLModel::get_avg_nll(dynet::ComputationGraph &cg
+void TransformerLModel::get_avg_ll(dynet::ComputationGraph &cg
 	, const WordIdSentences& tsents
-	, dynet::Expression *p_i_nll)
+	, dynet::Expression *p_i_nll
+	, bool neg)
 {
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
@@ -597,7 +601,7 @@ void TransformerLModel::get_avg_nll(dynet::ComputationGraph &cg
 		dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// shifted right, ((|V_T|, 1), batch_size)
 	
 		// log_softmax and loss
-		dynet::Expression i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
+		dynet::Expression i_err = (!neg?-1:1) * dynet::pickneglogsoftmax(i_r_t, next_words);
 
 		v_errors.push_back(i_err);
 	}
