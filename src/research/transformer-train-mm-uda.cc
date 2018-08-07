@@ -47,13 +47,14 @@ unsigned NUM_RESETS = 1;
 
 unsigned NUM_SAMPLES = 2;
 unsigned SAMPLING_SIZE = 1;
+float LAMBDA = 0.1f;
 
 bool VERBOSE = false;
 bool DEBUG_FLAG = false;
 
 // ---
 bool load_data(const variables_map& vm
-	, std::pair<WordIdSentences, WordIdSentences>& mono_cor, WordIdCorpus& devel_cor
+	, std::pair<WordIdSentences, WordIdSentences>& mono_cor, WordIdCorpus& train_cor, WordIdCorpus& devel_cor
 	, dynet::Dict& sd, dynet::Dict& td
 	, SentinelMarkers& sm);
 // ---
@@ -81,7 +82,7 @@ void sanity_check(transformer::TransformerModel &tf,
 
 // ---
 void run_train(transformer::TransformerModel &tf, 
-	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus& devel_cor, 
+	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus& train_cor, const WordIdCorpus& devel_cor, 
 	dynet::Trainer*& p_sgd, 
 	unsigned training_mode,
 	float softmax_temp,
@@ -191,7 +192,8 @@ int main(int argc, char** argv) {
 		("config,c", value<std::string>(), "config file specifying additional command line options")
 		//-----------------------------------------		
 		// data hyper-parameters
-		("devel,d", value<std::string>(), "file containing small bilingual in-domain sentences for development purpose")
+		("train,t", value<std::string>(), "file containing out-domain parallel sentences")
+		("devel,d", value<std::string>(), "file containing small in-domain parallel sentences for development purpose")
 		("max-seq-len", value<unsigned>()->default_value(0), "limit the sentence length (either source or target); none by default")
 		("src-vocab", value<std::string>()->default_value(""), "file containing source vocabulary file; none by default (will be built from train file)")
 		("tgt-vocab", value<std::string>()->default_value(""), "file containing target vocabulary file; none by default (will be built from train file)")
@@ -221,6 +223,7 @@ int main(int argc, char** argv) {
 		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
 		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 10")
 		("softmax-temperature", value<float>()->default_value(1.f), "use temperature for softmax activation; 1.0 by default")
+		("lambda", value<float>()->default_value(LAMBDA), "use balancing weight between out-domain and in-domain reinforced losses; 0.1f by default")
 		//-----------------------------------------
 		// Transformer hyper-parameters
 		("nlayers", value<unsigned>()->default_value(6), "use <num> layers for stacked encoder/decoder layers; 6 by default")
@@ -297,7 +300,7 @@ int main(int argc, char** argv) {
 	
 	// print help
 	if (vm.count("help") 
-		|| !(vm.count("in-src-mono-data") && vm.count("in-tgt-mono-data") && vm.count("devel")))
+		|| !(vm.count("train") && vm.count("devel") && vm.count("in-src-mono-data") && vm.count("in-tgt-mono-data")))
 	{
 		cout << opts << "\n";
 		return EXIT_FAILURE;
@@ -330,7 +333,7 @@ int main(int argc, char** argv) {
 	// model recipe
 	dynet::Dict sd, td;// vocabularies
 	SentinelMarkers sm;// sentinel markers
-	WordIdCorpus devel_cor;// integer-converted bilingual data for development
+	WordIdCorpus devel_cor, train_cor;// integer-converted parallel data for development
 	pair<WordIdSentences, WordIdSentences> mono_cor;// integer-converted monolingual in-domain data
 	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
 
@@ -362,7 +365,7 @@ int main(int argc, char** argv) {
 		sm._kTGT_UNK = td.convert("<unk>");
 
 		// load data files
-		if (!load_data(vm, mono_cor, devel_cor, sd, td, sm))
+		if (!load_data(vm, mono_cor, train_cor, devel_cor, sd, td, sm))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 		// read model configuration
@@ -404,7 +407,7 @@ int main(int argc, char** argv) {
 		sm._kTGT_UNK = td.convert("<unk>");
 
 		// load data files
-		if (!load_data(vm, mono_cor, devel_cor, sd, td, sm))
+		if (!load_data(vm, mono_cor, train_cor, devel_cor, sd, td, sm))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 		// get transformer configuration
@@ -479,7 +482,7 @@ int main(int argc, char** argv) {
 
 	// train transformer model
 	run_train(tf
-		, mono_cor, devel_cor
+		, mono_cor, train_cor, devel_cor
 		, p_sgd_trainer
 		, training_mode
 		, softmax_temp
@@ -502,7 +505,7 @@ int main(int argc, char** argv) {
 
 // ---
 bool load_data(const variables_map& vm
-	, std::pair<WordIdSentences, WordIdSentences>& mono_cor, WordIdCorpus& devel_cor
+	, std::pair<WordIdSentences, WordIdSentences>& mono_cor, WordIdCorpus& train_cor, WordIdCorpus& devel_cor
 	, dynet::Dict& sd, dynet::Dict& td
 	, SentinelMarkers& sm)
 {
@@ -518,6 +521,11 @@ bool load_data(const variables_map& vm
 	std::string in_tgt_mono_data = vm["in-tgt-mono-data"].as<std::string>();	
 	cerr  << "Reading in-domain target monolingual data from " << in_tgt_mono_data << "...\n";
 	mono_cor.second = read_corpus(in_tgt_mono_data, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
+
+	if (vm.count("train")) {
+		cerr << "Reading out-domain parallel training data from " << vm["train"].as<std::string>() << "...\n";
+		train_cor = read_corpus(vm["train"].as<std::string>(), &sd, &td, true, vm["max-seq-len"].as<unsigned>(), r2l_target & !swap);
+	}
 
 	// freeze dicts if required
 	if ("" == vm["src-vocab"].as<std::string>() 
@@ -535,7 +543,7 @@ bool load_data(const variables_map& vm
 
 	// load parallel dev data
 	if (vm.count("devel")) {
-		cerr << "Reading dev data from " << vm["devel"].as<std::string>() << "...\n";
+		cerr << "Reading in-domain parallel dev data from " << vm["devel"].as<std::string>() << "...\n";
 		devel_cor = read_corpus(vm["devel"].as<std::string>(), &sd, &td, false/*for development*/, 0, r2l_target & !swap);
 	}
 
@@ -898,12 +906,11 @@ dynet::Expression compute_rl_loss_one_sample(dynet::ComputationGraph& cg,
 	transformer::ModelStats& ctstats,
 	dynet::Expression* p_i_rl)
 {
-	WordIdSentences samples;
+	WordIdSentences samples, greedy_samples;
 	std::vector<float> v_probs;// unused for now
 	tf.set_dropout(false);
-	// Note: use random sampling or greedy Viterbi?
-	//tf.sample_sentences(cg, ssents, samples, v_probs, softmax_temp);// random sampling
-	tf.greedy_decode(cg, ssents, samples);// greedy Viterbi
+	tf.sample_sentences(cg, ssents, samples, v_probs, softmax_temp);// random sampling
+	tf.greedy_decode(cg, ssents, greedy_samples);// greedy Viterbi
 	tf.set_dropout(true);
 	if (DEBUG_FLAG){
 		for (unsigned i = 0; i < ssents.size(); i++){
@@ -917,12 +924,14 @@ dynet::Expression compute_rl_loss_one_sample(dynet::ComputationGraph& cg,
 	// compute feature function scores
 	std::vector<float> scores;
 	mm_feas.compute_feature_function(cg, ssents, samples, scores);
+	std::vector<float> greedy_scores;
+	mm_feas.compute_feature_function(cg, ssents, greedy_samples, greedy_scores);
 	if (DEBUG_FLAG){
 		cerr << "scores: ";
 		for (auto& score : scores) cerr << score << " ";
 		cerr << endl;
 	}
-	*p_i_rl = dynet::input(cg, dynet::Dim({1, 1}, scores.size()), scores);// shape=((1,1), batch_size) 
+	*p_i_rl = dynet::input(cg, dynet::Dim({1, 1}, scores.size()), scores) - dynet::input(cg, dynet::Dim({1, 1}, greedy_scores.size()), greedy_scores);// shape=((1,1), batch_size) 
 
 	return tf.compute_nll(cg, ssents, samples, &ctstats);// conventional CE loss (all individual losses)
 }
@@ -1106,7 +1115,7 @@ void sanity_check(transformer::TransformerModel &tf,
 
 // ---
 void run_train(transformer::TransformerModel &tf, 
-	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus &devel_cor, 
+	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
 	dynet::Trainer*& p_sgd, 
 	unsigned training_mode,
 	float softmax_temp,
@@ -1131,21 +1140,27 @@ void run_train(transformer::TransformerModel &tf,
 
 	// create minibatches 
 	size_t minibatch_size = MINIBATCH_SIZE;
-	std::vector<WordIdSentences> in_s_mono_data_minibatch, in_t_mono_data_minibatch;
+	std::vector<WordIdSentences> in_s_mono_data_minibatch, in_t_mono_data_minibatch, out_train_src_data_minibatch, out_train_trg_data_minibatch;
 	std::vector<std::vector<WordIdSentence> > dev_src_minibatch, dev_trg_minibatch;
-	std::vector<size_t> in_s_mono_data_ids_minibatch, in_t_mono_data_ids_minibatch;
+	std::vector<size_t> in_s_mono_data_ids_minibatch, in_t_mono_data_ids_minibatch, out_train_data_ids_minibatch;
 
-	// source
+	// in-domain source
 	cerr << endl << "Creating minibatches for in-domain source mono data (using minibatch_size=" << minibatch_size << ")..." << endl;
 	create_minibatches(in_mono_data.first, minibatch_size, in_s_mono_data_minibatch);// for in-domain source monolingual data
 	in_s_mono_data_ids_minibatch.resize(in_s_mono_data_minibatch.size());// create a sentence list for this train minibatch
 	std::iota(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), 0);
 
-	// target
+	// in-domain target
 	cerr << "Creating minibatches for in-domain target mono data (using minibatch_size=" << minibatch_size << ")..." << endl;
 	create_minibatches(in_mono_data.second, minibatch_size, in_t_mono_data_minibatch);// for in-domain target monolingual data
 	in_t_mono_data_ids_minibatch.resize(in_t_mono_data_minibatch.size());// create a sentence list for this train minibatch
 	std::iota(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), 0);
+
+	// out-domain train
+	cerr << "Creating minibatches for development data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	create_minibatches(train_cor, minibatch_size, out_train_src_data_minibatch, out_train_trg_data_minibatch);// on train
+	out_train_data_ids_minibatch.resize(out_train_src_data_minibatch.size());// create a sentence list for this train minibatch
+	std::iota(out_train_data_ids_minibatch.begin(), out_train_data_ids_minibatch.end(), 0);
 
 	// dev
 	cerr << "Creating minibatches for development data (using minibatch_size=" << "1024" /*minibatch_size*/ << ")..." << endl;
@@ -1155,6 +1170,7 @@ void run_train(transformer::TransformerModel &tf,
 	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), *dynet::rndeng);
 	std::shuffle(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), *dynet::rndeng);
+	std::shuffle(out_train_data_ids_minibatch.begin(), out_train_data_ids_minibatch.end(), *dynet::rndeng);
 
 	// get/pre-compute mm scores over in-domain target monolingual data
 	float score_phi_bar = 0.f;
@@ -1206,7 +1222,7 @@ void run_train(transformer::TransformerModel &tf,
         cerr << "***DEV: " << "sents=" << devel_cor.size() << " src_unks=" << dstats._words_src_unk << " trg_unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string(true) << endl;
 	cerr << "--------------------------------------------------------------------------------------------------------" << endl;	
 
-	unsigned sid = 0, id = 0, last_print = 0;
+	unsigned sid = 0, id = 0, id_t = 0, last_print = 0;
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
 	unsigned epoch = 0;
 	while (epoch < max_epochs) {
@@ -1239,6 +1255,14 @@ void run_train(transformer::TransformerModel &tf,
 				timer_epoch.reset();
 			}
 
+			if (id_t == out_train_data_ids_minibatch.size()){
+				id_t = 0;
+				
+				// shuffle the access order
+				cerr << "***SHUFFLE" << endl;
+				std::shuffle(out_train_data_ids_minibatch.begin(), out_train_data_ids_minibatch.end(), *dynet::rndeng);
+			}
+
 			// build graph for this instance
 			dynet::ComputationGraph cg;// dynamic computation graph for each data batch
 			if (DEBUGGING_FLAG){//http://dynet.readthedocs.io/en/latest/debugging.html
@@ -1262,15 +1286,18 @@ void run_train(transformer::TransformerModel &tf,
 			}
 			else if (training_mode == 0){ // simplified version with RL/PG
 				//i_xent = compute_rl_loss_one_sample(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);
-				//i_xent = compute_rl_loss_multiple_samples_avg_br(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);
-				i_xent = compute_rl_loss_multiple_samples_gre_br(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);
+				i_xent = compute_rl_loss_multiple_samples_avg_br(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);// use baseline reward as mean of all rewards from samples
+				//i_xent = compute_rl_loss_multiple_samples_gre_br(cg, ssents, tf, mm_feas, softmax_temp, ctstats, &i_rl);// use baseline reward as greedy solution's reward (self-critic)
 			}
 
-			// normal loss
+			// loss from learning the sampled data
 			i_xent_sum = dynet::sum_batches(i_xent);
 
-			// total loss with reinforced moment matching scores
-			i_xent_final = (1.f / NUM_SAMPLES) * dynet::sum_batches(dynet::cmult(i_xent, i_rl));
+			// loss from learning the out-domain parallel data
+			Expression i_xent_out_par = tf.build_graph(cg, out_train_src_data_minibatch[out_train_data_ids_minibatch[id_t]], out_train_trg_data_minibatch[out_train_data_ids_minibatch[id_t]], nullptr);
+
+			// total loss with reinforced moment matching/reinforced scores
+			i_xent_final = i_xent_out_par + LAMBDA * (1.f / NUM_SAMPLES) * dynet::sum_batches(dynet::cmult(i_xent, i_rl));
 			
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -1332,7 +1359,7 @@ void run_train(transformer::TransformerModel &tf,
                                 cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_src + tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;
 			}
 			   		 
-			++id;
+			++id;++id_t;
 		}
 
 		// show score on dev data?
