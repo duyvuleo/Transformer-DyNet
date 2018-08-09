@@ -13,6 +13,7 @@
 
 #include <dynet/dict.h>
 
+#include "../transformer.h"
 #include "../transformer-lm.h"
 
 void remove_padded_values(WordIdSentence& sent);
@@ -340,6 +341,8 @@ struct MMFeatures_UDA : public MMFeatures
 	// out-domain LMs
 	std::shared_ptr<transformer::TransformerLModel> _p_out_src_alm;
 	std::shared_ptr<transformer::TransformerLModel> _p_out_tgt_alm;
+	// back/reverse TM
+	std::shared_ptr<transformer::TransformerModel> _p_out_back_tf;
 
 	// feature function type
 	unsigned _fea_func_type = 0;
@@ -351,7 +354,8 @@ struct MMFeatures_UDA : public MMFeatures
 		, dynet::Dict& sd, dynet::Dict& td
 		, unsigned fea_func_type
 		, const std::string& in_src_alm_path, const std::string& in_tgt_alm_path
-		, const std::string& out_src_alm_path, const std::string& out_tgt_alm_path)
+		, const std::string& out_src_alm_path, const std::string& out_tgt_alm_path
+		, const std::string& out_back_tf_path)
 		: MMFeatures(num_samples), _fea_func_type(fea_func_type)
 	{			
  		this->_F_dim = 1;
@@ -495,6 +499,46 @@ struct MMFeatures_UDA : public MMFeatures
 			_p_out_tgt_alm.get()->initialise_params_from_file(model_file);// load pre-trained model from file
 			cerr << "Count of model parameters: " << _p_out_tgt_alm.get()->get_model_parameters().parameter_count() << endl;
 		}
+
+		if ("" != out_back_tf_path){
+			cerr << "Loading out-domain back translation model from " << out_back_tf_path << "..." << endl;
+			
+			ifstream inpf(out_back_tf_path + "/model.config");
+			assert(inpf);
+			
+			std::string line;
+			getline(inpf, line);
+			std::stringstream ss(line);
+
+			transformer::SentinelMarkers sm;// sentinel markers
+			sm._kTGT_SOS = td.convert("<s>");
+			sm._kTGT_EOS = td.convert("</s>");
+			sm._kTGT_UNK = td.convert("<unk>");
+			sm._kTGT_SOS = sd.convert("<s>");
+			sm._kTGT_EOS = sd.convert("</s>");
+			sm._kTGT_UNK = sd.convert("<unk>");
+
+			std::string model_file;
+			transformer::TransformerConfig tfc;// transformer config
+			tfc._src_vocab_size = td.size();
+			tfc._tgt_vocab_size = sd.size();
+			tfc._sm = sm;
+			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
+		   		>> tfc._encoder_emb_dropout_rate >> tfc._encoder_sublayer_dropout_rate >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
+				>> tfc._use_label_smoothing >> tfc._label_smoothing_weight
+		   		>> tfc._position_encoding >> tfc._position_encoding_flag >> tfc._max_length
+		   		>> tfc._attention_type
+		   		>> tfc._ffl_activation_type
+		   		>> tfc._shared_embeddings
+		   		>> tfc._use_hybrid_model;
+			ss >> model_file;
+			tfc._is_training = false;
+			tfc._use_dropout = false;
+
+			_p_out_back_tf.reset(new transformer::TransformerModel(tfc, td, sd));
+			_p_out_back_tf.get()->initialise_params_from_file(model_file);// load pre-trained model from file
+			cerr << "Count of model parameters: " << _p_out_back_tf.get()->get_model_parameters().parameter_count() << endl;
+		}
 		
 		cerr << "MMFeatures_UDA initialised!" << endl;
 	}
@@ -549,12 +593,12 @@ struct MMFeatures_UDA : public MMFeatures
 			, bool flag=false)
 	{
 		dynet::Expression i_H_I, i_H_O;
-		_p_in_tgt_alm->get_avg_ll(cg, ys, &i_H_I, true);
-		_p_out_tgt_alm->get_avg_ll(cg, ys, &i_H_O, true);
+		_p_in_tgt_alm->get_avg_ll(cg, ys, &i_H_I, true/*NLL*/);
+		_p_out_tgt_alm->get_avg_ll(cg, ys, &i_H_O, true/*NLL*/);
 
 		// section 4.2: https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/emnlp11-select-train-data.pdf
 		// and https://ufal.mff.cuni.cz/pbml/100/art-rousseau.pdf
-		dynet::Expression i_ML = i_H_I - i_H_O;
+		dynet::Expression i_ML = i_H_I - i_H_O;// take the negative one (due to maximising the reward)
 		if (flag) // do sum
 			i_ML = dynet::sum_batches(i_ML);
 			
@@ -578,7 +622,7 @@ struct MMFeatures_UDA : public MMFeatures
 
 		// section 4.2: https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/emnlp11-select-train-data.pdf
 		// and https://ufal.mff.cuni.cz/pbml/100/art-rousseau.pdf
-		dynet::Expression i_Axelrod = i_H_I_src - i_H_O_src + i_H_I_tgt - i_H_O_tgt;
+		dynet::Expression i_Axelrod = i_H_I_src - i_H_O_src + i_H_I_tgt - i_H_O_tgt;// take the negative one (due to maximising the reward)
 		if (flag) // do sum
 			i_Axelrod = dynet::sum_batches(i_Axelrod);
 	
@@ -596,8 +640,8 @@ struct MMFeatures_UDA : public MMFeatures
 	{
 		if (_fea_func_type == 0) // avg_ll on target
 			compute_feature_func_tgtLL(cg, ys, v_scores, flag);
-		else if (_fea_func_type == 1) // avg_nll on source
-			compute_feature_func_srcNLL(cg, xs, v_scores, flag);
+		else if (_fea_func_type == 1) // avg_nll on target
+			compute_feature_func_tgtNLL(cg, ys, v_scores, flag);
 		else if (_fea_func_type == 2) // Moore&Lewis
 		       	compute_feature_func_MooreLewis(cg, ys, v_scores, flag);
 		else if (_fea_func_type == 3) // Axelrod

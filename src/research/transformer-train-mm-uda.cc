@@ -210,7 +210,8 @@ int main(int argc, char** argv) {
 		("sparse-updates", value<bool>()->default_value(true), "enable/disable sparse update(s) for lookup parameter(s); true by default")
 		("grad-clip-threshold", value<float>()->default_value(5.f), "use specific gradient clipping threshold (https://arxiv.org/pdf/1211.5063.pdf); 5 by default")
 		//-----------------------------------------
-		("model-path,p", value<std::string>()->default_value("."), "all files related to the model will be saved in this folder")
+		("model-path,p", value<std::string>()->default_value("."), "all files related to the initial model will be loaded from this folder")
+		("back-model-path", value<std::string>()->default_value(""), "all files related to the back/reverse model will be loaded from this folder")
 		("in-src-alm-model-path", value<std::string>()->default_value(""), "specify model path for in-domain source language model")
 		("in-tgt-alm-model-path", value<std::string>()->default_value(""), "specify model path for in-domain target language model")
 		("out-src-alm-model-path", value<std::string>()->default_value(""), "specify model path for out-domain source language model")
@@ -326,7 +327,7 @@ int main(int argc, char** argv) {
 	std::string model_path = vm["model-path"].as<std::string>();
 	struct stat sb;
 	if (stat(model_path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode))
-		cerr << endl << "All model files will be saved to: " << model_path << "." << endl;
+		cerr << endl << "All model files will be loaded/saved from/to: " << model_path << "." << endl;
 	else
 		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
@@ -388,85 +389,23 @@ int main(int argc, char** argv) {
 		   >> tfc._use_hybrid_model;
 		ss >> model_file;
 	}
-	else{// not exist, meaning that the model will be created from scratch!
-		cerr << "Preparing to train the model from scratch..." << endl;
-
-		// load fixed vocabularies from files if provided, otherwise create them on the fly from the training data.
-		bool use_joint_vocab = vm.count("joint-vocab") | vm.count("shared-embeddings");
-		if (use_joint_vocab)
-			load_joint_vocab(vm.count("joint-vocab")?vm["joint-vocab"].as<std::string>():"", sd, td);
-		else
-			load_vocabs(vm["src-vocab"].as<std::string>(), vm["tgt-vocab"].as<std::string>(), sd, td);
-
-		// initalise sentinel markers
-		sm._kSRC_SOS = sd.convert("<s>");
-		sm._kSRC_EOS = sd.convert("</s>");
-		sm._kSRC_UNK = sd.convert("<unk>");
-		sm._kTGT_SOS = td.convert("<s>");
-		sm._kTGT_EOS = td.convert("</s>");
-		sm._kTGT_UNK = td.convert("<unk>");
-
-		// load data files
-		if (!load_data(vm, mono_cor, train_cor, devel_cor, sd, td, sm))
-			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
-
-		// get transformer configuration
-		tfc = transformer::TransformerConfig(sd.size(), td.size()
-			, vm["num-units"].as<unsigned>()
-			, vm["num-heads"].as<unsigned>()
-			, vm["nlayers"].as<unsigned>()
-			, vm["n-ff-units-factor"].as<unsigned>()
-			, vm["encoder-emb-dropout-p"].as<float>()
-			, vm["encoder-sublayer-dropout-p"].as<float>()
-			, vm["decoder-emb-dropout-p"].as<float>()
-			, vm["decoder-sublayer-dropout-p"].as<float>()
-			, vm["attention-dropout-p"].as<float>()
-			, vm["ff-dropout-p"].as<float>()
-			, vm.count("use-label-smoothing")
-			, vm["label-smoothing-weight"].as<float>()
-			, vm["position-encoding"].as<unsigned>()
-			, vm["position-encoding-flag"].as<unsigned>()
-			, vm["max-pos-seq-len"].as<unsigned>()
-			, sm
-			, vm["attention-type"].as<unsigned>()
-			, vm["ff-activation-type"].as<unsigned>()
-			, use_joint_vocab
-			, vm.count("use-hybrid-model"));
-
-		// save vocabularies to files
-		if (use_joint_vocab){
-			std::string vocab_file = model_path + "/" + "src-tgt.joint-vocab";
-			save_vocab(vocab_file, sd);
-		}
-		else{
-			std::string src_vocab_file = model_path + "/" + "src.vocab";
-			std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
-			save_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
-		}
-
-		// save configuration file (for decoding/inference)
-		std::string config_out_file = model_path + "/model.config";
-		std::string params_out_file = model_path + "/model.params";
-		save_config(config_out_file, params_out_file, tfc);
-	}	
-
-	// learning rate scheduler
-	unsigned lr_epochs = vm["lr-epochs"].as<unsigned>(), lr_patience = vm["lr-patience"].as<unsigned>();
-	if (lr_epochs > 0 && lr_patience > 0)
-		cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;
 
 	// initialise transformer object
 	transformer::TransformerModel tf(tfc, sd, td);
-	//std::string model_file = model_path + "/model.params";
 	if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
 	{
 		cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
 		tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
 	}
-	cerr << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl << endl;
+	cerr << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
 
 	// create SGD trainer
 	Trainer* p_sgd_trainer = create_sgd_trainer(vm, tf.get_model_parameters());
+
+	// learning rate scheduler
+	unsigned lr_epochs = vm["lr-epochs"].as<unsigned>(), lr_patience = vm["lr-patience"].as<unsigned>();
+	if (lr_epochs > 0 && lr_patience > 0)
+		cerr << "[WARNING] - Conflict on learning rate scheduler; use either lr-epochs or lr-patience!" << endl;
 
 	if (vm["dev-eval-measure"].as<unsigned>() > 5) TRANSFORMER_RUNTIME_ASSERT("Unknown dev-eval-measure type (0: perplexity; 1: BLEU; 2: NIST; 3: WER; 4: RIBES; 5: MM)!");
 
@@ -475,7 +414,8 @@ int main(int argc, char** argv) {
 					, sd, td
 					, vm["mm-feature-type"].as<unsigned>()
 					, vm["in-src-alm-model-path"].as<std::string>(), vm["in-tgt-alm-model-path"].as<std::string>()
-					, vm["out-src-alm-model-path"].as<std::string>(), vm["out-tgt-alm-model-path"].as<std::string>());/*feature config for moment matching*/
+					, vm["out-src-alm-model-path"].as<std::string>(), vm["out-tgt-alm-model-path"].as<std::string>()
+					, vm["back-model-path"].as<std::string>());/*feature config for moment matching*/
 
 	unsigned training_mode = vm["mm-training-mode"].as<unsigned>();
 	float softmax_temp = vm["softmax-temperature"].as<float>();
@@ -1157,13 +1097,13 @@ void run_train(transformer::TransformerModel &tf,
 	std::iota(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), 0);
 
 	// out-domain train
-	cerr << "Creating minibatches for development data (using minibatch_size=" << minibatch_size << ")..." << endl;
+	cerr << "Creating minibatches for out-domain parallel training data (using minibatch_size=" << minibatch_size << ")..." << endl;
 	create_minibatches(train_cor, minibatch_size, out_train_src_data_minibatch, out_train_trg_data_minibatch);// on train
 	out_train_data_ids_minibatch.resize(out_train_src_data_minibatch.size());// create a sentence list for this train minibatch
 	std::iota(out_train_data_ids_minibatch.begin(), out_train_data_ids_minibatch.end(), 0);
 
 	// dev
-	cerr << "Creating minibatches for development data (using minibatch_size=" << "1024" /*minibatch_size*/ << ")..." << endl;
+	cerr << "Creating minibatches for in-domain parallel development data (using minibatch_size=" << "1024" /*minibatch_size*/ << ")..." << endl;
 	create_minibatches(devel_cor, 1024/*minibatch_size*/, dev_src_minibatch, dev_trg_minibatch);// on dev
 
 	// shuffle minibatches
