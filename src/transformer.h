@@ -832,6 +832,9 @@ public:
 
 	~TransformerModel(){}
 
+	// for initialisation
+	void initialise(const TransformerConfig& tfc, dynet::Dict& sd, dynet::Dict& td);
+
 	// for training
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& ssents/*batched*/
@@ -941,6 +944,24 @@ TransformerModel::TransformerModel(const TransformerConfig& tfc, dynet::Dict& sd
 	// dictionaries
 	_dicts.first = sd;
 	_dicts.second = td;
+}
+
+void TransformerModel::initialise(const TransformerConfig& tfc, dynet::Dict& sd, dynet::Dict& td)
+{
+	_tfc = tfc;
+	
+	_all_params.reset(new DyNetModel());// create new model parameter object
+
+	_encoder.reset(new Encoder(_all_params.get(), _tfc));// create new encoder object
+
+	_decoder.reset(new Decoder(_all_params.get(), _tfc, _encoder.get()));// create new decoder object
+
+	// final output projection layer
+	_p_Wo_bias = _all_params.get()->add_parameters({_tfc._tgt_vocab_size});// optional
+
+	// dictionaries
+	_dicts.first = sd;
+	_dicts.second = td;	
 }
 
 dynet::Expression TransformerModel::compute_source_rep(dynet::ComputationGraph &cg

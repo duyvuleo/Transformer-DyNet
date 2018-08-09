@@ -657,7 +657,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints,
 	unsigned dev_eval_mea, unsigned dev_eval_infer_algo)
-{
+{	
 	unsigned sid = 0, id = 0, last_print = 0;
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
 	unsigned epoch = 0, cpt = 0/*count of patience*/;
@@ -691,6 +691,7 @@ void run_train(transformer::TransformerModel &tf, const WordIdCorpus &train_cor,
 	tf.set_dropout(false);// disable dropout
 	eval_on_dev(tf, dev_src_minibatch, dev_trg_minibatch, dstats, dev_eval_mea, dev_eval_infer_algo);// batched version (2-3 times faster)
 	float elapsed = timer_iteration.elapsed();
+	timer_iteration.reset();
 	
 	// update best score so far (in case of incremental training)
 	dstats.update_best_score(cpt);
