@@ -84,7 +84,7 @@ void sanity_check(transformer::TransformerModel &tf,
 void run_train(transformer::TransformerModel &tf, 
 	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus& train_cor, const WordIdCorpus& devel_cor, 
 	dynet::Trainer*& p_sgd, 
-	unsigned training_mode,
+	unsigned training_mode, bool mix_mode,
 	float softmax_temp,
 	const std::string& model_path, 
 	unsigned max_epochs, unsigned patience, 
@@ -220,6 +220,7 @@ int main(int argc, char** argv) {
 		// mm training hyper-parameters
 		("mm-feature-type", value<unsigned>()->default_value(0), "specify feature function for moment matching (0: avg_nll_on_tgt; 1: avg_nll_on_src; 2: Moore&Lewis; 3: Axelrod); 0 (avg_nll_on_tgt) by default")
 		("mm-training-mode", value<unsigned>()->default_value(1), "specify training mode (0: RL&PG; 1: MM); default 1")
+		("mm-mix-mode", value<unsigned>()->default_value(0), "specify mode with mix of out-domain bitexts and in-domain monotexts (0: none; 1: mix); default 0")
 		("mm-debug", "very chatty for moment matching debugging only; default not")
 		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
 		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 10")
@@ -418,13 +419,14 @@ int main(int argc, char** argv) {
 					, vm["back-model-path"].as<std::string>());/*feature config for moment matching*/
 
 	unsigned training_mode = vm["mm-training-mode"].as<unsigned>();
+	unsigned mix_mode = vm["mm-mix-mode"].as<unsigned>();
 	float softmax_temp = vm["softmax-temperature"].as<float>();
 
 	// train transformer model
 	run_train(tf
 		, mono_cor, train_cor, devel_cor
 		, p_sgd_trainer
-		, training_mode
+		, training_mode, mix_mode
 		, softmax_temp
 		, model_path
 		, vm["epochs"].as<unsigned>(), vm["patience"].as<unsigned>() /*early stopping*/
@@ -1057,7 +1059,7 @@ void sanity_check(transformer::TransformerModel &tf,
 void run_train(transformer::TransformerModel &tf, 
 	const std::pair<WordIdSentences, WordIdSentences>& in_mono_data, const WordIdCorpus &train_cor, const WordIdCorpus &devel_cor, 
 	dynet::Trainer*& p_sgd, 
-	unsigned training_mode,
+	unsigned training_mode, bool mix_mode,
 	float softmax_temp,
 	const std::string& model_path,
 	unsigned max_epochs, unsigned patience, 
@@ -1097,10 +1099,12 @@ void run_train(transformer::TransformerModel &tf,
 	std::iota(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), 0);
 
 	// out-domain train
-	cerr << "Creating minibatches for out-domain parallel training data (using minibatch_size=" << minibatch_size << ")..." << endl;
-	create_minibatches(train_cor, minibatch_size, out_train_src_data_minibatch, out_train_trg_data_minibatch);// on train
-	out_train_data_ids_minibatch.resize(out_train_src_data_minibatch.size());// create a sentence list for this train minibatch
-	std::iota(out_train_data_ids_minibatch.begin(), out_train_data_ids_minibatch.end(), 0);
+	if (mix_mode){
+		cerr << "Creating minibatches for out-domain parallel training data (using minibatch_size=" << minibatch_size << ")..." << endl;
+		create_minibatches(train_cor, minibatch_size, out_train_src_data_minibatch, out_train_trg_data_minibatch);// on train
+		out_train_data_ids_minibatch.resize(out_train_src_data_minibatch.size());// create a sentence list for this train minibatch
+		std::iota(out_train_data_ids_minibatch.begin(), out_train_data_ids_minibatch.end(), 0);
+	}
 
 	// dev
 	cerr << "Creating minibatches for in-domain parallel development data (using minibatch_size=" << "1024" /*minibatch_size*/ << ")..." << endl;
@@ -1110,7 +1114,7 @@ void run_train(transformer::TransformerModel &tf,
 	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(in_s_mono_data_ids_minibatch.begin(), in_s_mono_data_ids_minibatch.end(), *dynet::rndeng);
 	std::shuffle(in_t_mono_data_ids_minibatch.begin(), in_t_mono_data_ids_minibatch.end(), *dynet::rndeng);
-	std::shuffle(out_train_data_ids_minibatch.begin(), out_train_data_ids_minibatch.end(), *dynet::rndeng);
+	if (mix_mode) std::shuffle(out_train_data_ids_minibatch.begin(), out_train_data_ids_minibatch.end(), *dynet::rndeng);
 
 	// get/pre-compute mm scores over in-domain target monolingual data
 	float score_phi_bar = 0.f;
@@ -1195,7 +1199,7 @@ void run_train(transformer::TransformerModel &tf,
 				timer_epoch.reset();
 			}
 
-			if (id_t == out_train_data_ids_minibatch.size()){
+			if (mix_mode && id_t == out_train_data_ids_minibatch.size()){
 				id_t = 0;
 				
 				// shuffle the access order
@@ -1234,10 +1238,16 @@ void run_train(transformer::TransformerModel &tf,
 			i_xent_sum = dynet::sum_batches(i_xent);
 
 			// loss from learning the out-domain parallel data
-			Expression i_xent_out_par = tf.build_graph(cg, out_train_src_data_minibatch[out_train_data_ids_minibatch[id_t]], out_train_trg_data_minibatch[out_train_data_ids_minibatch[id_t]], nullptr);
+			if (mix_mode){
+				Expression i_xent_out_par = tf.build_graph(cg, out_train_src_data_minibatch[out_train_data_ids_minibatch[id_t]], out_train_trg_data_minibatch[out_train_data_ids_minibatch[id_t]], nullptr);
 
-			// total loss with reinforced moment matching/reinforced scores
-			i_xent_final = i_xent_out_par + LAMBDA * (1.f / NUM_SAMPLES) * dynet::sum_batches(dynet::cmult(i_xent, i_rl));
+				// total loss with reinforced moment matching/reinforced scores
+				i_xent_final = i_xent_out_par + LAMBDA * (1.f / NUM_SAMPLES) * dynet::sum_batches(dynet::cmult(i_xent, i_rl));
+			}
+			else{
+				// total loss with reinforced moment matching/reinforced scores
+				i_xent_final = (1.f / NUM_SAMPLES) * dynet::sum_batches(dynet::cmult(i_xent, i_rl));
+			}
 			
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;

@@ -618,7 +618,7 @@ struct MMFeatures_UDA : public MMFeatures
 
 		dynet::Expression i_scores_lm;
 		_p_in_tgt_alm->get_avg_ll(cg, ys, &i_scores_lm, false/*LL*/);	
-		dynet::Expression i_scores_tm = -_p_out_back_tf->compute_nll(cg, xs, ys, nullptr, true, true);
+		dynet::Expression i_scores_tm = -_p_out_back_tf->compute_nll(cg, xs, ys, nullptr, true, true/*length normalisation*/);
 
 		dynet::Expression i_scores_final = alpha * i_scores_lm + (1.f - alpha) * i_scores_tm;// interpolation
 		if (flag) // do sum
