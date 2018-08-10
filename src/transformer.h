@@ -851,7 +851,8 @@ public:
 		, const WordIdSentences& ssents
 		, const WordIdSentences& tsents
 		, ModelStats* pstats=nullptr
-		, bool is_eval_on_dev=false);
+		, bool is_eval_on_dev=false
+		, bool do_len_norm=false);
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const std::vector<dynet::Expression>& v_soft_ssents/*batched*/
 		, const WordIdSentences& tsents/*batched*/
@@ -1258,7 +1259,8 @@ dynet::Expression TransformerModel::compute_nll(dynet::ComputationGraph &cg
 	, const WordIdSentences& ssents
 	, const WordIdSentences& tsents
 	, ModelStats* pstats
-	, bool is_eval_on_dev)
+	, bool is_eval_on_dev
+	, bool do_len_norm)
 {
 	// encode source
 	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, pstats);// ((num_units, Lx), batch_size)
@@ -1344,7 +1346,10 @@ dynet::Expression TransformerModel::compute_nll(dynet::ComputationGraph &cg
 	}
 #endif
 
-	return dynet::sum(v_errors);// / this->_decoder->_batch_tlen;
+	if (do_len_norm) 
+		return dynet::sum(v_errors) / this->_decoder->_batch_tlen;
+	
+	return dynet::sum(v_errors);
 }
 
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg

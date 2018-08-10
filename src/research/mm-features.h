@@ -608,6 +608,28 @@ struct MMFeatures_UDA : public MMFeatures
 		cg.clear();
 	}
 
+	void compute_feature_func_noisy(dynet::ComputationGraph& cg
+			, const WordIdSentences& xs
+			, const WordIdSentences& ys
+			, std::vector<float>& v_scores
+			, bool flag=false) // w/ back translation model + language model
+	{
+		float alpha = 0.1f;// FIXME: add as hyperparameter
+
+		dynet::Expression i_scores_lm;
+		_p_in_tgt_alm->get_avg_ll(cg, ys, &i_scores_lm, false/*LL*/);	
+		dynet::Expression i_scores_tm = -_p_out_back_tf->compute_nll(cg, xs, ys, nullptr, true, true);
+
+		dynet::Expression i_scores_final = alpha * i_scores_lm + (1.f - alpha) * i_scores_tm;// interpolation
+		if (flag) // do sum
+			i_scores_final = dynet::sum_batches(i_scores_final);
+
+		v_scores = dynet::as_vector(cg.incremental_forward(i_scores_final));
+
+		// remember to clear the graph (for memory efficiency)
+		cg.clear();
+	}
+
 	void compute_feature_func_Axelrod(dynet::ComputationGraph& cg
 			, const WordIdSentences& xs
 			, const WordIdSentences& ys
@@ -651,6 +673,8 @@ struct MMFeatures_UDA : public MMFeatures
 			else
 				compute_feature_func_Axelrod(cg, xs, ys, v_scores, flag);
 		}
+		else if (_fea_func_type == 4) // noisy
+			compute_feature_func_noisy(cg, xs, ys, v_scores, flag);
 	}
 };
 
