@@ -13,7 +13,7 @@ using namespace dynet;
 inline void load_vocabs(const std::string& src_vocab_file, const std::string& trg_vocab_file
 	, dynet::Dict& sd, dynet::Dict& td, bool freeze=true);
 inline void load_vocab(const std::string& vocab_file
-	, dynet::Dict& d, bool freeze=true);
+	, dynet::Dict& d, bool add_sentinels=true, bool freeze=true);
 inline void load_joint_vocab(const std::string& vocab_file
 	, dynet::Dict& sd, dynet::Dict& td, bool freeze=true);
 inline void save_vocabs(const std::string& src_vocab_file, const std::string& trg_vocab_file
@@ -74,7 +74,7 @@ inline void load_joint_vocab(const std::string& vocab_file
 }
 
 inline void load_vocab(const std::string& vocab_file
-	, dynet::Dict& d, bool freeze)
+	, dynet::Dict& d, bool add_sentinels, bool freeze)
 {
 	if ("" == vocab_file) return;
 
@@ -85,9 +85,11 @@ inline void load_vocab(const std::string& vocab_file
 	while (getline(if_vocab, word)) d.convert(word);
 
 	// automatically add sentinel markers
-	d.convert("<s>");
-	d.convert("</s>");
-	d.convert("<unk>");
+	if (add_sentinels){
+		d.convert("<s>");
+		d.convert("</s>");
+		d.convert("<unk>");
+	}
 	
 	cerr << "Vocabluary size: " << d.size() << endl;
 

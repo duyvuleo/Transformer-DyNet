@@ -3,7 +3,7 @@
 * Updated: 1 Nov 2017
 */
 
-#include "ensemble-decoder.h"
+#include "ensemble-decoder-side.h"
 
 #include <iostream>
 #include <fstream>
@@ -26,34 +26,20 @@ bool load_model_config(const std::string& model_cfg_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, dynet::Dict& sd
 	, dynet::Dict& td
-	, const transformer::SentinelMarkers& sm);
+	, const transformer::SentinelMarkers& sm
+	, dynet::Dict& side_d
+	, unsigned side_hidden_dim);
 // ---
 
 // ---
-void decode(const std::string& test_file
+void decode(const std::string& test_file, const std::string& side_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned beam_size=5
 	, unsigned length_ratio=2.f
 	, unsigned int lc=0 /*line number to be continued*/
 	, bool remove_unk=false /*whether to include <unk> in the output*/
 	, bool r2l_target=false /*right-to-left decoding*/);
-void decode_nbest(const std::string& test_file
-	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
-	, unsigned topk
-	, const std::string& nbest_style
-	, unsigned beam_size=5
-	, unsigned length_ratio=2.f
-	, unsigned int lc=0 /*line number to be continued*/
-	, bool remove_unk=false /*whether to include <unk> in the output*/
-	, bool r2l_target=false /*right-to-left decoding*/);
-void decode(const std::string& test_file, const std::string& prefix_test_file
-	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
-	, unsigned beam_size=5
-	, unsigned length_ratio=2.f
-	, unsigned int lc=0 /*line number to be continued*/
-	, bool remove_unk=false /*whether to include <unk> in the output*/
-	, bool r2l_target=false /*right-to-left decoding*/);
-void decode_nbest(const std::string& test_file, const std::string& prefix_test_file
+void decode_nbest(const std::string& test_file, const std::string& side_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned topk
 	, const std::string& nbest_style
@@ -82,9 +68,10 @@ int main(int argc, char** argv) {
 		("model-path,p", value<std::string>()->default_value("."), "specify pre-trained model path")
 		//-----------------------------------------
 		("test,T", value<std::string>(), "file containing testing sentences.")
-		("prefix-test", value<std::string>()->default_value(""), "file containing prefixes to start translations of testing sentences.")
+		("test-side", value<std::string>(), "file containing testing sentences for side information.")
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")
 		//-----------------------------------------
+		("side-hidden-dim", value<unsigned>()->default_value(64), "specify hidden dim for embedding side/meta information; 64 by default") // should be small!
 		("beam,b", value<unsigned>()->default_value(1), "size of beam in decoding; 1: greedy by default")
 		("alpha,a", value<float>()->default_value(0.6f), "length normalisation hyperparameter; 0.6f by default") // follow the GNMT paper!
 		("topk,k", value<unsigned>(), "use <num> top kbest entries; none by default")
@@ -135,7 +122,7 @@ int main(int argc, char** argv) {
 		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
 	// Model recipe
-	dynet::Dict sd, td;// vocabularies
+	dynet::Dict sd, td, side_d;// vocabularies
 	SentinelMarkers sm;// sentinel markers
 	std::vector<std::shared_ptr<transformer::TransformerModel>> v_tf_models;
 
@@ -152,6 +139,8 @@ int main(int argc, char** argv) {
 			std::string tgt_vocab_file = model_path + "/" + "tgt.vocab";
 			load_vocabs(src_vocab_file, tgt_vocab_file, sd, td);
 		}
+
+		load_vocab(model_path + "/" + "side.vocab", side_d, false);
 
 		transformer::SentinelMarkers sm;
 		sm._kSRC_SOS = sd.convert("<s>");
@@ -170,7 +159,7 @@ int main(int argc, char** argv) {
 
 		// load models
 		std::string config_file = model_path + "/model.config";
-		if (!load_model_config(config_file, v_tf_models, sd, td, sm))
+		if (!load_model_config(config_file, v_tf_models, sd, td, sm, side_d, vm["side-hidden-dim"].as<unsigned>()))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
 	}
 	else TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s) from: " + std::string(model_path) + "!");
@@ -181,21 +170,13 @@ int main(int argc, char** argv) {
 	// input test file
 	// the output will be printed to stdout!
 	std::string test_input_file = vm["test"].as<std::string>();
-	std::string test_prefix_file = vm["prefix-test"].as<std::string>();
+	std::string test_side_file = vm["test-side"].as<std::string>();
 
 	// decode the input file
-	if (vm.count("topk")){
-		if ("" == test_prefix_file)
-			decode_nbest(test_input_file, v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<std::string>(), vm["beam"].as<unsigned>(), vm["length-ratio"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
-		else 
-			decode_nbest(test_input_file, test_prefix_file, v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<std::string>(), vm["beam"].as<unsigned>(), vm["length-ratio"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
-	}		
-	else{
-		if ("" == test_prefix_file)
-			decode(test_input_file, v_tf_models, vm["beam"].as<unsigned>(), vm["length-ratio"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
-		else
-			decode(test_input_file, test_prefix_file, v_tf_models, vm["beam"].as<unsigned>(), vm["length-ratio"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
-	}
+	if (vm.count("topk"))
+		decode_nbest(test_input_file, test_side_file, v_tf_models, vm["topk"].as<unsigned>(), vm["nbest-style"].as<std::string>(), vm["beam"].as<unsigned>(), vm["length-ratio"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
+	else
+		decode(test_input_file, test_side_file, v_tf_models, vm["beam"].as<unsigned>(), vm["length-ratio"].as<unsigned>(), vm["lc"].as<unsigned int>(), vm.count("remove-unk"), vm.count("r2l-target"));
 
 	return EXIT_SUCCESS;
 }
@@ -206,7 +187,9 @@ bool load_model_config(const std::string& model_cfg_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, dynet::Dict& sd
 	, dynet::Dict& td
-	, const transformer::SentinelMarkers& sm)
+	, const transformer::SentinelMarkers& sm
+	, dynet::Dict& side_d
+	, unsigned side_hidden_dim)
 {
 	cerr << "Loading model(s) from configuration file: " << model_cfg_file << "..." << endl;	
 
@@ -249,6 +232,7 @@ bool load_model_config(const std::string& model_cfg_file
 
 		v_models.push_back(std::shared_ptr<transformer::TransformerModel>());
 		v_models[i].reset(new transformer::TransformerModel(tfc, sd, td));
+		v_models[i]->initialise_side_params(side_d, side_hidden_dim);
 		cerr << "Model file: " << model_file << endl;
 		v_models[i].get()->initialise_params_from_file(model_file);// load pre-trained model from file
 		cerr << "Count of model parameters: " << v_models[i].get()->get_model_parameters().parameter_count() << endl;
@@ -263,7 +247,7 @@ bool load_model_config(const std::string& model_cfg_file
 // ---
 
 // ---
-void decode(const std::string& test_file
+void decode(const std::string &test_file, const std::string &side_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned beam_size
 	, unsigned length_ratio
@@ -273,6 +257,7 @@ void decode(const std::string& test_file
 {
 	dynet::Dict& sd = v_models[0].get()->get_source_dict();
 	dynet::Dict& td = v_models[0].get()->get_target_dict();
+	dynet::Dict& side_d = v_models[0].get()->get_side_dict();
 	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
 
 	if (beam_size <= 0) TRANSFORMER_RUNTIME_ASSERT("Beam size must be >= 1!");
@@ -285,14 +270,19 @@ void decode(const std::string& test_file
 	ifstream in(test_file);
 	assert(in);
 
+	cerr << "Reading test side examples from " << side_file << endl;
+	ifstream in_side(side_file);
+	assert(in_side);
+
 	MyTimer timer_dec("completed in");
-	std::string line;
-	WordIdSentence source;
+	std::string line, line_side;
+	WordIdSentence source, side;
 	unsigned int lno = 0;
-	while (std::getline(in, line)) {
+	while (std::getline(in, line) && std::getline(in_side, line_side)) {
 		if (lno++ < lc) continue;// continued decoding
 
 		source = dynet::read_sentence(line, sd);
+		side = dynet::read_sentence(line_side, side_d);
 
 		if (source.front() != sm._kSRC_SOS && source.back() != sm._kSRC_EOS) {
 			cerr << "Sentence in " << test_file << ":" << lno << " didn't start or end with <s>, </s>\n";
@@ -300,91 +290,17 @@ void decode(const std::string& test_file
 		}
 
 		ComputationGraph cg;// dynamic computation graph
+		//WordIdSentences targets;
 		WordIdSentence target;//, aligns;
 
-		EnsembleDecoderHypPtr trg_hyp = ens.generate(cg, source, v_models);
+		//v_models[0].get()->beam_decode(cg, source, side, targets, beam_size, length_ratio);
+		EnsembleDecoderHypPtr trg_hyp = ens.generate(cg, source, side, v_models);
 		if (trg_hyp.get() == nullptr) {
 			target.clear();
 			//aligns.clear();
 		} 
 		else {
-			target = trg_hyp->get_sentence();
-			//aligns = trg_hyp->get_alignment();
-		}
-
-		if (r2l_target)
-			std::reverse(target.begin() + 1, target.end() - 1);
-
-		bool first = true;
-		for (auto &w: target) {
-			if (!first) cout << " ";
-
-			if (remove_unk && w == sm._kTGT_UNK) continue;
-
-			cout << td.convert(w);
-
-			first = false;
-		}
-		cout << endl;
-
-		//break;//for debug only
-	}
-
-	double elapsed = timer_dec.elapsed();
-	cerr << "Decoding is finished!" << endl;
-	cerr << "Decoded " << (lno - lc) << " sentences, completed in " << elapsed/1000 << "(s)" << endl;
-}
-
-void decode(const std::string& test_file, const std::string& prefix_test_file
-	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
-	, unsigned beam_size
-	, unsigned length_ratio
-	, unsigned int lc /*line number to be continued*/
-	, bool remove_unk /*whether to include <unk> in the output*/
-	, bool r2l_target /*right-to-left decoding*/)
-{
-	dynet::Dict& sd = v_models[0].get()->get_source_dict();
-	dynet::Dict& td = v_models[0].get()->get_target_dict();
-	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
-
-	if (beam_size <= 0) TRANSFORMER_RUNTIME_ASSERT("Beam size must be >= 1!");
-
-	EnsembleDecoder ens(td);
-	ens.set_beam_size(beam_size);
-	ens.set_length_ratio(length_ratio);
-
-	cerr << "Reading test examples from " << test_file << endl;
-	ifstream in(test_file);
-	assert(in);
-
-	cerr << "Reading test examples from " << prefix_test_file << endl;
-	ifstream in_pref(prefix_test_file);
-	assert(in_pref);
-
-	MyTimer timer_dec("completed in");
-	std::string line, line_prefix;
-	WordIdSentence source, prefix;
-	unsigned int lno = 0;
-	while (std::getline(in, line) && std::getline(in_pref, line_prefix)) {
-		if (lno++ < lc) continue;// continued decoding
-
-		source = dynet::read_sentence(line, sd);
-		prefix = dynet::read_sentence(line_prefix, td);
-
-		if (source.front() != sm._kSRC_SOS && source.back() != sm._kSRC_EOS) {
-			cerr << "Sentence in " << test_file << ":" << lno << " didn't start or end with <s>, </s>\n";
-			abort();
-		}
-
-		ComputationGraph cg;// dynamic computation graph
-		WordIdSentence target;//, aligns;
-
-		EnsembleDecoderHypPtr trg_hyp = ens.generate(cg, source, prefix, v_models);
-		if (trg_hyp.get() == nullptr) {
-			target.clear();
-			//aligns.clear();
-		} 
-		else {
+			//target = targets[0];
 			target = trg_hyp->get_sentence();
 			//aligns = trg_hyp->get_alignment();
 		}
@@ -414,7 +330,7 @@ void decode(const std::string& test_file, const std::string& prefix_test_file
 // ---
 
 // ---
-void decode_nbest(const std::string& test_file
+void decode_nbest(const std::string& test_file, const std::string& side_file
 	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 	, unsigned topk
 	, const std::string& nbest_style
@@ -426,6 +342,7 @@ void decode_nbest(const std::string& test_file
 {
 	dynet::Dict& sd = v_models[0].get()->get_source_dict();
 	dynet::Dict& td = v_models[0].get()->get_target_dict();
+	dynet::Dict& side_d = v_models[0].get()->get_side_dict();
 	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
 
 	if (topk < 1) TRANSFORMER_RUNTIME_ASSERT("topk must be >= 1!");
@@ -440,14 +357,19 @@ void decode_nbest(const std::string& test_file
 	ifstream in(test_file);
 	assert(in);
 
+	cerr << "Reading test side examples from " << side_file << endl;
+	ifstream in_side(side_file);
+	assert(in_side);
+
 	MyTimer timer_dec("completed in");
-	std::string line;
-	WordIdSentence source;
+	std::string line, line_side;
+	WordIdSentence source, side;
 	unsigned int lno = 0;
-	while (std::getline(in, line)) {
+	while (std::getline(in, line) && std::getline(in_side, line_side)) {
 		if (lno++ < lc) continue;// continued decoding
 
 		source = dynet::read_sentence(line, sd);
+		side = dynet::read_sentence(line_side, side_d);
 
 		if (source.front() != sm._kSRC_SOS && source.back() != sm._kSRC_EOS) {
 			cerr << "Sentence in " << test_file << ":" << lno << " didn't start or end with <s>, </s>\n";
@@ -456,127 +378,12 @@ void decode_nbest(const std::string& test_file
 
 		ComputationGraph cg;// dynamic computation graph
 		WordIdSentence target;//, aligns;
+		//WordIdSentences targets;
 		float score = 0.f;
 
-		std::vector<EnsembleDecoderHypPtr> v_trg_hyps = ens.generate_nbest(cg, source, v_models, topk);
-		for (auto& trg_hyp : v_trg_hyps){
-			if (trg_hyp.get() == nullptr) {
-				target.clear();
-				//aligns.clear();
-			} 
-			else {
-				target = trg_hyp->get_sentence();
-				score = trg_hyp->get_score();
-				//aligns = trg_hyp->get_alignment();
-			}
-
-			if (target.size() < 2) continue;// <=2, e.g., <s> ... </s>?
-		
-			if (r2l_target)
-		   		std::reverse(target.begin() + 1, target.end() - 1);
-
-			if (nbest_style == "moses"){
-				// n-best with Moses's format 
-				// <line_number1> ||| source ||| target1 ||| TransformerModelScore=score1 || score1
-				// <line_number2> ||| source ||| target2 ||| TransformerModelScore=score2 || score2
-				//...
-
-				// follows Moses's nbest file format
-				std::stringstream ss;
-
-				// source text
-				ss /*<< lno << " ||| "*/ << line << " ||| ";
-			   
-				// target text
-				bool first = true;
-				for (auto &w: target) {
-					if (!first) ss << " ";
-					ss << td.convert(w);
-					first = false;
-				}
-		
-				// score
-				ss << " ||| " << "TransformerModelScore=" << -score / (target.size() - 1) << " ||| " << -score / (target.size() - 1);//normalized by target length, following Moses's N-best format.
-		
-				ss << endl;
-
-				cout << ss.str();
-			}
-			else if (nbest_style == "simple"){
-				// simple format with target1 ||| target2 ||| ...
-				std::stringstream ss;
-				bool first = true;
-				for (auto &w: target) {
-					if (!first) ss << " ";
-					ss << td.convert(w);
-					first = false;
-				}
-				ss << " ||| ";
-				cout << ss.str();
-			}
-			else TRANSFORMER_RUNTIME_ASSERT("Unknown style for nbest translation outputs!");
-		}
-
-		if (nbest_style == "simple") cout << endl;
-
-		//break;//for debug only
-	}
-
-	double elapsed = timer_dec.elapsed();
-	cerr << "Decoding is finished!" << endl;
-	cerr << "Decoded " << (lno - lc) << " sentences, completed in " << elapsed/1000 << "(s)" << endl;
-}
-
-void decode_nbest(const std::string& test_file, const std::string& prefix_test_file
-	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
-	, unsigned topk
-	, const std::string& nbest_style
-	, unsigned beam_size
-	, unsigned length_ratio
-	, unsigned int lc /*line number to be continued*/
-	, bool remove_unk /*whether to include <unk> in the output*/
-	, bool r2l_target /*right-to-left decoding*/)
-{
-	dynet::Dict& sd = v_models[0].get()->get_source_dict();
-	dynet::Dict& td = v_models[0].get()->get_target_dict();
-	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
-
-	if (topk < 1) TRANSFORMER_RUNTIME_ASSERT("topk must be >= 1!");
-
-	if (beam_size <= 0) TRANSFORMER_RUNTIME_ASSERT("Beam size must be >= 1!");
-
-	EnsembleDecoder ens(td);
-	ens.set_beam_size(beam_size);
-	ens.set_length_ratio(length_ratio);
-
-	cerr << "Reading test examples from " << test_file << endl;
-	ifstream in(test_file);
-	assert(in);
-
-	cerr << "Reading test examples from " << prefix_test_file << endl;
-	ifstream in_pref(prefix_test_file);
-	assert(in_pref);
-
-	MyTimer timer_dec("completed in");
-	std::string line, line_prefix;
-	WordIdSentence source, prefix;
-	unsigned int lno = 0;
-	while (std::getline(in, line) && std::getline(in_pref, line_prefix)) {
-		if (lno++ < lc) continue;// continued decoding
-
-		source = dynet::read_sentence(line, sd);
-		prefix = dynet::read_sentence(line, td);
-
-		if (source.front() != sm._kSRC_SOS && source.back() != sm._kSRC_EOS) {
-			cerr << "Sentence in " << test_file << ":" << lno << " didn't start or end with <s>, </s>\n";
-			abort();
-		}
-
-		ComputationGraph cg;// dynamic computation graph
-		WordIdSentence target;//, aligns;
-		float score = 0.f;
-
-		std::vector<EnsembleDecoderHypPtr> v_trg_hyps = ens.generate_nbest(cg, source, prefix, v_models, topk);
+		//v_models[0].get()->beam_decode(cg, source, side, targets, beam_size, length_ratio);
+		std::vector<EnsembleDecoderHypPtr> v_trg_hyps = ens.generate_nbest(cg, source, side, v_models, topk);
+		//for (auto& target : targets){
 		for (auto& trg_hyp : v_trg_hyps){
 			if (trg_hyp.get() == nullptr) {
 				target.clear();

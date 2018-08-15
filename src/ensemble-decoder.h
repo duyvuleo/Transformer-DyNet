@@ -124,6 +124,13 @@ public:
 		, const WordIdSentence & sent_src
 		, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
 		, unsigned nbest_size);
+	EnsembleDecoderHypPtr generate(dynet::ComputationGraph& cg
+		, const WordIdSentence & sent_src, const WordIdSentence & prefix_trg
+		, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models);
+	std::vector<EnsembleDecoderHypPtr> generate_nbest(dynet::ComputationGraph& cg
+		, const WordIdSentence & sent_src, const WordIdSentence & prefix_trg
+		, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
+		, unsigned nbest_size);
 	// ---
 	// --- batched version
 	BatchedEnsembleDecoderHypPtr generate(dynet::ComputationGraph& cg
@@ -346,6 +353,160 @@ std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::Comput
 
 	return nbest;
 }
+
+EnsembleDecoderHypPtr EnsembleDecoder::generate(dynet::ComputationGraph& cg
+	, const WordIdSentence & sent_src, const WordIdSentence & prefix_trg
+	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models) 
+{
+	auto nbest = generate_nbest(cg, sent_src, prefix_trg, v_models, 1);
+	return (nbest.size() > 0 ? nbest[0] : EnsembleDecoderHypPtr());
+}
+
+std::vector<EnsembleDecoderHypPtr> EnsembleDecoder::generate_nbest(dynet::ComputationGraph& cg
+	, const WordIdSentence & sent_src, const WordIdSentence & prefix_trg
+	, std::vector<std::shared_ptr<transformer::TransformerModel>>& v_models
+	, unsigned nbest_size) 
+{ 
+	// sentinel symbols
+	const transformer::SentinelMarkers& sm = v_models[0].get()->get_config()._sm;
+	
+	// compute source representation
+	std::vector<dynet::Expression> v_src_reps;
+	for (auto & tf : v_models){
+		v_src_reps.push_back(tf.get()->compute_source_rep(cg, WordIdSentences(1, sent_src)/*pseudo batch (1)*/));
+	}
+
+	// the n-best hypotheses
+	std::vector<EnsembleDecoderHypPtr> nbest;
+
+	// create the initial hypothesis
+	WordIdSentence start_trg(1, sm._kTGT_SOS);
+	start_trg.insert(start_trg.end(), prefix_trg.begin(), prefix_trg.end());// target with prefixes
+	std::vector<EnsembleDecoderHypPtr> curr_beam(1, EnsembleDecoderHypPtr(new EnsembleDecoderHyp(0.0, start_trg, WordIdSentence(1, 0))));// maybe wrong alignment with pre-defined prefix?
+
+	int bid;
+
+	// limit the output length
+	if (_length_ratio > 0)
+		_size_limit = sent_src.size() * _length_ratio;// not generating target with the approximate length "_length_ratio times" than the source length
+
+	// perform decoding
+	for (unsigned sent_len = 0; sent_len <= _size_limit; sent_len++) {
+		// this vector will hold the best IDs
+		std::vector<Beam_Info> next_beam_id(_beam_size+1, Beam_Info(-DBL_MAX,-1,-1,-1));
+
+		// go through all the hypothesis IDs
+		for (int hypid = 0; hypid < (int)curr_beam.size(); hypid++) {
+			EnsembleDecoderHypPtr curr_hyp = curr_beam[hypid];
+			const WordIdSentence& sent = curr_hyp->get_sentence();// partial generated sentence from current hypo in the beam
+
+			if (sent_len != 0 && *sent.rbegin() == sm._kTGT_EOS) continue;
+
+			cg.checkpoint();
+
+			// perform the forward step on all models
+			std::vector<dynet::Expression> i_softmaxes, i_aligns;
+			for(int j : boost::irange(0, (int)v_models.size())){
+				i_softmaxes.push_back(v_models[j].get()->step_forward(cg, v_src_reps[j]
+					, sent
+					, _ensemble_operation == "logsum"
+					, i_aligns));
+			}
+
+			// ensemble and calculate the likelihood
+			dynet::Expression i_softmax, i_logprob;
+			if (_ensemble_operation == "sum") {
+				i_softmax = ensemble_probs(i_softmaxes, cg);
+				i_logprob = dynet::log({i_softmax});
+			}
+			else if (_ensemble_operation == "logsum") {
+				i_logprob = ensemble_logprobs(i_softmaxes, cg);
+			}
+			else
+				assert(string("Bad ensembling operation: " + _ensemble_operation).c_str());
+
+			// get the (log) softmax predictions
+			std::vector<float> softmaxes = dynet::as_vector(cg.incremental_forward(i_logprob));
+
+			// add the word penalty
+			if (_word_pen != 0.f) {
+				for(size_t i = 0; i < softmaxes.size(); i++)
+					softmaxes[i] += _word_pen;
+			}
+			
+			// set up unk penalty
+			if (_unk_id >= 0) softmaxes[_unk_id] += _unk_pen * _unk_log_prob;
+
+			// find the best aligned source, if any alignments exists
+			WordId best_align = -1;
+			if (i_aligns.size() != 0) {
+				dynet::Expression ens_align = dynet::sum(i_aligns);
+				std::vector<float> align = dynet::as_vector(cg.incremental_forward(ens_align));
+				best_align = 0;
+				for(size_t aid = 0; aid < align.size(); aid++)
+					if(align[aid] > align[best_align])
+						best_align = aid;
+			}
+
+			// find the best IDs in the beam
+			for (int wid = 0; wid < (int)softmaxes.size(); wid++) {
+				float my_score = curr_hyp->get_score() + softmaxes[wid];
+				for (bid = _beam_size; bid > 0 && my_score > std::get<0>(next_beam_id[bid-1]); bid--)
+					next_beam_id[bid] = next_beam_id[bid-1];
+				next_beam_id[bid] = Beam_Info(my_score, hypid, wid, best_align);
+			}
+
+			cg.revert();
+		}
+
+		// create the new hypotheses
+		std::vector<EnsembleDecoderHypPtr> next_beam;
+		for (unsigned i = 0; i < _beam_size; i++) {
+			float score = std::get<0>(next_beam_id[i]);
+			int hypid = std::get<1>(next_beam_id[i]);
+			int wid = std::get<2>(next_beam_id[i]);
+			int aid = std::get<3>(next_beam_id[i]);
+
+			if (hypid == -1) break;// never happens?
+
+			WordIdSentence next_sent = curr_beam[hypid]->get_sentence();
+			next_sent.push_back(wid);
+
+			WordIdSentence next_align = curr_beam[hypid]->get_alignment();
+			next_align.push_back(aid);
+
+			EnsembleDecoderHypPtr hyp(new EnsembleDecoderHyp(score, next_sent, next_align));
+
+			if (wid == sm._kTGT_EOS && hyp->get_sentence().size() == 2) //excluding empty generation, e.g., <s> </s>
+				continue;
+
+			if (wid == sm._kTGT_EOS || sent_len == _size_limit)
+				nbest.push_back(hyp);
+
+			next_beam.push_back(hyp);
+		}
+
+		curr_beam = next_beam;
+
+		// check if we're done with search
+		if(nbest.size() != 0) {
+			std::sort(nbest.begin(), nbest.end());
+
+			if(nbest.size() > nbest_size) nbest.resize(nbest_size);
+			if(nbest.size() == nbest_size && (curr_beam.size() == 0 || (*nbest.rbegin())->get_norm_score() >= next_beam[0]->get_norm_score()))
+				return nbest;
+		}
+
+		// if current beam size is 0, stop!
+		if(curr_beam.size() == 0) break;
+	}
+
+	cg.clear();// maybe trying to release memory!
+
+	if (_verbose) cerr << "WARNING: Generated sentence size exceeded " << _size_limit << ". Truncating." << endl;
+	return nbest;
+}
+
 
 // -----------------------------------------------------------------------------------
 // WIP: to support batch decoding

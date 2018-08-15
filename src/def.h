@@ -32,6 +32,10 @@ typedef std::vector<WordIdSentence> WordIdSentences;// batches of sentences
 typedef tuple<WordIdSentence, WordIdSentence> WordIdSentencePair; // Note: can be extended to include additional information (e.g., document ID)
 typedef std::vector<WordIdSentencePair> WordIdCorpus;// ToDo: change to WordIdParallelCorpus?
 
+// for side/meta information integration
+typedef tuple<WordIdSentence, WordIdSentence, WordIdSentence> WordIdSentenceTriple; // <source,target,meta>
+typedef std::vector<WordIdSentenceTriple> WordIdCorpusWithMeta;
+
 typedef dynet::ParameterCollection DyNetModel;
 typedef std::shared_ptr<DyNetModel> DyNetModelPointer;
 

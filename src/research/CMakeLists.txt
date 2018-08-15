@@ -1,6 +1,6 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 
-foreach(TARGET round-tripping e2e-round-tripping transformer-train-mm transformer-train-mm-uda)
+foreach(TARGET round-tripping e2e-round-tripping transformer-train-mm transformer-train-mm-uda transformer-train-side transformer-decode-side)
   ADD_EXECUTABLE(${TARGET} ${TARGET}.cc)
   SET_TARGET_PROPERTIES(${TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/")
   if(UNIX AND NOT APPLE)

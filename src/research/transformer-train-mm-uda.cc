@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
 		// mm training hyper-parameters
 		("mm-feature-type", value<unsigned>()->default_value(0), "specify feature function for moment matching (0: avg_nll_on_tgt; 1: avg_nll_on_src; 2: Moore&Lewis; 3: Axelrod); 0 (avg_nll_on_tgt) by default")
 		("mm-training-mode", value<unsigned>()->default_value(1), "specify training mode (0: RL&PG; 1: MM); default 1")
-		("mm-mix-mode", value<unsigned>()->default_value(0), "specify mode with mix of out-domain bitexts and in-domain monotexts (0: none; 1: mix); default 0")
+		("mm-mix-mode", value<bool>()->default_value(false), "specify mode with mix of out-domain bitexts and in-domain monotexts (false: none; true: mix); default false")
 		("mm-debug", "very chatty for moment matching debugging only; default not")
 		("num-samples", value<unsigned>()->default_value(NUM_SAMPLES), "use <num> of samples produced by the current model; 2 by default")
 		("sampling-size", value<unsigned>()->default_value(SAMPLING_SIZE), "sampling size; default 10")
@@ -419,7 +419,7 @@ int main(int argc, char** argv) {
 					, vm["back-model-path"].as<std::string>());/*feature config for moment matching*/
 
 	unsigned training_mode = vm["mm-training-mode"].as<unsigned>();
-	unsigned mix_mode = vm["mm-mix-mode"].as<unsigned>();
+	bool mix_mode = vm["mm-mix-mode"].as<bool>();
 	float softmax_temp = vm["softmax-temperature"].as<float>();
 
 	// train transformer model

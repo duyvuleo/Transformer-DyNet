@@ -10,6 +10,11 @@ inline void create_minibatches(const WordIdCorpus& cor
 	, size_t max_size
 	, std::vector<WordIdSentences> & train_src_minibatch
 	, std::vector<WordIdSentences> & train_trg_minibatch);
+inline void create_minibatches(const WordIdCorpusWithMeta& cor
+	, size_t max_size
+	, std::vector<WordIdSentences> & train_src_minibatch
+	, std::vector<WordIdSentences> & train_trg_minibatch
+	, std::vector<WordIdSentences> & train_meta_minibatch);
 
 struct DoubleLength
 {
@@ -19,6 +24,18 @@ struct DoubleLength
 };
 
 bool DoubleLength::operator() (int i1, int i2) {
+	if(std::get<0>(cor[i2]).size() != std::get<0>(cor[i1]).size()) return (std::get<0>(cor[i2]).size() < std::get<0>(cor[i1]).size());
+	return (std::get<1>(cor[i2]).size() < std::get<1>(cor[i1]).size());
+}
+
+struct DoubleLengthWithMeta
+{
+	DoubleLengthWithMeta(const WordIdCorpusWithMeta & cor_) : cor(cor_) { }
+	bool operator() (int i1, int i2);
+	const WordIdCorpusWithMeta & cor;
+};
+
+bool DoubleLengthWithMeta::operator() (int i1, int i2) {
 	if(std::get<0>(cor[i2]).size() != std::get<0>(cor[i1]).size()) return (std::get<0>(cor[i2]).size() < std::get<0>(cor[i1]).size());
 	return (std::get<1>(cor[i2]).size() < std::get<1>(cor[i1]).size());
 }
@@ -61,6 +78,50 @@ inline void create_minibatches(const WordIdCorpus& cor
 	if(train_trg_next.size()) {
 		train_src_minibatch.push_back(train_src_next);
 		train_trg_minibatch.push_back(train_trg_next);
+	}
+}
+
+inline void create_minibatches(const WordIdCorpusWithMeta& cor
+	, size_t max_size
+	, std::vector<WordIdSentences> & train_src_minibatch
+	, std::vector<WordIdSentences> & train_trg_minibatch
+	, std::vector<WordIdSentences> & train_meta_minibatch) 
+{
+	train_src_minibatch.clear();
+	train_trg_minibatch.clear();
+	train_meta_minibatch.clear();
+
+	std::vector<size_t> train_ids(cor.size());
+	std::iota(train_ids.begin(), train_ids.end(), 0);
+	if(max_size > 1)
+		sort(train_ids.begin(), train_ids.end(), DoubleLengthWithMeta(cor));
+
+	std::vector<WordIdSentence> train_src_next;
+	std::vector<WordIdSentence> train_trg_next;
+	std::vector<WordIdSentence> train_meta_next;
+
+	size_t max_len = 0;
+	for(size_t i = 0; i < train_ids.size(); i++) {
+		max_len = std::max(max_len, calc_size(std::get<0>(cor[train_ids[i]]), std::get<1>(cor[train_ids[i]])));
+		train_src_next.push_back(std::get<0>(cor[train_ids[i]]));
+		train_trg_next.push_back(std::get<1>(cor[train_ids[i]]));
+		train_meta_next.push_back(std::get<2>(cor[train_ids[i]]));
+
+		if((train_trg_next.size()+1) * max_len > max_size) {
+			train_src_minibatch.push_back(train_src_next);
+			train_src_next.clear();
+			train_trg_minibatch.push_back(train_trg_next);
+			train_trg_next.clear();
+			train_meta_minibatch.push_back(train_meta_next);
+			train_meta_next.clear();
+			max_len = 0;
+		}
+	}
+
+	if(train_trg_next.size()) {
+		train_src_minibatch.push_back(train_src_next);
+		train_trg_minibatch.push_back(train_trg_next);
+		train_meta_minibatch.push_back(train_meta_next);
 	}
 }
 
