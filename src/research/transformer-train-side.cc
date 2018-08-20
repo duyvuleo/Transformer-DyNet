@@ -160,7 +160,11 @@ int main(int argc, char** argv) {
 		("lr-eta", value<float>()->default_value(0.1f), "SGD learning rate value (e.g., 0.1 for simple SGD trainer or smaller 0.001 for ADAM trainer)")
 		("lr-eta-decay", value<float>()->default_value(2.0f), "SGD learning rate decay value")
 		//-----------------------------------------
-		("side-hidden-dim", value<unsigned>()->default_value(64), "specify hidden dim for embedding side/meta information; 64 by default") // should be small!	
+		// additional hyperparameters for side information integration
+		("side-hidden-dim", value<unsigned>()->default_value(64), "specify hidden dim for embedding side/meta information; 64 by default") // to be fine-tuned	
+		("side-alpha", value<float>()->default_value(0.1f), "specify side balancing weight; 0.1 by default") // to be fine-tuned
+		("side-method", value<unsigned>()->default_value(0), "specify side information integration method (0: output layer integration; 1: multi-task learning); 0 by default") 
+		("side-avg-emb", value<unsigned>()->default_value(0), "specify side information embedding method (0: sum; 1: averaging); 0 by default") 
 		//-----------------------------------------
 		// learning rate scheduler
 		("lr-epochs", value<unsigned>()->default_value(0), "no. of epochs for starting learning rate annealing (e.g., halving)") // learning rate scheduler 1
@@ -370,7 +374,11 @@ int main(int argc, char** argv) {
 
 	// initialise transformer object
 	transformer::TransformerModel tf(tfc, sd, td);
-	tf.initialise_side_params(side_d, vm["side-hidden-dim"].as<unsigned>());
+	tf.initialise_side_params(side_d
+			, vm["side-method"].as<unsigned>()
+			, vm["side-hidden-dim"].as<unsigned>()
+			, vm["side-avg-emb"].as<unsigned>()
+			, vm["side-alpha"].as<float>());
 	std::string model_file = model_path + "/model.params";
 	if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
 	{

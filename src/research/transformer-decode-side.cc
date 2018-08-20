@@ -28,7 +28,9 @@ bool load_model_config(const std::string& model_cfg_file
 	, dynet::Dict& td
 	, const transformer::SentinelMarkers& sm
 	, dynet::Dict& side_d
-	, unsigned side_hidden_dim);
+	, unsigned side_method
+	, unsigned side_hidden_dim
+	, unsigned side_avg_emb);
 // ---
 
 // ---
@@ -71,7 +73,9 @@ int main(int argc, char** argv) {
 		("test-side", value<std::string>(), "file containing testing sentences for side information.")
 		("lc", value<unsigned int>()->default_value(0), "specify the sentence/line number to be continued (for decoding only); 0 by default")
 		//-----------------------------------------
-		("side-hidden-dim", value<unsigned>()->default_value(64), "specify hidden dim for embedding side/meta information; 64 by default") // should be small!
+		("side-hidden-dim", value<unsigned>()->default_value(64), "specify hidden dim for embedding side/meta information; 64 by default")
+		("side-method", value<unsigned>()->default_value(0), "specify side information integration method (0: output layer integration; 1: multi-task learning); 0 by default") 
+		("side-avg-emb", value<unsigned>()->default_value(0), "specify side information embedding method (0: sum; 1: averaging); 0 by default") 
 		("beam,b", value<unsigned>()->default_value(1), "size of beam in decoding; 1: greedy by default")
 		("alpha,a", value<float>()->default_value(0.6f), "length normalisation hyperparameter; 0.6f by default") // follow the GNMT paper!
 		("topk,k", value<unsigned>(), "use <num> top kbest entries; none by default")
@@ -159,7 +163,10 @@ int main(int argc, char** argv) {
 
 		// load models
 		std::string config_file = model_path + "/model.config";
-		if (!load_model_config(config_file, v_tf_models, sd, td, sm, side_d, vm["side-hidden-dim"].as<unsigned>()))
+		if (!load_model_config(config_file, v_tf_models, sd, td, sm
+					, side_d, vm["side-method"].as<unsigned>()
+					, vm["side-hidden-dim"].as<unsigned>()
+					, vm["side-avg-emb"].as<unsigned>()))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
 	}
 	else TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s) from: " + std::string(model_path) + "!");
@@ -189,7 +196,9 @@ bool load_model_config(const std::string& model_cfg_file
 	, dynet::Dict& td
 	, const transformer::SentinelMarkers& sm
 	, dynet::Dict& side_d
-	, unsigned side_hidden_dim)
+	, unsigned side_method
+	, unsigned side_hidden_dim
+	, unsigned side_avg_emb)
 {
 	cerr << "Loading model(s) from configuration file: " << model_cfg_file << "..." << endl;	
 
@@ -232,7 +241,7 @@ bool load_model_config(const std::string& model_cfg_file
 
 		v_models.push_back(std::shared_ptr<transformer::TransformerModel>());
 		v_models[i].reset(new transformer::TransformerModel(tfc, sd, td));
-		v_models[i]->initialise_side_params(side_d, side_hidden_dim);
+		v_models[i]->initialise_side_params(side_d, side_method, side_hidden_dim, side_avg_emb);
 		cerr << "Model file: " << model_file << endl;
 		v_models[i].get()->initialise_params_from_file(model_file);// load pre-trained model from file
 		cerr << "Count of model parameters: " << v_models[i].get()->get_model_parameters().parameter_count() << endl;

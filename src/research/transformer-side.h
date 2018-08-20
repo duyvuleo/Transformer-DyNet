@@ -917,7 +917,7 @@ public:
 	// for encoding meta/side information
 	dynet::Expression encode_meta_info(dynet::ComputationGraph &cg
 		, const WordIdSentences& metas);
-	void initialise_side_params(dynet::Dict& side_d, unsigned hidden_dim);
+	void initialise_side_params(dynet::Dict& side_d, unsigned method=0, unsigned hidden_dim=64, unsigned avg_emb=0, float alpha_side=0.1f);
 
 	dynet::ParameterCollection& get_model_parameters();
 	void initialise_params_from_file(const std::string &params_file);
@@ -944,10 +944,16 @@ protected:
 	dynet::Parameter _p_Wo_bias;// bias of final linear projection layer
 	
 	// additional params for meta/side information
+	unsigned _method = 0;
 	dynet::LookupParameter _p_embed_side;// embeddings of side information
-	dynet::Parameter _p_Wo_side;
 	dynet::Dict _side_dict;
-	
+	// params for output layer integration method
+	dynet::Parameter _p_Wo_side;
+	// params for multi-task learning method
+	dynet::Parameter _p_Wo_bias_side;
+	float _alpha_side = 0.1f;// balancing weight
+	unsigned _avg_emb = 0;// sum
+
 	TransformerConfig _tfc;// local configuration storage
 };
 
@@ -992,13 +998,23 @@ void TransformerModel::initialise(const TransformerConfig& tfc, dynet::Dict& sd,
 	_dicts.second = td;	
 }
 
-void TransformerModel::initialise_side_params(dynet::Dict& side_d, unsigned hidden_dim)
+void TransformerModel::initialise_side_params(dynet::Dict& side_d, unsigned method, unsigned hidden_dim, unsigned avg_emb, float alpha_side)
 {
-	_side_dict = side_d;
-
-	_p_embed_side = _all_params.get()->add_lookup_parameters(_side_dict.size(), {hidden_dim});
+	_method = method;
 	
-	_p_Wo_side = _all_params.get()->add_parameters({_tfc._tgt_vocab_size, hidden_dim});
+	_side_dict = side_d;
+	
+	if (_method == 0){
+		_p_embed_side = _all_params.get()->add_lookup_parameters(_side_dict.size(), {hidden_dim});
+		_p_Wo_side = _all_params.get()->add_parameters({_tfc._tgt_vocab_size, hidden_dim});
+	}
+	else{
+		_p_Wo_side = _all_params.get()->add_parameters({_side_dict.size(), _tfc._num_units});
+		_p_Wo_bias_side = _all_params.get()->add_parameters({_side_dict.size()});
+	}
+
+	_alpha_side = alpha_side;
+	_avg_emb = avg_emb;
 }
 
 dynet::Expression TransformerModel::compute_source_rep(dynet::ComputationGraph &cg
@@ -1069,11 +1085,18 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	// ToDo
 
 	// compute softmax prediction
-	dynet::Expression i_side_proj = dynet::parameter(cg, _p_Wo_side) * i_side_rep;
+	if (_method == 0){
+		dynet::Expression i_side_proj = dynet::parameter(cg, _p_Wo_side) * i_side_rep;
+		if (log_prob)
+			return dynet::log_softmax((i_r_t + i_side_proj) / sm_temp);// log_softmax w/ temperature
+		else
+			return dynet::softmax((i_r_t + i_side_proj) / sm_temp);// softmax w/ temperature
+	}
+
 	if (log_prob)
-		return dynet::log_softmax((i_r_t + i_side_proj) / sm_temp);// log_softmax w/ temperature
+		return dynet::log_softmax(i_r_t / sm_temp);// log_softmax w/ temperature
 	else
-		return dynet::softmax((i_r_t + i_side_proj) / sm_temp);// softmax w/ temperature
+		return dynet::softmax(i_r_t / sm_temp);// softmax w/ temperature
 }
 
 // batched version
@@ -1139,16 +1162,25 @@ dynet::Expression TransformerModel::step_forward(dynet::ComputationGraph &cg
 	// ToDo
 
 	// compute softmax prediction (note: return a batch of softmaxes)
-	dynet::Expression i_side_proj = dynet::parameter(cg, _p_Wo_side) * i_side_rep;
+	if (_method == 0){
+		dynet::Expression i_side_proj = dynet::parameter(cg, _p_Wo_side) * i_side_rep;
+		if (log_prob)
+			return dynet::log_softmax((i_r_t + i_side_proj) / sm_temp);// log_softmax w/ temperature
+		else
+			return dynet::softmax((i_r_t + i_side_proj) / sm_temp);// softmax w/ temperature
+	}
+
 	if (log_prob)
-		return dynet::log_softmax((i_r_t + i_side_proj) / sm_temp);// log_softmax w/ temperature
+		return dynet::log_softmax(i_r_t / sm_temp);// log_softmax w/ temperature
 	else
-		return dynet::softmax((i_r_t + i_side_proj) / sm_temp);// softmax w/ temperature
+		return dynet::softmax(i_r_t / sm_temp);// softmax w/ temperature
 }
 
 dynet::Expression TransformerModel::encode_meta_info(dynet::ComputationGraph &cg
 	, const WordIdSentences& metas)
 {
+	if (_method == 1) return dynet::Expression();
+
 	WordId pad_ind = _side_dict.convert("<pad>");
 
 	size_t max_len = metas[0].size(), bsize = metas.size();
@@ -1170,7 +1202,10 @@ dynet::Expression TransformerModel::encode_meta_info(dynet::ComputationGraph &cg
 		side_embeddings.push_back(dynet::lookup(cg, _p_embed_side, words));								
 	}
 
-	return dynet::sum(side_embeddings);// ToDo: try average as well!
+	if (_avg_emb==0)
+		return dynet::sum(side_embeddings);// sum
+	else 
+		return dynet::average(side_embeddings);// average
 }
 
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
@@ -1183,12 +1218,16 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	// encode source
 	dynet::Expression i_src_ctx = _encoder.get()->build_graph(cg, ssents, pstats);// ((num_units, Lx), batch_size)
 
-	// encode meta
-	dynet::Expression i_side = encode_meta_info(cg, metas);
+	dynet::Expression i_side;
+	if (_method == 0){
+		// encode meta
+		i_side = encode_meta_info(cg, metas);// ((side_hidden_units, 1), batch_size)
+		dynet::Expression i_Wo_side = dynet::parameter(cg, _p_Wo_side);// (|V_T|, side_hidden_units)
+		i_side = i_Wo_side * i_side;// ((|V_T|, 1), batch_size)
+	}
 	
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, i_src_ctx);// ((num_units, Ly), batch_size)
-	i_side = dynet::parameter(cg, _p_Wo_side) * i_side;
 	
 	// get losses	
 	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
@@ -1198,10 +1237,10 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
 
 	std::vector<dynet::Expression> v_errors;
-	unsigned tlen = _decoder.get()->_batch_tlen;
-	std::vector<unsigned> next_words(tsents.size());
+	unsigned tlen = _decoder.get()->_batch_tlen, bsize = tsents.size();
+	std::vector<unsigned> next_words(bsize);
 	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
-		for(size_t bs = 0; bs < tsents.size(); bs++){
+		for(size_t bs = 0; bs < bsize; bs++){
 			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
 			if (tsents[bs].size() > t && pstats) {
 				pstats->_words_tgt++;
@@ -1211,7 +1250,8 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 
 		// get the prediction at timestep t
 		//dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
-		dynet::Expression i_r_t = dynet::pick(i_r, t, 1) + i_side;// shifted right, ((|V_T|, 1), batch_size)
+		dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// shifted right, ((|V_T|, 1), batch_size)
+		if (_method == 0) i_r_t = i_r_t + i_side;
 	
 		// log_softmax and loss
 		dynet::Expression i_err;
@@ -1229,9 +1269,49 @@ dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
 		v_errors.push_back(i_err);
 	}
 
-	dynet::Expression i_tloss = dynet::sum_batches(dynet::sum(v_errors));
+	dynet::Expression i_loss_final;
+       	if (_method == 0) 
+		i_loss_final = dynet::sum_batches(dynet::sum(v_errors));
+	else{
+		if (is_eval_on_dev) return dynet::sum_batches(dynet::sum(v_errors));// evaluating on dev
+			
+		// computing side loss
+		dynet::Expression i_Wo_side = dynet::parameter(cg, _p_Wo_side);
+		dynet::Expression i_Wo_bias_side = dynet::parameter(cg, _p_Wo_bias_side);
+		dynet::Expression i_r_side = -dynet::log_sigmoid(dynet::affine_transform({i_Wo_bias_side, i_Wo_side, dynet::mean_dim(i_src_ctx, {1})}));// ToDo: need a tanh before log_sigmoid here?
 
-	return i_tloss;
+		WordId pad_ind = _side_dict.convert("<pad>");
+
+		size_t max_len = metas[0].size();
+		for(size_t i = 1; i < bsize; i++) max_len = std::max(max_len, metas[i].size());
+
+		std::vector<dynet::Expression> v_side_errors;
+		std::vector<unsigned> side_words(bsize);		
+		for (unsigned l = 0; l < max_len; l++)
+		{
+			for (unsigned bs = 0; bs < bsize; ++bs)
+			{
+				if (l < metas[bs].size())
+					side_words[bs] = (unsigned)metas[bs][l];
+				else
+					side_words[bs] = (unsigned)pad_ind;
+			}
+
+			v_side_errors.push_back(dynet::pick(i_r_side, side_words));
+		}
+
+		dynet::Expression i_loss_side = dynet::sum(v_side_errors);
+		dynet::Expression i_loss_ce = dynet::sum(v_errors);
+	
+		// for debugging
+		//cg.incremental_forward(i_loss_side);
+		//float side_loss = dynet::as_vector(cg.get_value(i_loss_side.i))[0];
+		//cerr << "side_loss=" << side_loss << endl;
+		
+		i_loss_final = dynet::sum_batches(i_loss_ce + _alpha_side * i_loss_side);
+	}
+
+	return i_loss_final;
 }
 
 dynet::Expression TransformerModel::build_graph(dynet::ComputationGraph &cg
