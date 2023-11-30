@@ -11,7 +11,7 @@
 #ifdef HAVE_CUDA
 #include "dynet/gpu-ops.h"
 #endif
-
+#include <cassert>
 using namespace std;
 
 namespace dynet {
